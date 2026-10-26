@@ -8,7 +8,7 @@
 |------|------|------|
 | **ths-trading-ai** | 电脑端（Flask服务器 + 网页前端） | 当前仓库 |
 | **ths-trading-android** | 手机端（原生Android应用） | [GitHub](https://github.com/glei4134-collab/ths-trading-android) |
-| **ths-cookie-keeper** | 云端（Cookie续签 + 新闻爬取 + 自动交易） | [GitHub](https://github.com/glei4134-collab/ths-cookie-keeper) |
+| **云端模块** | Cookie 续签 + 新闻爬取 + 自动交易（私有） | — |
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -101,6 +101,8 @@ http://电脑IP:5000/mobile
 | 胜率 | 53% | 52% |
 | 情感分析 | ❌ | ✅ |
 | 数据源 | 3 | 11 |
+
+> 注：收益为模拟盘回测数据，不代表真实收益。
 
 ## 📋 下一步
 
