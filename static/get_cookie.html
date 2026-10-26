@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <title>同花顺 Cookie 获取助手</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #1a1a2e; color: #eee; min-height: 100vh; display: flex; justify-content: center; align-items: center; padding: 20px; }
+        .container { max-width: 600px; width: 100%; }
+        .card { background: #16213e; border-radius: 12px; padding: 30px; margin-bottom: 20px; box-shadow: 0 4px 20px rgba(0,0,0,0.3); }
+        h1 { color: #e94560; margin-bottom: 20px; font-size: 24px; }
+        .step { background: #0f3460; border-radius: 8px; padding: 15px; margin-bottom: 15px; }
+        .step-num { display: inline-block; background: #e94560; color: white; width: 28px; height: 28px; border-radius: 50%; text-align: center; line-height: 28px; margin-right: 10px; font-weight: bold; }
+        .step-text { display: inline; line-height: 28px; }
+        .code { background: #1a1a2e; padding: 10px 15px; border-radius: 6px; font-family: monospace; font-size: 14px; margin: 10px 0; word-break: break-all; border: 1px solid #e94560; }
+        textarea { width: 100%; height: 120px; background: #1a1a2e; border: 2px solid #0f3460; border-radius: 8px; color: #eee; padding: 12px; font-family: monospace; font-size: 13px; resize: vertical; }
+        textarea:focus { border-color: #e94560; outline: none; }
+        .btn { display: block; width: 100%; padding: 14px; border: none; border-radius: 8px; font-size: 16px; font-weight: bold; cursor: pointer; margin-top: 15px; transition: all 0.3s; }
+        .btn-primary { background: #e94560; color: white; }
+        .btn-primary:hover { background: #c73650; transform: translateY(-2px); }
+        .btn-primary:disabled { background: #555; cursor: not-allowed; transform: none; }
+        .result { margin-top: 15px; padding: 12px; border-radius: 8px; display: none; }
+        .result.success { display: block; background: #0a3d2a; border: 1px solid #28a745; color: #28a745; }
+        .result.error { display: block; background: #3d0a0a; border: 1px solid #dc3545; color: #dc3545; }
+        .result.info { display: block; background: #0a2d3d; border: 1px solid #17a2b8; color: #17a2b8; }
+        .tip { background: #2a1a3e; border-left: 4px solid #e94560; padding: 12px 15px; margin: 15px 0; border-radius: 0 8px 8px 0; font-size: 13px; }
+        .loading { display: inline-block; width: 16px; height: 16px; border: 2px solid #fff; border-top-color: transparent; border-radius: 50%; animation: spin 1s linear infinite; margin-right: 8px; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="card">
+            <h1>🔑 同花顺 Cookie 获取助手</h1>
+
+            <div class="step">
+                <span class="step-num">1</span>
+                <span class="step-text">打开同花顺模拟比赛网站并登录</span>
+            </div>
+            <div class="step">
+                <span class="step-num">2</span>
+                <span class="step-text">按 <b>F12</b> 打开开发者工具</span>
+            </div>
+            <div class="step">
+                <span class="step-num">3</span>
+                <span class="step-text">点击 <b>Network</b>（网络）标签</span>
+            </div>
+            <div class="step">
+                <span class="step-num">4</span>
+                <span class="step-text">刷新页面，找到任意一个请求</span>
+            </div>
+            <div class="step">
+                <span class="step-num">5</span>
+                <span class="step-text">点击请求 → 找到 <b>Request Headers</b> → 复制 <b>Cookie</b> 的值</span>
+            </div>
+
+            <div class="tip">
+                💡 快捷方法：在 Console 输入 <code>fetch(location.href).then(r=>r.headers)</code> 可以看到请求头信息
+            </div>
+        </div>
+
+        <div class="card">
+            <h2 style="margin-bottom:15px;">📋 粘贴 Cookie</h2>
+            <textarea id="cookieInput" placeholder="将复制的 Cookie 粘贴到这里...&#10;&#10;格式: user=xxx; ticket=xxx; userid=xxx; ..."></textarea>
+
+            <div id="result" class="result"></div>
+
+            <button class="btn btn-primary" id="submitBtn" onclick="saveCookie()">
+                验证并保存 Cookie
+            </button>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = window.location.origin;
+
+        async function saveCookie() {
+            const cookieInput = document.getElementById('cookieInput');
+            const resultDiv = document.getElementById('result');
+            const submitBtn = document.getElementById('submitBtn');
+            const cookie = cookieInput.value.trim();
+
+            if (!cookie) {
+                resultDiv.className = 'result error';
+                resultDiv.textContent = '请先粘贴 Cookie';
+                return;
+            }
+
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = '<span class="loading"></span>验证中...';
+            resultDiv.className = 'result info';
+            resultDiv.textContent = '正在验证 Cookie...';
+
+            try {
+                const response = await fetch(`${API_BASE}/api/connection/web/save-cookie`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ cookie: cookie })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    resultDiv.className = 'result success';
+                    resultDiv.innerHTML = `✅ ${data.message}`;
+                    if (data.data && data.data.balance) {
+                        resultDiv.innerHTML += `<br>可用资金: ${data.data.balance} 元`;
+                    }
+                } else {
+                    resultDiv.className = 'result error';
+                    resultDiv.innerHTML = `❌ ${data.message}`;
+                }
+            } catch (error) {
+                resultDiv.className = 'result error';
+                resultDiv.innerHTML = `❌ 请求失败: ${error.message}`;
+            } finally {
+                submitBtn.disabled = false;
+                submitBtn.innerHTML = '验证并保存 Cookie';
+            }
+        }
+
+        // 回车提交
+        document.getElementById('cookieInput').addEventListener('keydown', function(e) {
+            if (e.key === 'Enter' && e.ctrlKey) {
+                saveCookie();
+            }
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>新闻情绪仪表盘</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0d1117;
+            color: #e6edf3;
+            padding: 20px;
+        }
+        .container { max-width: 1200px; margin: 0 auto; }
+        h1 { color: #58a6ff; margin-bottom: 20px; font-size: 24px; }
+        h2 { color: #8b949e; margin: 20px 0 10px; font-size: 16px; }
+
+        .card {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 16px;
+        }
+
+        /* 顶部状态栏 */
+        .top-bar { display: flex; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }
+        .phase-card {
+            flex: 1;
+            min-width: 180px;
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 8px;
+            padding: 16px;
+            text-align: center;
+        }
+        .phase-label { color: #8b949e; font-size: 12px; margin-bottom: 6px; }
+        .phase-status { font-size: 14px; font-weight: 600; }
+        .phase-status.done { color: #3fb950; }
+        .phase-status.pending { color: #d29922; }
+        .phase-status.idle { color: #484f58; }
+        .phase-time { color: #8b949e; font-size: 11px; margin-top: 4px; }
+        .phase-card.hidden { display: none; }
+
+        /* 情绪仪表盘 */
+        .gauge-row { display: flex; gap: 20px; align-items: center; flex-wrap: wrap; }
+        .gauge-container { text-align: center; flex-shrink: 0; }
+        .gauge-svg { width: 200px; height: 120px; }
+        .gauge-score { font-size: 36px; font-weight: 700; margin-top: 8px; }
+        .gauge-desc { color: #8b949e; font-size: 14px; }
+        .gauge-meta { flex: 1; min-width: 200px; }
+        .meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+        .meta-item { padding: 12px; background: #0d1117; border-radius: 6px; }
+        .meta-label { color: #8b949e; font-size: 12px; margin-bottom: 4px; }
+        .meta-value { font-size: 18px; font-weight: 600; }
+        .meta-value.green { color: #3fb950; }
+        .meta-value.red { color: #f85149; }
+
+        /* 关键词标签 */
+        .keyword-tags { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+        .kw-tag {
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        .kw-tag.positive { background: #238636; color: #fff; }
+        .kw-tag.negative { background: #da3633; color: #fff; }
+
+        /* 新闻列表 */
+        .news-list { list-style: none; max-height: 500px; overflow-y: auto; }
+        .news-item {
+            display: flex;
+            gap: 10px;
+            padding: 10px 12px;
+            border-bottom: 1px solid #21262d;
+            font-size: 14px;
+            align-items: flex-start;
+        }
+        .news-item:last-child { border-bottom: none; }
+        .news-source {
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+            background: #21262d;
+            color: #8b949e;
+            white-space: nowrap;
+            flex-shrink: 0;
+        }
+        .news-title { flex: 1; line-height: 1.5; }
+        .news-title .hl-pos { color: #3fb950; font-weight: 600; }
+        .news-title .hl-neg { color: #f85149; font-weight: 600; }
+
+        /* 情绪历史表格 */
+        .history-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+        .history-table th {
+            background: #21262d;
+            padding: 10px 12px;
+            text-align: left;
+            color: #8b949e;
+            font-weight: 600;
+            position: sticky;
+            top: 0;
+        }
+        .history-table td {
+            padding: 8px 12px;
+            border-bottom: 1px solid #21262d;
+        }
+        .history-table tr:hover { background: #1c2128; }
+        .score-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-weight: 600;
+            font-size: 12px;
+        }
+        .score-badge.bullish { background: #238636; color: #fff; }
+        .score-badge.neutral { background: #484f58; color: #e6edf3; }
+        .score-badge.bearish { background: #da3633; color: #fff; }
+
+        /* 快照卡片 */
+        .snap-list { list-style: none; }
+        .snap-item {
+            display: flex;
+            gap: 12px;
+            padding: 10px 12px;
+            border-bottom: 1px solid #21262d;
+            font-size: 13px;
+            align-items: center;
+        }
+        .snap-item:last-child { border-bottom: none; }
+        .snap-action {
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+        .snap-action.buy { background: #238636; color: #fff; }
+        .snap-action.sell { background: #da3633; color: #fff; }
+        .snap-stock { font-weight: 600; color: #58a6ff; min-width: 100px; }
+        .snap-price { color: #8b949e; min-width: 80px; }
+        .snap-time { color: #8b949e; min-width: 140px; }
+
+        .empty { color: #8b949e; text-align: center; padding: 20px; }
+
+        .two-col { display: flex; gap: 16px; }
+        .two-col > .card { flex: 1; min-width: 0; }
+
+        @media (max-width: 768px) {
+            .two-col { flex-direction: column; }
+            .gauge-row { flex-direction: column; align-items: stretch; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>新闻情绪仪表盘</h1>
+
+        <!-- 调度阶段状态（只显示未完成的阶段） -->
+        <div class="top-bar" id="phaseBar">
+            <div class="phase-card" id="cardPreMarket">
+                <div class="phase-label">盘前分析 (9:20-9:30)</div>
+                <div class="phase-status idle" id="phasePreMarket">未到时间</div>
+                <div class="phase-time" id="timePreMarket"></div>
+            </div>
+            <div class="phase-card" id="cardLunch">
+                <div class="phase-label">午间分析 (11:30-13:00)</div>
+                <div class="phase-status idle" id="phaseLunch">未到时间</div>
+                <div class="phase-time" id="timeLunch"></div>
+            </div>
+            <div class="phase-card" id="cardAfterHours">
+                <div class="phase-label">收盘总结 (15:00+)</div>
+                <div class="phase-status idle" id="phaseAfterHours">未到时间</div>
+                <div class="phase-time" id="timeAfterHours"></div>
+            </div>
+            <div class="phase-card">
+                <div class="phase-label">AI调度器</div>
+                <div class="phase-status idle" id="phaseScheduler">未启动</div>
+            </div>
+        </div>
+
+        <!-- 情绪仪表盘 -->
+        <div class="card">
+            <h2>当前市场情绪</h2>
+            <div class="gauge-row">
+                <div class="gauge-container">
+                    <svg class="gauge-svg" viewBox="0 0 200 120">
+                        <defs>
+                            <linearGradient id="gaugeGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+                                <stop offset="0%" style="stop-color:#da3633"/>
+                                <stop offset="50%" style="stop-color:#d29922"/>
+                                <stop offset="100%" style="stop-color:#3fb950"/>
+                            </linearGradient>
+                        </defs>
+                        <path d="M 20 100 A 80 80 0 0 1 180 100" fill="none" stroke="#21262d" stroke-width="12" stroke-linecap="round"/>
+                        <path id="gaugeArc" d="M 20 100 A 80 80 0 0 1 180 100" fill="none" stroke="url(#gaugeGrad)" stroke-width="12" stroke-linecap="round" stroke-dasharray="0 251"/>
+                        <circle id="gaugeNeedle" cx="100" cy="100" r="5" fill="#e6edf3"/>
+                        <line id="gaugeLine" x1="100" y1="100" x2="100" y2="30" stroke="#e6edf3" stroke-width="2" stroke-linecap="round"/>
+                    </svg>
+                    <div class="gauge-score" id="gaugeScore">--</div>
+                    <div class="gauge-desc" id="gaugeDesc">加载中...</div>
+                </div>
+                <div class="gauge-meta">
+                    <div class="meta-grid">
+                        <div class="meta-item">
+                            <div class="meta-label">新闻总数</div>
+                            <div class="meta-value" id="metaNewsCount">--</div>
+                        </div>
+                        <div class="meta-item">
+                            <div class="meta-label">正向权重</div>
+                            <div class="meta-value green" id="metaPositive">--</div>
+                        </div>
+                        <div class="meta-item">
+                            <div class="meta-label">负向权重</div>
+                            <div class="meta-value red" id="metaNegative">--</div>
+                        </div>
+                        <div class="meta-item">
+                            <div class="meta-label">更新时间</div>
+                            <div class="meta-value" id="metaTimestamp" style="font-size:13px">--</div>
+                        </div>
+                    </div>
+                    <div style="margin-top:12px">
+                        <div class="meta-label" style="margin-bottom:6px">匹配关键词</div>
+                        <div class="keyword-tags" id="keywordTags"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="two-col">
+            <!-- 新闻列表 -->
+            <div class="card">
+                <h2>新闻标题（最近50条）</h2>
+                <ul class="news-list" id="newsList">
+                    <li class="empty">加载中...</li>
+                </ul>
+            </div>
+
+            <!-- 情绪历史 -->
+            <div class="card">
+                <h2>每日情绪跟踪</h2>
+                <div style="max-height:500px;overflow-y:auto">
+                    <table class="history-table" id="historyTable">
+                        <thead>
+                            <tr>
+                                <th>日期</th>
+                                <th>股票</th>
+                                <th>情绪分</th>
+                                <th>价格</th>
+                                <th>涨跌</th>
+                            </tr>
+                        </thead>
+                        <tbody id="historyBody">
+                            <tr><td colspan="5" class="empty">加载中...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- 交易情绪快照 -->
+        <div class="card">
+            <h2>交易情绪快照（最近20条）</h2>
+            <ul class="snap-list" id="snapList">
+                <li class="empty">加载中...</li>
+            </ul>
+        </div>
+    </div>
+
+    <script>
+        const API = window.location.origin;
+        const POS_KW = new Set(["暴涨","涨停","新高","创新高","大幅上涨","强势突破","连续涨停","利好","上涨","突破","增长","盈利","超预期","反弹","放量","金叉","龙头","热点","资金流入","业绩增长","净利润增长","营收增长","政策利好","机构买入","北向资金买入","回购","增持","分红","牛市","强势","企稳","回暖","震荡上行","底部放量","突破压力","芯片","半导体","新能源","光伏","锂电池","人工智能","5G","军工"]);
+
+        function updateGauge(score) {
+            const arc = document.getElementById('gaugeArc');
+            const line = document.getElementById('gaugeLine');
+            const totalLen = 251;
+            const filled = (score / 100) * totalLen;
+            arc.setAttribute('stroke-dasharray', `${filled} ${totalLen}`);
+
+            const angle = -180 + (score / 100) * 180;
+            const rad = angle * Math.PI / 180;
+            const x2 = 100 + 70 * Math.cos(rad);
+            const y2 = 100 + 70 * Math.sin(rad);
+            line.setAttribute('x2', x2);
+            line.setAttribute('y2', y2);
+
+            document.getElementById('gaugeScore').textContent = score;
+            const scoreEl = document.getElementById('gaugeScore');
+            if (score >= 65) scoreEl.style.color = '#3fb950';
+            else if (score >= 45) scoreEl.style.color = '#d29922';
+            else scoreEl.style.color = '#f85149';
+        }
+
+        function highlightTitle(title) {
+            let html = title;
+            for (const kw of POS_KW) {
+                if (html.includes(kw)) {
+                    html = html.replace(new RegExp(kw, 'g'), `<span class="hl-pos">${kw}</span>`);
+                }
+            }
+            const negKws = ["暴跌","崩盘","跌停","新低","大幅下跌","破位下跌","连续跌停","利空","下跌","破位","亏损","下滑","不及预期","业绩下滑","缩量","死叉","资金流出","机构卖出","政策收紧","北向资金卖出","减持","质押","商誉减值","熊市","弱势","恐慌","踩踏","爆仓","清仓","退市","ST","违规","处罚"];
+            for (const kw of negKws) {
+                if (html.includes(kw)) {
+                    html = html.replace(new RegExp(kw, 'g'), `<span class="hl-neg">${kw}</span>`);
+                }
+            }
+            return html;
+        }
+
+        async function loadCurrentSentiment() {
+            try {
+                const res = await fetch(`${API}/api/sentiment/current`);
+                const json = await res.json();
+                if (!json.success || !json.data) return;
+
+                const d = json.data;
+                updateGauge(d.score || 50);
+
+                const desc = d.description || '未知';
+                document.getElementById('gaugeDesc').textContent = desc;
+                document.getElementById('metaNewsCount').textContent = d.news_count || 0;
+                document.getElementById('metaPositive').textContent = (d.positive_count || 0).toFixed(1);
+                document.getElementById('metaNegative').textContent = (d.negative_count || 0).toFixed(1);
+                document.getElementById('metaTimestamp').textContent = d.timestamp || '--';
+
+                // 关键词
+                const tagsEl = document.getElementById('keywordTags');
+                const kws = (d.matched_keywords || []).slice(0, 15);
+                tagsEl.innerHTML = kws.map(k =>
+                    `<span class="kw-tag ${k.type}">${k.word} (${k.weight})</span>`
+                ).join('');
+
+                // 新闻列表
+                const newsEl = document.getElementById('newsList');
+                const headlines = d.news_headlines || [];
+                if (headlines.length === 0) {
+                    newsEl.innerHTML = '<li class="empty">暂无新闻</li>';
+                } else {
+                    newsEl.innerHTML = headlines.map(n => `
+                        <li class="news-item">
+                            <span class="news-source">${n.source}</span>
+                            <span class="news-title">${highlightTitle(n.title)}</span>
+                        </li>
+                    `).join('');
+                }
+            } catch (e) {
+                console.error('加载情绪数据失败:', e);
+            }
+        }
+
+        async function loadHistory() {
+            try {
+                const res = await fetch(`${API}/api/sentiment/history?days=7`);
+                const json = await res.json();
+                if (!json.success) return;
+
+                const { daily, snapshots, regrets } = json.data;
+
+                // 每日情绪
+                const tbody = document.getElementById('historyBody');
+                if (!daily || daily.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="5" class="empty">暂无历史数据</td></tr>';
+                } else {
+                    tbody.innerHTML = daily.slice(0, 50).map(r => {
+                        const s = r.sentiment || 50;
+                        const cls = s >= 65 ? 'bullish' : s <= 35 ? 'bearish' : 'neutral';
+                        const chg = r.change_pct || 0;
+                        const chgColor = chg > 0 ? '#3fb950' : chg < 0 ? '#f85149' : '#8b949e';
+                        return `<tr>
+                            <td>${r.record_date || '--'}</td>
+                            <td style="color:#58a6ff;font-weight:600">${r.symbol || '--'}</td>
+                            <td><span class="score-badge ${cls}">${s}</span></td>
+                            <td>${r.price ? r.price.toFixed(2) : '--'}</td>
+                            <td style="color:${chgColor}">${chg > 0 ? '+' : ''}${chg.toFixed(2)}%</td>
+                        </tr>`;
+                    }).join('');
+                }
+
+                // 交易快照
+                const snapEl = document.getElementById('snapList');
+                if (!snapshots || snapshots.length === 0) {
+                    snapEl.innerHTML = '<li class="empty">暂无交易快照</li>';
+                } else {
+                    snapEl.innerHTML = snapshots.map(s => {
+                        const actionCls = s.action === 'buy' ? 'buy' : 'sell';
+                        return `<li class="snap-item">
+                            <span class="snap-action ${actionCls}">${s.action === 'buy' ? '买入' : '卖出'}</span>
+                            <span class="snap-stock">${s.stock_name || s.symbol}</span>
+                            <span class="snap-price">¥${s.price ? s.price.toFixed(2) : '--'}</span>
+                            <span>情绪: <span class="score-badge ${s.sentiment >= 65 ? 'bullish' : s.sentiment <= 35 ? 'bearish' : 'neutral'}">${s.sentiment || 50}</span></span>
+                            <span style="flex:1"></span>
+                            <span class="snap-time">${s.created_at || '--'}</span>
+                        </li>`;
+                    }).join('');
+                }
+            } catch (e) {
+                console.error('加载历史失败:', e);
+            }
+        }
+
+        async function loadSchedulerStatus() {
+            try {
+                const res = await fetch(`${API}/api/sentiment/scheduler-status`);
+                const json = await res.json();
+                if (!json.success) return;
+
+                const d = json.data;
+                const setPhase = (cardId, statusId, timeId, done, timeStr) => {
+                    const el = document.getElementById(statusId);
+                    const card = document.getElementById(cardId);
+                    const timeEl = document.getElementById(timeId);
+                    if (done) {
+                        card.classList.add('hidden');
+                    } else {
+                        card.classList.remove('hidden');
+                        el.textContent = '待执行';
+                        el.className = 'phase-status pending';
+                        if (timeEl) timeEl.textContent = '';
+                    }
+                };
+                setPhase('cardPreMarket', 'phasePreMarket', 'timePreMarket', d.pre_market_done, d.pre_market_time);
+                setPhase('cardLunch', 'phaseLunch', 'timeLunch', d.lunch_done, d.lunch_time);
+                setPhase('cardAfterHours', 'phaseAfterHours', 'timeAfterHours', d.after_hours_done, d.after_hours_time);
+
+                const schEl = document.getElementById('phaseScheduler');
+                if (d.running && d.enabled) {
+                    schEl.textContent = '运行中';
+                    schEl.className = 'phase-status done';
+                } else if (d.enabled) {
+                    schEl.textContent = '已启用';
+                    schEl.className = 'phase-status pending';
+                } else {
+                    schEl.textContent = '未启用';
+                    schEl.className = 'phase-status idle';
+                }
+            } catch (e) {
+                console.error('加载调度状态失败:', e);
+            }
+        }
+
+        function loadAll() {
+            loadCurrentSentiment();
+            loadHistory();
+            loadSchedulerStatus();
+        }
+
+        loadAll();
+        setInterval(loadAll, 30000);
+
+        // 到午夜00:00自动刷新页面（新一天的阶段重置）
+        function scheduleMidnightRefresh() {
+            const now = new Date();
+            const midnight = new Date(now);
+            midnight.setHours(24, 0, 0, 0);
+            const msUntilMidnight = midnight - now;
+            setTimeout(() => {
+                window.location.reload();
+            }, msUntilMidnight);
+        }
+        scheduleMidnightRefresh();
+    </script>
+</body>
+</html>

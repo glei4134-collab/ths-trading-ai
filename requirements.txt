@@ -1,0 +1,33 @@
+# Web framework
+flask>=2.3.0
+flask-cors>=4.0.0
+
+# Financial data
+akshare>=1.10.0
+
+# Data processing
+pandas>=1.5.0
+numpy>=1.21.0
+
+# Strategy optimization
+optuna>=4.0.0
+
+# Auto trading (optional)
+easytrader>=0.20.0
+
+# Browser automation (optional)
+playwright>=1.40.0
+
+# Desktop tray app (optional, not needed for Railway)
+# pystray>=0.19.0
+# Pillow>=9.0.0
+# pywin32>=306; sys_platform == "win32"
+
+# Scheduler (for Railway)
+apscheduler>=3.10.0
+
+# JWT
+pyjwt>=2.0.0
+
+# NLP Sentiment (lightweight)
+snownlp>=0.12.3

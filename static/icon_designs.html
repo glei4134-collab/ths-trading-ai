@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>动态图标设计</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            min-height: 100vh;
+            padding: 40px 20px;
+            color: #fff;
+        }
+        h1 { text-align: center; margin-bottom: 40px; font-size: 28px; }
+        .section { margin-bottom: 50px; }
+        .section h2 { color: #667eea; margin-bottom: 25px; font-size: 20px; }
+        .icon-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 25px;
+        }
+        .icon-card {
+            background: rgba(255,255,255,0.05);
+            border-radius: 16px;
+            padding: 25px;
+            text-align: center;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.1);
+            transition: all 0.3s;
+        }
+        .icon-card:hover {
+            transform: translateY(-8px);
+            box-shadow: 0 10px 30px rgba(102, 126, 234, 0.3);
+        }
+        .icon-container {
+            width: 100px;
+            height: 100px;
+            margin: 0 auto 15px;
+            position: relative;
+        }
+        .icon-name { font-size: 14px; color: #fff; margin-bottom: 5px; }
+        .icon-desc { font-size: 12px; color: #888; }
+
+        /* 动画图标基础样式 */
+        .animated-icon {
+            width: 100px;
+            height: 100px;
+            border-radius: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            overflow: hidden;
+        }
+
+        /* 方案1: 脉冲动画 */
+        .pulse-1 {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            animation: pulse 2s infinite;
+        }
+        .pulse-2 {
+            background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+            animation: pulse 1.5s infinite;
+        }
+        .pulse-3 {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            animation: pulse 2s infinite;
+        }
+        .pulse-4 {
+            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+            animation: pulse 1.8s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+        }
+
+        /* 方案2: 旋转动画 */
+        .rotate-1 { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
+        .rotate-2 { background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%); }
+        .rotate-3 { background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); }
+        .rotate-4 { background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%); }
+
+        .rotate-icon {
+            animation: rotate 3s linear infinite;
+        }
+
+        @keyframes rotate {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        /* 方案3: 呼吸动画 */
+        .breathe-1 { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
+        .breathe-2 { background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%); }
+        .breathe-3 { background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); }
+        .breathe-4 { background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%); }
+
+        .breathe-icon {
+            animation: breathe 2s ease-in-out infinite;
+        }
+
+        @keyframes breathe {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.7; transform: scale(0.95); }
+        }
+
+        /* 方案4: 波浪动画 */
+        .wave-1 { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
+        .wave-2 { background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%); }
+        .wave-3 { background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); }
+        .wave-4 { background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%); }
+
+        .wave-icon::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
+            background: radial-gradient(circle, rgba(255,255,255,0.3) 0%, transparent 60%);
+            animation: wave 3s linear infinite;
+        }
+
+        @keyframes wave {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .icon-symbol {
+            font-size: 42px;
+            z-index: 1;
+        }
+
+        .note {
+            background: rgba(255,193,7,0.1);
+            border: 1px solid rgba(255,193,7,0.3);
+            border-radius: 12px;
+            padding: 20px;
+            margin-top: 30px;
+            color: #ffc107;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <h1>动态图标设计方案</h1>
+
+    <!-- 方案1: 脉冲动画 -->
+    <div class="section">
+        <h2>方案1: 脉冲动画 (活力感)</h2>
+        <div class="icon-grid">
+            <div class="icon-card">
+                <div class="icon-container">
+                    <div class="animated-icon pulse-1">
+                        <span class="icon-symbol">📈</span>
+                    </div>
+                </div>
+                <div class="icon-name">上涨趋势</div>
+                <div class="icon-desc">紫蓝渐变脉冲</div>
+            </div>
+            <div class="icon-card">
+                <div class="icon-container">
+                    <div class="animated-icon pulse-2">
+                        <span class="icon-symbol">⏳</span>
+                    </div>
+                </div>
+                <div class="icon-name">加载中</div>
+                <div class="icon-desc">绿色渐变脉冲</div>
+            </div>
+            <div class="icon-card">
+                <div class="icon-container">
+                    <div class="animated-icon pulse-3">
+                        <span class="icon-symbol">📉</span>
+                    </div>
+                </div>
+                <div class="icon-name">下跌趋势</div>
+                <div class="icon-desc">粉红渐变脉冲</div>
+            </div>
+            <div class="icon-card">
+                <div class="icon-container">
+                    <div class="animated-icon pulse-4">
+                        <span class="icon-symbol">⚡</span>
+                    </div>
+                </div>
+                <div class="icon-name">交易中</div>
+                <div class="icon-desc">蓝色渐变脉冲</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 方案2: 旋转动画 -->
+    <div class="section">
+        <h2>方案2: 旋转动画 (科技感)</h2>
+        <div class="icon-grid">
+            <div class="icon-card">
+                <div class="icon-container">
+                    <div class="animated-icon rotate-1 rotate-icon">
+                        <span class="icon-symbol">📊</span>
+                    </div>
+                </div>
+                <div class="icon-name">数据分析</div>
+                <div class="icon-desc">紫蓝渐变旋转</div>
+            </div>
+            <div class="icon-card">
+                <div class="icon-container">
+                    <div class="animated-icon rotate-2 rotate-icon">
+                        <span class="icon-symbol">🔄</span>
+                    </div>
+                </div>
+                <div class="icon-name">同步中</div>
+                <div class="icon-desc">绿色渐变旋转</div>
+            </div>
+            <div class="icon-card">
+                <div class="icon-container">
+                    <div class="animated-icon rotate-3 rotate-icon">
+                        <span class="icon-symbol">💹</span>
+                    </div>
+                </div>
+                <div class="icon-name">实时行情</div>
+                <div class="icon-desc">粉红渐变旋转</div>
+            </div>
+            <div class="icon-card">
+                <div class="icon-container">
+                    <div class="animated-icon rotate-4 rotate-icon">
+                        <span class="icon-symbol">🚀</span>
+                    </div>
+                </div>
+                <div class="icon-name">启动中</div>
+                <div class="icon-desc">蓝色渐变旋转</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 方案3: 呼吸动画 -->
+    <div class="section">
+        <h2>方案3: 呼吸动画 (柔和感)</h2>
+        <div class="icon-grid">
+            <div class="icon-card">
+                <div class="icon-container">
+                    <div class="animated-icon breathe-1 breathe-icon">
+                        <span class="icon-symbol">💰</span>
+                    </div>
+                </div>
+                <div class="icon-name">收益</div>
+                <div class="icon-desc">紫蓝渐变呼吸</div>
+            </div>
+            <div class="icon-card">
+                <div class="icon-container">
+                    <div class="animated-icon breathe-2 breathe-icon">
+                        <span class="icon-symbol">🎯</span>
+                    </div>
+                </div>
+                <div class="icon-name">目标</div>
+                <div class="icon-desc">绿色渐变呼吸</div>
+            </div>
+            <div class="icon-card">
+                <div class="icon-container">
+                    <div class="animated-icon breathe-3 breathe-icon">
+                        <span class="icon-symbol">⚠️</span>
+                    </div>
+                </div>
+                <div class="icon-name">警告</div>
+                <div class="icon-desc">粉红渐变呼吸</div>
+            </div>
+            <div class="icon-card">
+                <div class="icon-container">
+                    <div class="animated-icon breathe-4 breathe-icon">
+                        <span class="icon-symbol">🔔</span>
+                    </div>
+                </div>
+                <div class="icon-name">通知</div>
+                <div class="icon-desc">蓝色渐变呼吸</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 方案4: 波浪动画 -->
+    <div class="section">
+        <h2>方案4: 波浪动画 (流畅感)</h2>
+        <div class="icon-grid">
+            <div class="icon-card">
+                <div class="icon-container">
+                    <div class="animated-icon wave-1 wave-icon">
+                        <span class="icon-symbol">🌊</span>
+                    </div>
+                </div>
+                <div class="icon-name">市场波动</div>
+                <div class="icon-desc">紫蓝渐变波浪</div>
+            </div>
+            <div class="icon-card">
+                <div class="icon-container">
+                    <div class="animated-icon wave-2 wave-icon">
+                        <span class="icon-symbol">📡</span>
+                    </div>
+                </div>
+                <div class="icon-name">数据同步</div>
+                <div class="icon-desc">绿色渐变波浪</div>
+            </div>
+            <div class="icon-card">
+                <div class="icon-container">
+                    <div class="animated-icon wave-3 wave-icon">
+                        <span class="icon-symbol">🔥</span>
+                    </div>
+                </div>
+                <div class="icon-name">热门</div>
+                <div class="icon-desc">粉红渐变波浪</div>
+            </div>
+            <div class="icon-card">
+                <div class="icon-container">
+                    <div class="animated-icon wave-4 wave-icon">
+                        <span class="icon-symbol">💎</span>
+                    </div>
+                </div>
+                <div class="icon-name">精选</div>
+                <div class="icon-desc">蓝色渐变波浪</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="note">
+        <strong>动态图标说明:</strong> 4种动画效果，16个图标组合。选择你喜欢的方案，我会更新系统。
+    </div>
+</body>
+</html>

@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cookie 管理 - THS Trading AI</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; color: #333; }
+        .container { max-width: 800px; margin: 0 auto; padding: 20px; }
+        .header { background: #fff; border-radius: 12px; padding: 20px; margin-bottom: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+        .header h1 { font-size: 24px; margin-bottom: 10px; }
+        .header p { color: #666; font-size: 14px; }
+        .card { background: #fff; border-radius: 12px; padding: 20px; margin-bottom: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+        .card h2 { font-size: 18px; margin-bottom: 15px; display: flex; align-items: center; gap: 8px; }
+        .form-group { margin-bottom: 15px; }
+        .form-group label { display: block; font-size: 14px; font-weight: 500; margin-bottom: 5px; }
+        .form-group input, .form-group textarea { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 8px; font-size: 14px; }
+        .form-group textarea { height: 100px; font-family: monospace; resize: vertical; }
+        .btn { padding: 10px 20px; border: none; border-radius: 8px; font-size: 14px; font-weight: 500; cursor: pointer; transition: all 0.2s; }
+        .btn-primary { background: #4CAF50; color: #fff; }
+        .btn-primary:hover { background: #45a049; }
+        .btn-danger { background: #f44336; color: #fff; }
+        .btn-danger:hover { background: #da190b; }
+        .btn-secondary { background: #2196F3; color: #fff; }
+        .btn-secondary:hover { background: #0b7dda; }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .cookie-list { margin-top: 15px; }
+        .cookie-item { display: flex; align-items: center; justify-content: space-between; padding: 12px; border: 1px solid #eee; border-radius: 8px; margin-bottom: 10px; }
+        .cookie-item .info { flex: 1; }
+        .cookie-item .user-id { font-weight: 600; font-size: 16px; }
+        .cookie-item .preview { color: #666; font-size: 12px; font-family: monospace; margin-top: 4px; }
+        .cookie-item .status { margin-left: 10px; }
+        .status-dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
+        .status-dot.valid { background: #4CAF50; }
+        .status-dot.invalid { background: #f44336; }
+        .status-dot.unknown { background: #9E9E9E; }
+        .loading { text-align: center; padding: 20px; color: #666; }
+        .empty { text-align: center; padding: 40px; color: #999; }
+        .toast { position: fixed; top: 20px; right: 20px; padding: 12px 20px; border-radius: 8px; color: #fff; font-size: 14px; z-index: 1000; animation: slideIn 0.3s ease; }
+        .toast.success { background: #4CAF50; }
+        .toast.error { background: #f44336; }
+        @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Cookie 管理</h1>
+            <p>管理内测用户的同花顺Cookie，支持自动检测失效并删除</p>
+        </div>
+
+        <div class="card">
+            <h2>添加 Cookie</h2>
+            <div class="form-group">
+                <label>用户ID</label>
+                <input type="text" id="userId" placeholder="例如: userA, userB">
+            </div>
+            <div class="form-group">
+                <label>Cookie 值</label>
+                <textarea id="cookieValue" placeholder="从浏览器F12复制的Cookie值..."></textarea>
+            </div>
+            <button class="btn btn-primary" onclick="addCookie()">保存 Cookie</button>
+        </div>
+
+        <div class="card">
+            <h2>
+                Cookie 列表
+                <button class="btn btn-secondary" onclick="checkAll()" style="margin-left: auto; padding: 6px 12px; font-size: 12px;">检测有效性</button>
+            </h2>
+            <div id="cookieList" class="cookie-list">
+                <div class="loading">加载中...</div>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>操作日志</h2>
+            <div id="logs" style="height: 150px; overflow-y: auto; background: #f9f9f9; padding: 10px; border-radius: 8px; font-size: 12px; font-family: monospace;"></div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = '';
+
+        function log(msg) {
+            const logs = document.getElementById('logs');
+            const time = new Date().toLocaleTimeString();
+            logs.innerHTML = `<div>[${time}] ${msg}</div>` + logs.innerHTML;
+        }
+
+        function showToast(msg, type = 'success') {
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+            toast.textContent = msg;
+            document.body.appendChild(toast);
+            setTimeout(() => toast.remove(), 3000);
+        }
+
+        async function loadCookies() {
+            try {
+                const res = await fetch(`${API_BASE}/api/cookies`);
+                const data = await res.json();
+                const list = document.getElementById('cookieList');
+
+                if (!data.success || !data.data.length) {
+                    list.innerHTML = '<div class="empty">暂无Cookie</div>';
+                    return;
+                }
+
+                list.innerHTML = data.data.map(c => `
+                    <div class="cookie-item">
+                        <div class="info">
+                            <div class="user-id">${c.user_id}</div>
+                            <div class="preview">${c.preview} (${c.length}字符)</div>
+                        </div>
+                        <div class="status">
+                            <span class="status-dot unknown" id="status-${c.user_id}"></span>
+                        </div>
+                        <button class="btn btn-danger" onclick="deleteCookie('${c.user_id}')" style="margin-left: 10px; padding: 6px 12px; font-size: 12px;">删除</button>
+                    </div>
+                `).join('');
+
+                log(`加载了 ${data.data.length} 个Cookie`);
+            } catch (e) {
+                log(`加载失败: ${e.message}`);
+            }
+        }
+
+        async function addCookie() {
+            const userId = document.getElementById('userId').value.trim();
+            const cookie = document.getElementById('cookieValue').value.trim();
+
+            if (!userId || !cookie) {
+                showToast('请填写用户ID和Cookie', 'error');
+                return;
+            }
+
+            try {
+                const res = await fetch(`${API_BASE}/api/cookies`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({user_id: userId, cookie: cookie})
+                });
+                const data = await res.json();
+
+                if (data.success) {
+                    showToast(data.message);
+                    log(`添加用户: ${userId}`);
+                    document.getElementById('userId').value = '';
+                    document.getElementById('cookieValue').value = '';
+                    loadCookies();
+                } else {
+                    showToast(data.message, 'error');
+                }
+            } catch (e) {
+                showToast(`保存失败: ${e.message}`, 'error');
+            }
+        }
+
+        async function deleteCookie(userId) {
+            if (!confirm(`确定删除用户 ${userId} 的Cookie？`)) return;
+
+            try {
+                const res = await fetch(`${API_BASE}/api/cookies/${userId}`, {method: 'DELETE'});
+                const data = await res.json();
+
+                if (data.success) {
+                    showToast(data.message);
+                    log(`删除用户: ${userId}`);
+                    loadCookies();
+                } else {
+                    showToast(data.message, 'error');
+                }
+            } catch (e) {
+                showToast(`删除失败: ${e.message}`, 'error');
+            }
+        }
+
+        async function checkAll() {
+            log('开始检测所有Cookie...');
+            try {
+                const res = await fetch(`${API_BASE}/api/cookies/check`, {method: 'POST'});
+                const data = await res.json();
+
+                if (data.success) {
+                    data.data.forEach(r => {
+                        const dot = document.getElementById(`status-${r.user_id}`);
+                        if (dot) {
+                            dot.className = `status-dot ${r.valid ? 'valid' : 'invalid'}`;
+                        }
+                        log(`${r.user_id}: ${r.valid ? '✅有效 余额' + r.balance.toLocaleString() : '❌失效'}`);
+                    });
+                }
+            } catch (e) {
+                log(`检测失败: ${e.message}`);
+            }
+        }
+
+        // 页面加载时获取Cookie列表
+        loadCookies();
+    </script>
+</body>
+</html>

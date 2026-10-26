@@ -1,0 +1,46 @@
+{
+  "competition_name": "2026年第十三届全国证券投资大赛（个人赛段）",
+  "competition_id": "newbsid_229325",
+  "competition_url": "https://moni.10jqka.com.cn/hezuo/newbsid_229325",
+  "organizer": "同花顺",
+  "period": {
+    "registration_start": "2026-04-24",
+    "registration_end": "2026-05-31",
+    "start": "2026-05-06",
+    "end": "2026-06-30"
+  },
+  "initial_funds": 1000000,
+  "trading_rules": {
+    "market": ["SH", "SZ"],
+    "trading_hours": [
+      {"session": "morning", "start": "09:30", "end": "11:30"},
+      {"session": "afternoon", "start": "13:00", "end": "15:00"}
+    ],
+    "t_plus_1": true,
+    "min_order_unit": 100,
+    "price_limits": {
+      "main_board": {"up": 0.10, "down": -0.10},
+      "gem": {"up": 0.20, "down": -0.20},
+      "star": {"up": 0.20, "down": -0.20}
+    },
+    "short_selling": false,
+    "commission": {
+      "buy_rate": 0.0003,
+      "sell_rate": 0.0003,
+      "min_commission": 5,
+      "stamp_tax_rate": 0.001,
+      "transfer_fee_rate": 0.00002
+    }
+  },
+  "holidays_2026": [
+    "2026-01-01",
+    "2026-01-26", "2026-01-27", "2026-01-28", "2026-01-29", "2026-01-30",
+    "2026-02-01", "2026-02-02", "2026-02-03",
+    "2026-04-06",
+    "2026-05-01", "2026-05-02", "2026-05-03", "2026-05-04", "2026-05-05"
+  ],
+  "scoring": {
+    "description": "收益率排名",
+    "formula": "final_score = total_return"
+  }
+}
