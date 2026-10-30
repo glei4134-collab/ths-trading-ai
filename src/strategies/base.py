@@ -170,3 +170,19 @@ class BaseStrategy:
                 reasons.append("价格跌破布林带下轨")
 
         return score, reasons
+
+    def _score_to_signal(self, score: float) -> Signal:
+        """通用得分转交易信号转换器"""
+        if score >= 0.5:
+            return Signal.STRONG_BUY
+        elif score >= 0.2:
+            return Signal.BUY
+        elif score >= 0.05:
+            return Signal.WEAK_BUY
+        elif score <= -0.5:
+            return Signal.STRONG_SELL
+        elif score <= -0.2:
+            return Signal.SELL
+        elif score <= -0.05:
+            return Signal.WEAK_SELL
+        return Signal.HOLD

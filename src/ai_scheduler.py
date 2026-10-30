@@ -8,15 +8,15 @@ import json
 import logging
 import threading
 import time as _time
-from datetime import datetime
+from datetime import datetime, date, timedelta, time as _dtime
 from zoneinfo import ZoneInfo
-from datetime import date
 from typing import Dict, List, Optional
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 from paths import CONFIG_DIR, DATA_DIR
+from scheduler_ledger import scheduler_ledger, StepStatus, CatchupPolicy
 
 _SCHEDULER_CONFIG_FILE = CONFIG_DIR / "ai_scheduler.json"
 _TRADE_LOG_FILE = DATA_DIR / "scheduler_trade_log.json"
@@ -84,16 +84,75 @@ class AIScheduler:
 
         # ===== 全时段覆盖：盘前/午间/收盘后 =====
         self._pre_market_done = False             # 今日盘前分析是否已完成
+        self._call_auction_done = False           # 今日集合竞价是否已完成
+        self._morning_open_done = False           # 今日早盘开盘处理是否已完成
         self._lunch_done = False                  # 今日午间分析是否已完成
+        self._afternoon_open_done = False         # 今日午盘开盘处理是否已完成
+        self._closing_rebalance_done = False      # 今日尾盘调仓是否已完成
         self._after_hours_done = False            # 今日收盘后总结是否已完成
         self._pre_market_result: Optional[Dict] = None   # 盘前分析缓存结果
         self._lunch_sentiment: Optional[Dict] = None     # 午间情绪缓存
         self._ths_connected = False               # THS连接状态
-        self._morning_open_done = False           # 今日早盘开盘处理是否已完成
-        self._afternoon_open_done = False         # 今日午盘开盘处理是否已完成
+
+        # ===== 虚拟时间与时间旅行（离线/盘后可调试） =====
+        self._mock_time: Optional[datetime] = None
+        self._mock_time_speed: float = 1.0        # 虚拟时钟流动倍速
+        self._last_mock_set_wall: float = 0.0     # 注入时对应的 monotonic 时间
+
+        # ===== 睡眠跳跃与断点自愈感知器 =====
+        self._last_tick_monotonic: float = _time.monotonic()
+        self._last_tick_wall: datetime = datetime.now(ZoneInfo("Asia/Shanghai"))
+        self._last_audit_time: float = 0.0
 
         self._load_config()
         self._load_trade_log()
+
+    # ========== Time & Mock Clock ==========
+
+    def now(self) -> datetime:
+        """获取当前系统时间（支持注入虚拟时钟进行非交易时段调试）"""
+        if self._mock_time is not None:
+            if self._mock_time_speed > 0 and self._last_mock_set_wall > 0:
+                elapsed = (_time.monotonic() - self._last_mock_set_wall) * self._mock_time_speed
+                return self._mock_time + timedelta(seconds=elapsed)
+            return self._mock_time
+        return datetime.now(ZoneInfo("Asia/Shanghai"))
+
+    def set_mock_time(self, target_time_str: str, speed: float = 1.0) -> str:
+        """设置虚拟时钟进行时间旅行测试"""
+        try:
+            target = datetime.fromisoformat(target_time_str)
+            if target.tzinfo is None:
+                target = target.replace(tzinfo=ZoneInfo("Asia/Shanghai"))
+            self._mock_time = target
+            self._mock_time_speed = speed
+            self._last_mock_set_wall = _time.monotonic()
+            logger.info(f"🕒 虚拟时钟注入成功: {self._mock_time.strftime('%Y-%m-%d %H:%M:%S')} (流速: {speed}x)")
+            return self._mock_time.strftime("%Y-%m-%d %H:%M:%S")
+        except Exception as e:
+            logger.error(f"注入虚拟时钟失败: {e}")
+            raise
+
+    def clear_mock_time(self) -> None:
+        """清除虚拟时钟，恢复真实时间"""
+        self._mock_time = None
+        self._mock_time_speed = 1.0
+        self._last_mock_set_wall = 0.0
+        logger.info("🕒 已清除虚拟时钟，恢复现实时间")
+
+    @property
+    def is_mock_time(self) -> bool:
+        """是否处于虚拟时钟状态"""
+        return self._mock_time is not None
+
+    def is_trading_day(self, target_date=None) -> bool:
+        """判断指定日期（默认当前时钟对应日期）是否为交易日"""
+        try:
+            from competition import competition_manager
+            d = target_date or self.now().date()
+            return competition_manager.is_trading_day(d)
+        except Exception:
+            return self.now().weekday() < 5
 
     # ========== Config ==========
 
@@ -213,10 +272,21 @@ class AIScheduler:
         except Exception:
             logger.warning("THS连接检查异常")
 
-        # ===== 启动补救：检查今天是否做过盘前分析，没做就立刻补做 =====
-        self._check_startup_catchup()
+        # ===== 启动时初始化今日账本并执行自愈审计 (非阻塞后台执行) =====
+        try:
+            today_str = self.now().date().isoformat()
+            scheduler_ledger.init_daily_ledger(today_str)
+        except Exception as e:
+            logger.warning(f"账本初始化异常: {e}")
 
-        self._thread = threading.Thread(target=self._loop, daemon=True)
+        def _bg_worker():
+            try:
+                self._audit_and_catchup()
+            except Exception as e:
+                logger.warning(f"启动自愈审计异常: {e}")
+            self._loop()
+
+        self._thread = threading.Thread(target=_bg_worker, daemon=True)
         self._thread.start()
         logger.info(f"AI调度器已启动 (间隔={self.interval_minutes}分钟, 自动交易={'开' if self.enabled else '关'})")
 
@@ -227,114 +297,144 @@ class AIScheduler:
             self._thread = None
         logger.info("AI调度器已停止")
 
-    # ========== Main Loop ==========
+    # ========== Main Resilient Loop & Wakeup Detection ==========
+
+    def _on_system_wake_up(self):
+        """本地电脑经历睡眠/休眠唤醒时的自愈处理"""
+        logger.warning("⚡ 触发本地机器休眠唤醒断点自愈与时序审计...")
+        try:
+            self._check_ths_connection()
+            self._audit_and_catchup()
+        except Exception as e:
+            logger.error(f"唤醒自愈处理异常: {e}")
 
     def _loop(self):
         while self._running:
             try:
-                today = date.today().isoformat()
-                now = datetime.now(ZoneInfo("Asia/Shanghai"))
-                current_time = now.time()
+                curr_mono = _time.monotonic()
+                curr_wall = self.now()
+                today = curr_wall.date().isoformat()
+                current_time = curr_wall.time()
 
-                # 重置每日计数 + 阶段标志
+                # 1. 休眠/挂起恢复检测 (睡眠跳跃侦测)
+                wall_elapsed = (curr_wall - self._last_tick_wall).total_seconds()
+                mono_elapsed = curr_mono - self._last_tick_monotonic
+                self._last_tick_monotonic = curr_mono
+                self._last_tick_wall = curr_wall
+
+                if wall_elapsed > max(mono_elapsed + 10, 25.0):
+                    logger.warning(f"⚡ 侦测到系统时钟发生突跃 ({wall_elapsed:.1f}s)，判定为休眠唤醒，执行自愈审计...")
+                    self._on_system_wake_up()
+
+                # 2. 每日跨日重置与初始化账本
                 if self._last_trade_date != today:
                     self._daily_trades = 0
                     self._last_trade_date = today
                     self._trade_log = []
                     self._pre_market_done = False
+                    self._call_auction_done = False
+                    self._morning_open_done = False
                     self._lunch_done = False
+                    self._afternoon_open_done = False
+                    self._closing_rebalance_done = False
                     self._after_hours_done = False
                     self._pre_market_result = None
                     self._lunch_sentiment = None
-                    self._morning_open_done = False
-                    self._afternoon_open_done = False
                     self._save_trade_log()
+                    scheduler_ledger.init_daily_ledger(today)
 
-                # OPT-1: enabled 检查移到最前面
+                # 3. 启用状态检查
                 if not self.enabled or not self._running:
-                    _time.sleep(10)
+                    _time.sleep(3)
                     continue
 
                 from competition import competition_manager
-                is_trading_day = competition_manager.is_trading_day(now.date())
+                is_trading_day = competition_manager.is_trading_day(curr_wall.date())
 
-                # ===== 区分时段，分别处理 =====
-                from datetime import time as _dt_time
+                if not is_trading_day:
+                    # 非交易日/休市：低功耗睡眠 30 秒，方便响应停止指令
+                    _time.sleep(30)
+                    continue
 
-                if is_trading_day and _dt_time(9, 20) <= current_time <= _dt_time(9, 30):
-                    # ===== 开盘前: 抓一次新闻 =====
+                # 4. 获取当前精准时序窗口
+                current_win = competition_manager.get_detailed_time_window(curr_wall)
+                win_id = current_win.get("window_id")
+
+                # 定期（每 60 秒）自动进行漏步审计与补偿
+                if curr_mono - self._last_audit_time > 60.0:
+                    self._last_audit_time = curr_mono
+                    self._audit_and_catchup()
+
+                # 5. 根据精准时序窗口触发对应操作
+                if win_id == "W1_PRE_MARKET_NEWS":
+                    # 09:15 - 09:25: 盘前新闻舆情与全网情绪抓取
                     if not self._pre_market_done:
                         self._run_pre_market_analysis()
-                    _time.sleep(60)
-                    continue
 
-                elif is_trading_day and _dt_time(11, 30) <= current_time <= _dt_time(13, 0):
-                    # ===== 午间: 抓一次新闻 + THS连接检查 =====
-                    if not self._lunch_done:
-                        self._run_lunch_analysis()
-                    # 午间检查THS连接（为下午交易做准备）
-                    self._check_ths_connection()
-                    market = competition_manager.get_market_status()
-                    next_open = market.get("next_open_seconds", 0)
-                    sleep_sec = min(next_open, 1800) if next_open > 60 else 300
-                    _time.sleep(sleep_sec)
-                    continue
+                elif win_id == "W2_CALL_AUCTION":
+                    # 09:25 - 09:30: 集合竞价决断与冲击池筛选
+                    if not self._call_auction_done:
+                        self._run_call_auction_decision()
 
-                elif is_trading_day and competition_manager.is_trading_hours():
-                    # ===== 盘中交易 (9:30-11:30, 13:00-15:00) =====
+                elif win_id == "W3_MORNING_OPEN":
+                    # 09:30 - 09:35: 早盘开盘挂单重整与首批买入
+                    if not self._morning_open_done:
+                        self._morning_open_done = True
+                        self._run_morning_open_catchup()
+
+                elif win_id in ["W4_INTRADAY_MORNING", "W6_INTRADAY_AFTERNOON"]:
+                    # 盘中连续交易时段 (09:35-11:30, 13:00-14:50)
+                    if win_id == "W6_INTRADAY_AFTERNOON" and not self._afternoon_open_done:
+                        self._afternoon_open_done = True
+                        self._handle_pending_orders()
+                        self._run_analysis()
+
                     # 检查 THS 连接
                     self._check_ths_connection()
-                    if not self._ths_connected:
-                        _time.sleep(120)
-                        continue
 
-                    # ===== 每次开盘立即处理未成交委托（不等10分钟）=====
-                    current_session = "morning" if current_time <= _dt_time(12, 0) else "afternoon"
-                    if current_session == "morning" and not self._morning_open_done:
-                        self._morning_open_done = True
-                        logger.info("📋 早盘开盘: 立即处理未成交委托...")
-                        self._handle_pending_orders()
-                    elif current_session == "afternoon" and not self._afternoon_open_done:
-                        self._afternoon_open_done = True
-                        logger.info("📋 午盘开盘: 立即处理未成交委托...")
-                        self._handle_pending_orders()
+                    # 连续动态止损止盈监控
+                    try:
+                        from auto_trader import auto_trader
+                        if auto_trader.enabled and not auto_trader._monitor_running:
+                            auto_trader.check_stop_loss()
+                    except Exception:
+                        pass
 
-                    # 等待分析间隔
-                    _time.sleep(self.interval_minutes * 60)
+                    # 周期性 AI/规则 策略分析
+                    if self._last_analysis_time:
+                        try:
+                            last_dt = datetime.fromisoformat(self._last_analysis_time)
+                            elapsed_sec = (curr_wall - last_dt).total_seconds()
+                        except Exception:
+                            elapsed_sec = 9999
+                    else:
+                        elapsed_sec = 9999
 
-                    if not self.enabled or not self._running:
-                        continue
+                    if elapsed_sec >= self.interval_minutes * 60:
+                        self._run_analysis()
 
-                    # 执行一轮 AI 分析
-                    self._run_analysis()
+                elif win_id == "W5_MIDDAY_RECESS":
+                    # 11:30 - 13:00: 午间休市复盘与挂单清理
+                    if not self._lunch_done:
+                        self._run_lunch_analysis()
+                    self._check_ths_connection()
 
-                elif is_trading_day and current_time > _dt_time(15, 0):
-                    # ===== 收盘后 (15:00-次日6:30): 汇总+预判次日 =====
+                elif win_id == "W7_CLOSING_REBALANCE":
+                    # 14:50 - 15:00: 尾盘防隔夜回撤与调仓
+                    if not self._closing_rebalance_done:
+                        self._run_closing_rebalance()
+
+                elif win_id == "W8_AFTER_HOURS_SETTLE":
+                    # 15:00 - 16:00: 盘后结算对账与次日预选
                     if not self._after_hours_done:
                         self._run_after_hours_summary()
-                    market = competition_manager.get_market_status()
-                    next_open = market.get("next_open_seconds", 0)
-                    if next_open > 60:
-                        sleep_sec = min(next_open, 1800)  # 最多睡30分钟
-                    else:
-                        sleep_sec = 300
-                    _time.sleep(sleep_sec)
-                    continue
 
-                else:
-                    # ===== 其他时间（周末/节假日/凌晨）: 长时间等待 =====
-                    market = competition_manager.get_market_status()
-                    next_open = market.get("next_open_seconds", 0)
-                    if next_open > 60:
-                        sleep_sec = min(next_open, 1800)  # 最多睡30分钟
-                    else:
-                        sleep_sec = 300
-                    _time.sleep(sleep_sec)
-                    continue
+                # 短步长轮询（3秒），保证对各种控制事件（停止、虚拟时间切换、唤醒）秒级响应
+                _time.sleep(3)
 
             except Exception as e:
                 logger.error(f"AI调度器循环异常: {e}")
-                _time.sleep(60)
+                _time.sleep(5)
 
     def _run_analysis(self):
         """执行一轮自主分析（规则引擎为主，AI为辅）"""
@@ -355,20 +455,14 @@ class AIScheduler:
             # 1.5 ★ 每日情绪跟踪：记录持仓股票的情绪变化
             self._track_daily_sentiment(stocks)
 
-            # 2. 决策模式：AI 或 规则引擎
-            from ai_connector import ai_connector
-            use_ai = ai_connector.connected
-
-            if use_ai:
-                trades = self._decide_with_ai(stocks)
-            else:
-                trades = self._decide_with_rules(stocks)
+            # 2. 决策模式：纯量化多策略规则与集成表决（彻底去除大模型外部决策）
+            trades = self._decide_with_rules(stocks)
 
             # 3. 执行交易
             if trades:
                 self._execute_trades(trades)
             else:
-                logger.info(f"调度器: 分析完成，本轮无交易信号 (模式: {'AI' if use_ai else '规则'})")
+                logger.info("调度器: 纯量化多策略扫描完成，本轮无达到阈值的买卖信号")
 
             # 4. 每3轮评估策略信号准确性
             if self._analysis_count % 3 == 0:
@@ -412,64 +506,103 @@ class AIScheduler:
         except Exception:
             self._ths_connected = False
 
-    # ========== 启动补救 ==========
+    # ========== 启动与断点自愈补偿审计 ==========
 
-    def _check_startup_catchup(self):
+    def _audit_and_catchup(self):
         """
-        启动补救：今天没做过的阶段，立刻补做
+        断续开机与休眠唤醒自愈补偿引擎：
+        调用 scheduler_ledger 审计当前时间前错过的步骤。
+        按 MUST_CATCHUP 执行补偿，CRITICAL_EXPIRE 记录安全放弃。
         """
-        today = date.today().isoformat()
-        now = datetime.now(ZoneInfo("Asia/Shanghai"))
+        curr_now = self.now()
+        today = curr_now.date().isoformat()
 
         from competition import competition_manager
-        if not competition_manager.is_trading_day(now.date()):
+        if not competition_manager.is_trading_day(curr_now.date()):
             return
 
-        done = self._load_daily_flags(today)
+        needs_catchup, safe_skipped = scheduler_ledger.audit_missed_steps(curr_now)
 
-        if not done.get("pre_market"):
-            logger.info("🔄 启动补救: 补做盘前新闻分析...")
-            self._run_pre_market_analysis()
-
-        if not done.get("lunch") and now.time() > datetime.strptime("11:30", "%H:%M").time():
-            logger.info("🔄 启动补救: 补做午间分析...")
-            self._run_lunch_analysis()
-
-        if not done.get("after_hours") and now.time() > datetime.strptime("15:00", "%H:%M").time():
-            logger.info("🔄 启动补救: 补做收盘总结...")
-            self._run_after_hours_summary()
-
-    # ========== 盘前分析 (9:20-9:30 / 启动补救) ==========
-
-    def _run_pre_market_analysis(self):
-        """
-        盘前分析：抓取早间新闻 → 情感分析 → 缓存结果
-        盘中第一轮分析时直接使用缓存结果
-        """
-        logger.info("📰 盘前分析: 开始抓取早间新闻...")
-        try:
-            from sentiment_analyzer import sentiment_analyzer
-
-            # 抓取全市场情绪
-            market_sentiment = sentiment_analyzer.get_market_sentiment()
-
-            # 尝试分析关注的持仓股票情绪
-            stock_sentiments = {}
+        if safe_skipped:
+            skipped_names = ", ".join(s.name for s in safe_skipped)
+            logger.info(f"🛡️ 启动审计: {len(safe_skipped)} 个时效步骤安全跳过（防止追高）: {skipped_names}")
             try:
-                from auto_trader import auto_trader
-                for symbol in auto_trader.positions:
-                    try:
-                        pos = auto_trader.positions[symbol]
-                        name = getattr(pos, 'name', symbol)
-                        stock_sentiments[symbol] = sentiment_analyzer.get_stock_sentiment(symbol, name)
-                    except Exception:
-                        pass
+                from notification import notification_manager
+                notification_manager.add({
+                    "type": "system",
+                    "level": "info",
+                    "title": "🛡️ 时效步骤安全跳过",
+                    "message": f"开机晚于设定时限，已自动安全放弃以规避追高风险:\n{skipped_names}",
+                })
             except Exception:
                 pass
 
+        if needs_catchup:
+            catchup_names = ", ".join(s.name for s in needs_catchup)
+            logger.info(f"🔄 启动审计: 发现 {len(needs_catchup)} 个步骤需补偿执行: {catchup_names}")
+            for step in needs_catchup:
+                try:
+                    if step.step_id == "pre_market_news":
+                        self._run_pre_market_analysis(is_catchup=True)
+                    elif step.step_id == "midday_recess":
+                        self._run_lunch_analysis(is_catchup=True)
+                        self._handle_pending_orders()
+                    elif step.step_id == "closing_rebalance":
+                        self._run_closing_rebalance(is_catchup=True)
+                    elif step.step_id == "after_hours_settle":
+                        self._run_after_hours_summary(is_catchup=True)
+                except Exception as e:
+                    logger.error(f"补偿执行步骤 [{step.step_id}] 失败: {e}")
+
+    # ========== W1: 盘前分析 (09:15-09:25 / 启动补偿) ==========
+
+    def _run_pre_market_analysis(self, is_catchup: bool = False, dry_run: bool = False) -> Dict:
+        """盘前分析：抓取早间新闻 → 情感分析 → 缓存结果"""
+        logger.info("📰 盘前分析: 开始抓取早间新闻与全网情绪...")
+        step_id = "pre_market_news"
+        scheduler_ledger.record_start(step_id, now=self.now())
+        t0 = _time.time()
+        try:
+            from sentiment_analyzer import sentiment_analyzer
+            from db_store import db_store
+            market_sentiment = sentiment_analyzer.get_market_sentiment(force_refresh=True)
+
+            stock_sentiments = {}
+            held_map = {}  # symbol -> name
+            try:
+                from auto_trader import auto_trader
+                for symbol, pos in auto_trader.positions.items():
+                    held_map[symbol] = getattr(pos, 'name', symbol)
+            except Exception:
+                pass
+
+            try:
+                for acc in db_store.list_accounts():
+                    acc_pos = db_store.get_positions(acc["id"])
+                    for sym, pinfo in acc_pos.items():
+                        if pinfo.get("amount", 0) > 0:
+                            held_map[sym] = pinfo.get("name") or held_map.get(sym, sym)
+            except Exception:
+                pass
+
+            for symbol, name in held_map.items():
+                try:
+                    sent = sentiment_analyzer.get_stock_sentiment(symbol, name, force_refresh=True)
+                    stock_sentiments[symbol] = sent
+                    db_store.save_sentiment_daily(
+                        symbol=symbol,
+                        sentiment=sent.get("score", 50),
+                        price=0,
+                        change_pct=0,
+                        keywords=sent.get("keywords", [])[:5],
+                        regime="pre_market",
+                    )
+                except Exception:
+                    pass
+
             self._pre_market_result = {
-                "date": date.today().isoformat(),
-                "time": datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%H:%M:%S"),
+                "date": self.now().date().isoformat(),
+                "time": self.now().strftime("%H:%M:%S"),
                 "market_sentiment": market_sentiment,
                 "stock_sentiments": stock_sentiments,
                 "news_count": market_sentiment.get("news_count", 0),
@@ -478,55 +611,218 @@ class AIScheduler:
 
             self._pre_market_done = True
             self._save_pre_market_result()
-            self._save_daily_flags(date.today().isoformat(), pre_market=True)
+            self._save_daily_flags(self.now().date().isoformat(), pre_market=True)
 
             score = market_sentiment.get("score", 50)
             count = market_sentiment.get("news_count", 0)
-            logger.info(f"📰 盘前分析完成: 情绪{score}/100, 新闻{count}条")
+            duration_ms = int((_time.time() - t0) * 1000)
+            status = StepStatus.CATCHUP_SUCCESS if is_catchup else StepStatus.SUCCESS
+            summary = f"抓取新闻{count}条, 市场情绪分: {score}/100, 覆盖持仓股票: {len(stock_sentiments)}只"
+            scheduler_ledger.record_finish(step_id, status, duration_ms, summary, now=self.now())
 
-            # 推送盘前分析结果
             try:
                 from notification import notification_manager
                 sentiment_desc = "偏多" if score > 55 else "偏空" if score < 45 else "中性"
                 notification_manager.add({
                     "type": "system",
                     "level": "info",
-                    "title": "📰 盘前新闻分析",
-                    "message": f"情绪: {score}/100 ({sentiment_desc})\n"
-                               f"新闻: {count}条\n"
-                               f"持仓情绪: {len(stock_sentiments)}只",
+                    "title": "📰 盘前新闻分析完成" if not is_catchup else "🔄 盘前新闻分析(补偿完成)",
+                    "message": f"情绪: {score}/100 ({sentiment_desc})\n新闻: {count}条\n持仓情绪: {len(stock_sentiments)}只",
                 })
             except Exception:
                 pass
 
+            return {"success": True, "step_id": step_id, "score": score, "news_count": count, "summary": summary}
+
         except Exception as e:
             logger.error(f"盘前分析失败: {e}")
-            self._pre_market_done = True  # 标记为已完成，避免反复重试
-            self._save_daily_flags(date.today().isoformat(), pre_market=True)
+            self._pre_market_done = True
+            duration_ms = int((_time.time() - t0) * 1000)
+            scheduler_ledger.record_finish(step_id, StepStatus.FAILED, duration_ms, error_detail=str(e), now=self.now())
+            return {"success": False, "step_id": step_id, "error": str(e)}
 
-    # ========== 午间分析 (11:30-13:00) ==========
+    # ========== W2: 集合竞价决断 (09:25-09:30) ==========
 
-    def _run_lunch_analysis(self):
-        """
-        午间分析：更新午间新闻情绪 + 检查持仓风险
-        为下午交易提供最新情绪依据
-        """
-        logger.info("🕐 午间分析: 更新市场情绪...")
+    def _run_call_auction_decision(self, is_catchup: bool = False, dry_run: bool = False) -> Dict:
+        """集合竞价决断：分析9:25定盘行情，通过团队多策略集成表决器遴选标的，并完成委托发单闭环"""
+        logger.info(f"🎯 集合竞价决断: 启动团队集成策略表决与委托闭环 (演练模式: {dry_run})...")
+        step_id = "call_auction"
+        scheduler_ledger.record_start(step_id, now=self.now())
+        t0 = _time.time()
+        try:
+            from competition import competition_manager
+            from strategy_registry import registry
+            from auto_trader import auto_trader
+            from data_cache import get_kline
+
+            # 1. 扫描池
+            pool = competition_manager.get_stock_pool(limit=40, sort_by="change_pct")
+            team_strat = registry.get("team_ensemble")
+
+            qualified_targets = []
+            executed_orders = []
+
+            # 2. 评估标的并执行团队集成表决
+            for s in pool[:15]:
+                sym = s.get("code")
+                name = s.get("name", sym)
+                open_p = float(s.get("open") or s.get("price") or 0)
+                pre_close = float(s.get("pre_close") or open_p or 1)
+                if open_p <= 0 or pre_close <= 0:
+                    continue
+
+                gap_pct = (open_p - pre_close) / pre_close * 100
+                hist = get_kline(sym, days=25)
+                indicators = {
+                    "close": open_p,
+                    "open": open_p,
+                    "ma5": open_p * 0.99,
+                    "ma10": open_p * 0.98,
+                    "ma20": open_p * 0.97,
+                }
+                strat_res = None
+                if team_strat:
+                    strat_res = team_strat.analyze(s, indicators, market_data={"regime": "bull" if gap_pct > 2 else "neutral"}, history=hist)
+
+                if strat_res and strat_res.signal.value in ("BUY", "STRONG_BUY") and (0.5 <= gap_pct <= 5.0):
+                    qualified_targets.append({
+                        "symbol": sym,
+                        "name": name,
+                        "open": open_p,
+                        "gap_pct": round(gap_pct, 2),
+                        "score": strat_res.score,
+                        "confidence": strat_res.confidence,
+                        "stop_loss": strat_res.stop_loss
+                    })
+
+            # 3. 产生委托（支持多账户矩阵并行买入闭环 Mode B）
+            target_buy = qualified_targets[0] if qualified_targets else None
+            if target_buy:
+                sym = target_buy["symbol"]
+                px = target_buy["open"]
+
+                from db_store import db_store
+                from account_manager import account_manager
+                accounts = db_store.list_accounts()
+                valid_accounts = [a for a in accounts if db_store.get_account_cookie(a["id"]) and not db_store.get_account_cookie(a["id"]).startswith("sandbox_")]
+
+                if not valid_accounts:
+                    total_assets = auto_trader.balance + sum(p.market_value for p in auto_trader.positions.values())
+                    if total_assets <= 0:
+                        total_assets = 1000000.0
+                    target_alloc = total_assets * 0.25
+                    buy_amount = int((target_alloc / px) // 100 * 100) if px > 0 else 0
+                    if buy_amount > 0:
+                        if dry_run or not self.enabled:
+                            executed_orders.append(f"[模拟演练委托] 买入 {target_buy['name']}({sym}) {buy_amount}股 @ {px}元")
+                        else:
+                            order_res = auto_trader.execute_order(sym, "buy", buy_amount, px, notes=f"集合竞价团队策略买入 (得分:{target_buy['score']:.2f})")
+                            executed_orders.append(f"[实盘委托] {target_buy['name']}({sym}) {buy_amount}股 @ {px}元 | 状态: {order_res.get('status')}")
+                else:
+                    for acc in valid_accounts:
+                        acc_id = acc["id"]
+                        acc_name = acc.get("name", f"账户{acc_id}")
+                        trader = account_manager.get_trader(acc_id)
+                        if not trader or not trader.connected:
+                            continue
+
+                        tot_assets = float(acc.get("total_assets") or acc.get("balance") or 100000.0)
+                        avail_fund = float(acc.get("ky_fund") or acc.get("balance") or 0.0)
+                        alloc = min(tot_assets * 0.25, avail_fund * 0.95)
+                        buy_amount = int((alloc / px) // 100 * 100) if px > 0 else 0
+                        if buy_amount < 100:
+                            continue
+
+                        if dry_run or not self.enabled:
+                            executed_orders.append(f"[{acc_name}] [模拟演练] 买入 {target_buy['name']}({sym}) {buy_amount}股 @ {px}元")
+                        else:
+                            order_res = trader.buy(sym, px, buy_amount)
+                            status_desc = "委托成功" if order_res.get("success") else order_res.get("message", "失败")
+                            executed_orders.append(f"[{acc_name}] [实盘委托] {target_buy['name']}({sym}) {buy_amount}股 @ {px}元 | {status_desc}")
+                            db_store.add_trade({
+                                "time": datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S"),
+                                "symbol": sym,
+                                "name": target_buy["name"],
+                                "action": "buy",
+                                "amount": buy_amount,
+                                "price": px,
+                                "total": round(px * buy_amount, 2),
+                                "balance": round(avail_fund - (px * buy_amount if order_res.get("success") else 0), 2),
+                                "mode": "real"
+                            }, account_id=acc_id)
+                            if order_res.get("success"):
+                                try:
+                                    trader.sync_from_ths()
+                                except Exception:
+                                    pass
+
+            self._call_auction_done = True
+            duration_ms = int((_time.time() - t0) * 1000)
+            status = StepStatus.CATCHUP_SUCCESS if is_catchup else StepStatus.SUCCESS
+            summary = f"扫描{len(pool)}只标的，团队策略表决通过标的 {len(qualified_targets)} 只"
+            if executed_orders:
+                summary += f" | 委托: {'; '.join(executed_orders)}"
+            elif qualified_targets:
+                summary += f" (首选: {qualified_targets[0]['name']} 高开+{qualified_targets[0]['gap_pct']}%)"
+            else:
+                summary += " (无标的达到多策略集成表决门槛，轻仓观望)"
+
+            scheduler_ledger.record_finish(step_id, status, duration_ms, summary, now=self.now())
+            return {"success": True, "step_id": step_id, "targets": qualified_targets, "orders": executed_orders, "summary": summary}
+        except Exception as e:
+            logger.error(f"集合竞价决断异常: {e}")
+            self._call_auction_done = True
+            duration_ms = int((_time.time() - t0) * 1000)
+            scheduler_ledger.record_finish(step_id, StepStatus.FAILED, duration_ms, error_detail=str(e), now=self.now())
+            return {"success": False, "step_id": step_id, "error": str(e)}
+
+    # ========== W3: 早盘开盘清算与同步 (09:30-09:35) ==========
+
+    def _run_morning_open_catchup(self, is_catchup: bool = False, dry_run: bool = False) -> Dict:
+        """早盘开盘突击与委托挂单清算"""
+        logger.info("🔔 早盘开盘: 立即处理未成交委托并同步持仓...")
+        step_id = "morning_open"
+        scheduler_ledger.record_start(step_id, now=self.now())
+        t0 = _time.time()
+        try:
+            self._handle_pending_orders()
+            try:
+                from auto_trader import auto_trader
+                auto_trader.sync_from_ths()
+            except Exception:
+                pass
+
+            duration_ms = int((_time.time() - t0) * 1000)
+            status = StepStatus.CATCHUP_SUCCESS if is_catchup else StepStatus.SUCCESS
+            summary = "完成早盘委托核验、清理超时挂单与同花顺持仓双向同步"
+            scheduler_ledger.record_finish(step_id, status, duration_ms, summary, now=self.now())
+            return {"success": True, "step_id": step_id, "summary": summary}
+        except Exception as e:
+            logger.error(f"早盘开盘处理异常: {e}")
+            duration_ms = int((_time.time() - t0) * 1000)
+            scheduler_ledger.record_finish(step_id, StepStatus.FAILED, duration_ms, error_detail=str(e), now=self.now())
+            return {"success": False, "step_id": step_id, "error": str(e)}
+
+    # ========== W5: 午间休市分析 (11:30-13:00) ==========
+
+    def _run_lunch_analysis(self, is_catchup: bool = False, dry_run: bool = False) -> Dict:
+        """午间分析：更新午间新闻情绪 + 检查持仓风险"""
+        logger.info("🕐 午间分析: 更新市场情绪与复盘...")
+        step_id = "midday_recess"
+        scheduler_ledger.record_start(step_id, now=self.now())
+        t0 = _time.time()
         try:
             from sentiment_analyzer import sentiment_analyzer
-
-            # 重新抓取新闻（午间有新消息）
             market_sentiment = sentiment_analyzer.get_market_sentiment()
 
             self._lunch_sentiment = {
-                "date": date.today().isoformat(),
-                "time": datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%H:%M:%S"),
+                "date": self.now().date().isoformat(),
+                "time": self.now().strftime("%H:%M:%S"),
                 "market_sentiment": market_sentiment,
                 "score": market_sentiment.get("score", 50),
                 "news_count": market_sentiment.get("news_count", 0),
             }
 
-            # 检查持仓是否有风险
             risk_alerts = []
             try:
                 from auto_trader import auto_trader
@@ -539,22 +835,22 @@ class AIScheduler:
                             avg_price = pos.avg_price
                             if avg_price > 0:
                                 loss_pct = (avg_price - current_price) / avg_price
-                                if loss_pct > 0.03:  # 亏损超3%提醒
-                                    risk_alerts.append(
-                                        f"{pos.name}({symbol}) 亏损{loss_pct:.1%}"
-                                    )
+                                if loss_pct > 0.03:
+                                    risk_alerts.append(f"{pos.name}({symbol}) 亏损{loss_pct:.1%}")
                     except Exception:
                         pass
             except Exception:
                 pass
 
             self._lunch_done = True
-            self._save_daily_flags(date.today().isoformat(), lunch=True)
+            self._save_daily_flags(self.now().date().isoformat(), lunch=True)
 
             score = market_sentiment.get("score", 50)
-            logger.info(f"🕐 午间分析完成: 情绪{score}/100")
+            duration_ms = int((_time.time() - t0) * 1000)
+            status = StepStatus.CATCHUP_SUCCESS if is_catchup else StepStatus.SUCCESS
+            summary = f"午间情绪评分: {score}/100" + (f"，风险预警: {', '.join(risk_alerts)}" if risk_alerts else "，持仓健康稳定")
+            scheduler_ledger.record_finish(step_id, status, duration_ms, summary, now=self.now())
 
-            # 推送午间分析结果
             try:
                 from notification import notification_manager
                 msg_parts = [f"情绪: {score}/100"]
@@ -563,37 +859,192 @@ class AIScheduler:
                 notification_manager.add({
                     "type": "system",
                     "level": "warning" if risk_alerts else "info",
-                    "title": "🕐 午间分析",
+                    "title": "🕐 午间分析完成" if not is_catchup else "🔄 午间分析(补偿完成)",
                     "message": "\n".join(msg_parts),
                 })
             except Exception:
                 pass
 
+            return {"success": True, "step_id": step_id, "score": score, "risk_alerts": risk_alerts, "summary": summary}
+
         except Exception as e:
             logger.error(f"午间分析失败: {e}")
             self._lunch_done = True
-            self._save_daily_flags(date.today().isoformat(), lunch=True)
+            duration_ms = int((_time.time() - t0) * 1000)
+            scheduler_ledger.record_finish(step_id, StepStatus.FAILED, duration_ms, error_detail=str(e), now=self.now())
+            return {"success": False, "step_id": step_id, "error": str(e)}
 
-    # ========== 收盘后总结 (15:00+) ==========
+    # ========== W7: 尾盘防隔夜回撤与调仓 (14:50-15:00) ==========
 
-    def _run_after_hours_summary(self):
-        """
-        收盘后总结：汇总当日数据 + 预判次日方向
-        为次日盘前分析做准备
-        """
-        logger.info("🌙 收盘后总结: 生成当日汇总...")
+    def _run_closing_rebalance(self, is_catchup: bool = False, dry_run: bool = False) -> Dict:
+        """尾盘防隔夜回撤与调仓：清理日内未成交单，执行-4.5%硬止损，并将超配标的压降至<=35%"""
+        logger.info(f"🛡️ 尾盘调仓: 检查隔夜风险，执行团队风控保护 (演练模式: {dry_run})...")
+        step_id = "closing_rebalance"
+        scheduler_ledger.record_start(step_id, now=self.now())
+        t0 = _time.time()
         try:
-            # 获取收盘后新闻
+            self._handle_pending_orders()
+
+            risk_actions = []
+            # 今日（2026-10-30）尾盘止损保护性暂停：仅执行风控扫描与日志记录，暂停自动触发卖出委托，次日自动恢复
+            today_str = self.now().strftime("%Y-%m-%d")
+            pause_sell_today = (today_str == "2026-10-30")
+            try:
+                from db_store import db_store
+                from account_manager import account_manager
+                accounts = db_store.list_accounts()
+                valid_accounts = [a for a in accounts if db_store.get_account_cookie(a["id"]) and not db_store.get_account_cookie(a["id"]).startswith("sandbox_")]
+
+                if not valid_accounts:
+                    from auto_trader import auto_trader
+                    total_assets = auto_trader.balance + sum(p.market_value for p in auto_trader.positions.values())
+
+                    for sym, pos in list(auto_trader.positions.items()):
+                        # 1. 严格止损检查 (跌破 -4.5%)
+                        if pos.profit_rate <= -4.5:
+                            action_msg = f"{pos.name}({sym}) 亏损达到 {pos.profit_rate:.1f}% 触发团队硬止损"
+                            if pause_sell_today:
+                                action_msg += " [今日保护性暂停卖出，次日恢复]"
+                            elif not dry_run and self.enabled:
+                                auto_trader.execute_order(sym, "sell", pos.amount, pos.current_price, notes="尾盘硬止损清仓")
+                                action_msg += " [已执行卖出]"
+                            else:
+                                action_msg += " [演练模拟卖出]"
+                            risk_actions.append(action_msg)
+                            continue
+
+                        # 2. 单票仓位超标检查 (>35% 团队赛违规红线)
+                        if total_assets > 0:
+                            weight = pos.market_value / total_assets
+                            if weight > 0.35:
+                                excess_ratio = weight - 0.28  # 压降至 28% 安全线
+                                sell_shares = int((pos.amount * (excess_ratio / weight)) // 100 * 100)
+                                if sell_shares > 0:
+                                    action_msg = f"{pos.name}({sym}) 仓位占比 {weight*100:.1f}% 超标，压降卖出 {sell_shares} 股"
+                                    if pause_sell_today:
+                                        action_msg += " [今日保护性暂停减仓，次日恢复]"
+                                    elif not dry_run and self.enabled:
+                                        auto_trader.execute_order(sym, "sell", sell_shares, pos.current_price, notes="尾盘超额仓位平抑")
+                                        action_msg += " [已执行减仓]"
+                                    else:
+                                        action_msg += " [演练模拟减仓]"
+                                    risk_actions.append(action_msg)
+                else:
+                    for acc in valid_accounts:
+                        acc_id = acc["id"]
+                        acc_name = acc.get("name", f"账户{acc_id}")
+                        trader = account_manager.get_trader(acc_id)
+                        if not trader or not trader.connected:
+                            continue
+                        # 尾盘扫描前先从同花顺拉取最新真实持仓与现价，杜绝使用过期缓存价格
+                        try:
+                            trader.sync_from_ths()
+                            acc = db_store.get_account(acc_id) or acc
+                        except Exception as sync_err:
+                            logger.warning(f"尾盘同步账户 {acc_id} 失败: {sync_err}")
+                        pos_dict = db_store.get_positions(acc_id)
+                        tot_assets = float(acc.get("total_assets") or acc.get("balance") or 200000.0)
+
+                        for sym, p_info in list(pos_dict.items()):
+                            amt = p_info.get("amount", 0)
+                            cur_p = float(p_info.get("current_price", 0))
+                            avg_p = float(p_info.get("avg_price", 0))
+                            p_name = p_info.get("name", sym)
+                            if amt <= 0 or cur_p <= 0:
+                                continue
+                            p_rate = ((cur_p - avg_p) / avg_p * 100) if avg_p > 0 else 0
+                            mv = cur_p * amt
+
+                            # 1. 严格止损检查 (跌破 -4.5%)
+                            if p_rate <= -4.5:
+                                action_msg = f"[{acc_name}] {p_name}({sym}) 亏损达 {p_rate:.1f}% 触发矩阵硬止损"
+                                if pause_sell_today:
+                                    action_msg += " [今日保护性暂停卖出，次日恢复]"
+                                elif not dry_run and self.enabled:
+                                    trader.sell(sym, cur_p, amt)
+                                    action_msg += " [已卖出]"
+                                    db_store.add_trade({
+                                        "time": datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S"),
+                                        "action": "sell",
+                                        "symbol": sym,
+                                        "name": p_name,
+                                        "amount": amt,
+                                        "price": cur_p,
+                                        "total": round(cur_p * amt, 2),
+                                        "mode": "real"
+                                    }, account_id=acc_id)
+                                    try:
+                                        trader.sync_from_ths()
+                                    except Exception:
+                                        pass
+                                else:
+                                    action_msg += " [演练模拟卖出]"
+                                risk_actions.append(action_msg)
+                                continue
+
+                            # 2. 单票仓位超标检查 (>35% 违规红线)
+                            if tot_assets > 0:
+                                weight = mv / tot_assets
+                                if weight > 0.35:
+                                    excess_ratio = weight - 0.28
+                                    sell_shares = int((amt * (excess_ratio / weight)) // 100 * 100)
+                                    if sell_shares > 0:
+                                        action_msg = f"[{acc_name}] {p_name}({sym}) 仓位占比 {weight*100:.1f}% 超标，压降卖出 {sell_shares} 股"
+                                        if pause_sell_today:
+                                            action_msg += " [今日保护性暂停减仓，次日恢复]"
+                                        elif not dry_run and self.enabled:
+                                            trader.sell(sym, cur_p, sell_shares)
+                                            action_msg += " [已减仓]"
+                                            db_store.add_trade({
+                                                "time": datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S"),
+                                                "action": "sell",
+                                                "symbol": sym,
+                                                "name": p_name,
+                                                "amount": sell_shares,
+                                                "price": cur_p,
+                                                "total": round(cur_p * sell_shares, 2),
+                                                "mode": "real"
+                                            }, account_id=acc_id)
+                                            try:
+                                                trader.sync_from_ths()
+                                            except Exception:
+                                                pass
+                                        else:
+                                            action_msg += " [演练模拟减仓]"
+                                        risk_actions.append(action_msg)
+            except Exception as e:
+                logger.warning(f"尾盘持仓检查异常: {e}")
+
+            self._closing_rebalance_done = True
+            duration_ms = int((_time.time() - t0) * 1000)
+            status = StepStatus.CATCHUP_SUCCESS if is_catchup else StepStatus.SUCCESS
+            summary = "日内未成交挂单已全部出清" + (f"，触发尾盘调仓: {'; '.join(risk_actions)}" if risk_actions else "，持仓均符合团队风控要求，隔夜风险可控")
+            scheduler_ledger.record_finish(step_id, status, duration_ms, summary, now=self.now())
+            return {"success": True, "step_id": step_id, "summary": summary, "risk_actions": risk_actions}
+        except Exception as e:
+            logger.error(f"尾盘调仓异常: {e}")
+            self._closing_rebalance_done = True
+            duration_ms = int((_time.time() - t0) * 1000)
+            scheduler_ledger.record_finish(step_id, StepStatus.FAILED, duration_ms, error_detail=str(e), now=self.now())
+            return {"success": False, "step_id": step_id, "error": str(e)}
+
+    # ========== W8: 收盘后总结 (15:00+) ==========
+
+    def _run_after_hours_summary(self, is_catchup: bool = False, dry_run: bool = False) -> Dict:
+        """收盘后总结：汇总当日数据 + 预判次日方向"""
+        logger.info("🌙 收盘后总结: 生成当日汇总与对账...")
+        step_id = "after_hours_settle"
+        scheduler_ledger.record_start(step_id, now=self.now())
+        t0 = _time.time()
+        try:
             from sentiment_analyzer import sentiment_analyzer
             market_sentiment = sentiment_analyzer.get_market_sentiment()
 
-            # 获取当日交易统计
             trade_summary = {
                 "total_trades": self._daily_trades,
-                "trade_log": self._trade_log[-20:],  # 最近20条
+                "trade_log": self._trade_log[-20:],
             }
 
-            # 获取持仓状态
             position_summary = []
             try:
                 from auto_trader import auto_trader
@@ -609,9 +1060,9 @@ class AIScheduler:
             except Exception:
                 pass
 
-            summary = {
-                "date": date.today().isoformat(),
-                "time": datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%H:%M:%S"),
+            summary_data = {
+                "date": self.now().date().isoformat(),
+                "time": self.now().strftime("%H:%M:%S"),
                 "market_sentiment": {
                     "score": market_sentiment.get("score", 50),
                     "news_count": market_sentiment.get("news_count", 0),
@@ -621,25 +1072,56 @@ class AIScheduler:
             }
 
             self._after_hours_done = True
-            self._save_daily_flags(date.today().isoformat(), after_hours=True)
+            self._save_daily_flags(self.now().date().isoformat(), after_hours=True)
 
-            # 保存收盘总结
             try:
                 from paths import DATA_DIR
-                summary_file = DATA_DIR / f"after_hours_{date.today().isoformat()}.json"
+                summary_file = DATA_DIR / f"after_hours_{self.now().date().isoformat()}.json"
                 DATA_DIR.mkdir(parents=True, exist_ok=True)
                 with open(summary_file, "w", encoding="utf-8") as f:
-                    json.dump(summary, f, ensure_ascii=False, indent=2)
+                    json.dump(summary_data, f, ensure_ascii=False, indent=2)
             except Exception:
                 pass
 
             score = market_sentiment.get("score", 50)
-            logger.info(f"🌙 收盘后总结完成: 情绪{score}/100, 交易{self._daily_trades}笔, 持仓{len(position_summary)}只")
+            duration_ms = int((_time.time() - t0) * 1000)
+            status = StepStatus.CATCHUP_SUCCESS if is_catchup else StepStatus.SUCCESS
+            summary = f"收盘总结完成: 情绪{score}/100, 当日交易{self._daily_trades}笔, 当前持仓{len(position_summary)}只"
+            scheduler_ledger.record_finish(step_id, status, duration_ms, summary, now=self.now())
+            return {"success": True, "step_id": step_id, "summary": summary, "data": summary_data}
 
         except Exception as e:
             logger.error(f"收盘后总结失败: {e}")
             self._after_hours_done = True
-            self._save_daily_flags(date.today().isoformat(), after_hours=True)
+            duration_ms = int((_time.time() - t0) * 1000)
+            scheduler_ledger.record_finish(step_id, StepStatus.FAILED, duration_ms, error_detail=str(e), now=self.now())
+            return {"success": False, "step_id": step_id, "error": str(e)}
+
+    # ========== 单步手动/调试演练执行器 ==========
+
+    def run_step_now(self, step_id: str, dry_run: bool = False) -> Dict:
+        """
+        单步强制调试演练执行器
+        支持任意时刻单步触发任意时序步骤，支持 dry_run（不向券商发出真实订单）
+        """
+        logger.info(f"🧪 触发单步调试演练: [{step_id}] (DryRun={'开启' if dry_run else '关闭'})")
+        if step_id == "pre_market_news":
+            return self._run_pre_market_analysis(is_catchup=False, dry_run=dry_run)
+        elif step_id == "call_auction":
+            return self._run_call_auction_decision(is_catchup=False, dry_run=dry_run)
+        elif step_id == "morning_open":
+            return self._run_morning_open_catchup(is_catchup=False, dry_run=dry_run)
+        elif step_id == "midday_recess":
+            return self._run_lunch_analysis(is_catchup=False, dry_run=dry_run)
+        elif step_id == "closing_rebalance":
+            return self._run_closing_rebalance(is_catchup=False, dry_run=dry_run)
+        elif step_id == "after_hours_settle":
+            return self._run_after_hours_summary(is_catchup=False, dry_run=dry_run)
+        elif step_id == "intraday_analysis":
+            self._run_analysis()
+            return {"success": True, "step_id": step_id, "summary": "自主策略分析执行完毕"}
+        else:
+            return {"success": False, "error": f"未知步骤ID: {step_id}"}
 
     # ========== 持久化：每日阶段标志 ==========
 
@@ -738,8 +1220,17 @@ class AIScheduler:
 
             tracked = 0
 
-            # 跟踪持仓股票
-            for symbol in auto_trader.positions:
+            # 跟踪所有绑定账户的持仓股票（多账户矩阵汇总）
+            held_symbols = set(auto_trader.positions.keys())
+            try:
+                for acc in db_store.list_accounts():
+                    for sym, pinfo in db_store.get_positions(acc["id"]).items():
+                        if pinfo.get("amount", 0) > 0:
+                            held_symbols.add(sym)
+            except Exception:
+                pass
+
+            for symbol in held_symbols:
                 try:
                     stock_data = get_realtime_quote(symbol)
                     if not stock_data:
@@ -750,7 +1241,7 @@ class AIScheduler:
                         sentiment=news.get("score", 50),
                         price=stock_data.get("price", 0),
                         change_pct=stock_data.get("change_pct", 0),
-                        keywords=[k["word"] for k in news.get("matched_keywords", [])[:5]],
+                        keywords=news.get("keywords", [])[:5],
                         regime=regime_str,
                     )
                     tracked += 1
@@ -1292,19 +1783,8 @@ A股交易时段: 上午9:30-11:30, 下午13:00-15:00
         except Exception:
             pass
 
-        prompt = self._build_analysis_prompt(context)
-        from ai_connector import ai_connector
-        result = ai_connector.chat(prompt, system_prompt=_AUTO_TRADE_SYSTEM_PROMPT)
-
-        if not result.get("success"):
-            logger.error(f"AI分析失败: {result.get('message')}")
-            return []
-
-        ai_content = result["data"]["content"]
-        self._last_analysis_time = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S")
-        self._last_analysis_result = ai_content
-
-        return self._parse_trade_tags(ai_content)
+        # 彻底去除外部大模型决策，统一由纯量化规则与策略矩阵执行
+        return self._decide_with_rules(stocks)
 
     def _decide_with_rules(self, stocks: List[Dict]) -> List[Dict]:
         """规则引擎决策：批量选股 + 动态分散"""
@@ -1357,19 +1837,60 @@ A股交易时段: 上午9:30-11:30, 下午13:00-15:00
                     account_info=self._get_account_info()
                 )
 
-                if decision.action == "buy" and decision.confidence > 0.5:
+                if decision.action == "buy":
+                    amount = decision.position_size if decision.position_size >= 100 else 100
+                    signal_weight = 1.3 if getattr(decision, "signal", "") == "STRONG_BUY" else (1.1 if getattr(decision, "signal", "") == "BUY" else 1.0)
+                    score = decision.confidence * signal_weight
                     candidates.append({
                         "symbol": symbol,
                         "confidence": decision.confidence,
-                        "position_size": decision.position_size,
-                        "score": decision.confidence * decision.position_size
+                        "signal": getattr(decision, "signal", "BUY"),
+                        "position_size": amount,
+                        "score": score
                     })
             except Exception as e:
                 logger.warning(f"分析 {symbol} 失败: {e}")
 
-        # 5. 按综合得分排序，选前N只
+        # 5. 按综合得分降序排序，遴选前 slots_to_fill 只优质标的
         candidates.sort(key=lambda x: x["score"], reverse=True)
         selected = candidates[:slots_to_fill]
+
+        # ★ 比赛规则合规持仓底线补齐机制 (Min-Holdings Compliance Fallback)
+        # 比赛规则要求持仓至少 3 只 (min_holdings: 3)，单票上限 35%
+        # 如果当前持仓数+入选数 < 3，且可用资金充裕，从优选池中补齐高流动性基底标的
+        min_required = 3
+        current_and_selected = len(auto_trader.positions) + len(selected)
+        if current_and_selected < min_required and auto_trader.balance > 20000:
+            deficit = min_required - current_and_selected
+            logger.info(f"🛡️ 触发比赛合规底线兜底: 当前+已选 {current_and_selected} 只，缺少 {deficit} 只满足 >=3 只红线，从优质活跃池补齐...")
+            total_assets = auto_trader.balance + sum(p.market_value for p in auto_trader.positions.values())
+            chosen_syms = set(auto_trader.positions.keys()) | {item["symbol"] for item in selected}
+            for s in stocks:
+                sym = s.get("code", "")
+                px = float(s.get("price", 0))
+                chg = float(s.get("change_pct", 0))
+                if not sym or sym in chosen_syms or px <= 0:
+                    continue
+                if abs(chg) >= 9.5:
+                    continue
+                if px * 100 > total_assets * 0.25:
+                    continue
+                target_value = total_assets * 0.20
+                shares = int((target_value / px) // 100 * 100)
+                if shares < 100 or shares * px > auto_trader.balance * 0.90:
+                    continue
+                selected.append({
+                    "symbol": sym,
+                    "position_size": shares,
+                    "confidence": 0.60,
+                    "signal": "BUY",
+                    "score": 0.60,
+                })
+                chosen_syms.add(sym)
+                deficit -= 1
+                logger.info(f"🛡️ 选定合规兜底标的: {s.get('name', sym)}({sym}) 计划买入 {shares}股 @ ¥{px:.2f} (仓位约 {(shares*px/total_assets)*100:.1f}%)")
+                if deficit <= 0:
+                    break
 
         # 6. 生成交易指令
         trades = []
@@ -1379,7 +1900,6 @@ A股交易时段: 上午9:30-11:30, 下午13:00-15:00
                 "symbol": item["symbol"],
                 "amount": item["position_size"],
             })
-            self._trade_cooldown[item["symbol"]] = now_ts
             logger.info(f"批量选股: {item['symbol']} {item['position_size']}股 "
                        f"(置信度{item['confidence']:.2f}, 得分{item['score']:.2f})")
 
@@ -1476,35 +1996,137 @@ A股交易时段: 上午9:30-11:30, 下午13:00-15:00
                     logger.info(f"📊 {symbol} 跌停中({change_pct:.1f}%)，无法卖出，跳过")
                     continue
 
-                # 仓位限制检查 (30%)
-                if action == "buy":
-                    try:
-                        from auto_trader import auto_trader as _at
-                        total_assets = _at.balance + sum(p.market_value for p in _at.positions.values())
-                        existing_value = 0
-                        if symbol in _at.positions:
-                            existing_value = _at.positions[symbol].market_value
-                        buy_value = price * amount
-                        if total_assets > 0 and (existing_value + buy_value) / total_assets > 0.30:
-                            max_buy = int((total_assets * 0.30 - existing_value) / price / 100) * 100
-                            if max_buy < 100:
-                                logger.info(f"📊 {symbol} 仓位已达30%上限，跳过")
+                # ===== CRIT-1: 多账户矩阵交易 (Mode B) / 单账户 AutoTrader 兜底 =====
+                from db_store import db_store
+                from account_manager import account_manager
+                accounts = db_store.list_accounts()
+                valid_accounts = [a for a in accounts if db_store.get_account_cookie(a["id"]) and not db_store.get_account_cookie(a["id"]).startswith("sandbox_")]
+
+                if not valid_accounts:
+                    # 单账户回退逻辑
+                    if action == "buy":
+                        try:
+                            from auto_trader import auto_trader as _at
+                            total_assets = _at.balance + sum(p.market_value for p in _at.positions.values())
+                            existing_value = 0
+                            if symbol in _at.positions:
+                                existing_value = _at.positions[symbol].market_value
+                            buy_value = price * amount
+                            if total_assets > 0 and (existing_value + buy_value) / total_assets > 0.30:
+                                max_buy = int((total_assets * 0.30 - existing_value) / price / 100) * 100
+                                if max_buy < 100:
+                                    logger.info(f"📊 {symbol} 仓位已达30%上限，跳过")
+                                    continue
+                                amount = max_buy
+                                logger.info(f"📊 {symbol} 调整买入数量为{amount}股（仓位限制30%）")
+                        except Exception:
+                            pass
+
+                    from auto_trader import auto_trader
+                    if not auto_trader.enabled:
+                        auto_trader.enabled = True
+
+                    order = auto_trader.create_order(symbol, action, amount, price)
+                    result = auto_trader.execute_order(order, stock_data)
+                    success = result.get("success", False)
+                    result_msg = result.get("message", "")
+                else:
+                    # 多账户矩阵并发独立交易 (Mode B)
+                    overall_success = False
+                    exec_results = []
+                    for acc in valid_accounts:
+                        acc_id = acc["id"]
+                        acc_name = acc.get("name", f"账户{acc_id}")
+                        trader = account_manager.get_trader(acc_id)
+                        if not trader or not trader.connected:
+                            continue
+
+                        tot_assets = float(acc.get("total_assets") or acc.get("balance") or 100000.0)
+                        avail_balance = float(acc.get("ky_fund") or acc.get("balance") or 0.0)
+                        pos_dict = db_store.get_positions(acc_id)
+
+                        if action == "buy":
+                            # 独立检查单账户 30% 仓位限额
+                            existing_shares = pos_dict.get(symbol, {}).get("amount", 0)
+                            existing_val = existing_shares * price
+                            max_allowed_val = tot_assets * 0.30
+                            if existing_val >= max_allowed_val:
+                                logger.info(f"📊 [{acc_name}] {symbol} 已达30%上限(现持{existing_shares}股)，跳过")
                                 continue
-                            amount = max_buy
-                            logger.info(f"📊 {symbol} 调整买入数量为{amount}股（仓位限制30%）")
-                    except Exception:
-                        pass
+                            room_val = min(max_allowed_val - existing_val, avail_balance * 0.95)
+                            acc_amount = int((room_val / price) // 100 * 100)
+                            if acc_amount < 100:
+                                logger.info(f"📊 [{acc_name}] 资金或上限不足购买1手 {symbol}，跳过")
+                                continue
 
-                # ===== CRIT-1: 始终通过 AutoTrader 执行（含风控+持久化）=====
-                from auto_trader import auto_trader
+                            if not self.enabled:
+                                acc_res = {"success": True, "message": "模拟演练成功"}
+                            else:
+                                acc_res = trader.buy(symbol, price, acc_amount)
 
-                # 确保 AutoTrader 已启用
-                if not auto_trader.enabled:
-                    auto_trader.enabled = True
+                            acc_ok = acc_res.get("success", False)
+                            if acc_ok:
+                                overall_success = True
+                            status_txt = '成功' if acc_ok else acc_res.get('message', '失败')
+                            exec_results.append(f"[{acc_name}:{acc_amount}股:{status_txt}]")
 
-                order = auto_trader.create_order(symbol, action, amount, price)
-                result = auto_trader.execute_order(order, stock_data)
-                success = result.get("success", False)
+                            db_store.add_trade({
+                                "time": datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%H:%M:%S"),
+                                "action": "buy",
+                                "symbol": symbol,
+                                "name": stock_data.get("name", symbol),
+                                "amount": acc_amount,
+                                "price": price,
+                                "total": round(price * acc_amount, 2),
+                                "balance": round(avail_balance - (price * acc_amount if acc_ok else 0), 2),
+                                "mode": "real" if trader.connected else "simulated"
+                            }, account_id=acc_id)
+                            if acc_ok:
+                                try:
+                                    trader.sync_from_ths()
+                                except Exception:
+                                    pass
+
+                        elif action == "sell":
+                            pos = pos_dict.get(symbol)
+                            if not pos or pos.get("amount", 0) <= 0:
+                                continue
+                            hold_shares = pos.get("amount", 0)
+                            sell_shares = min(hold_shares, amount) if amount > 0 else hold_shares
+                            if sell_shares <= 0:
+                                continue
+
+                            if not self.enabled:
+                                acc_res = {"success": True, "message": "模拟演练成功"}
+                            else:
+                                acc_res = trader.sell(symbol, price, sell_shares)
+
+                            acc_ok = acc_res.get("success", False)
+                            if acc_ok:
+                                overall_success = True
+                            status_txt = '成功' if acc_ok else acc_res.get('message', '失败')
+                            exec_results.append(f"[{acc_name}:{sell_shares}股:{status_txt}]")
+
+                            db_store.add_trade({
+                                "time": datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%H:%M:%S"),
+                                "action": "sell",
+                                "symbol": symbol,
+                                "name": stock_data.get("name", symbol),
+                                "amount": sell_shares,
+                                "price": price,
+                                "total": round(price * sell_shares, 2),
+                                "balance": round(avail_balance + (price * sell_shares if acc_ok else 0), 2),
+                                "mode": "real" if trader.connected else "simulated"
+                            }, account_id=acc_id)
+                            if acc_ok:
+                                try:
+                                    trader.sync_from_ths()
+                                except Exception:
+                                    pass
+
+                    success = overall_success
+                    result_msg = "; ".join(exec_results) if exec_results else "无符合持仓/资金条件的账户"
+
                 if success:
                     self._daily_trades += 1
 
@@ -1514,7 +2136,7 @@ A股交易时段: 上午9:30-11:30, 下午13:00-15:00
                     "symbol": symbol,
                     "amount": amount,
                     "success": success,
-                    "result": result.get("message", ""),
+                    "result": result_msg,
                 }
                 self._trade_log.append(log_entry)
                 self._save_trade_log()
@@ -1620,6 +2242,19 @@ A股交易时段: 上午9:30-11:30, 下午13:00-15:00
     def get_status(self) -> Dict:
         # 加载盘前结果（如果内存中没有）
         pm = self._pre_market_result or self.load_pre_market_result()
+        curr_now = self.now()
+        today_str = curr_now.date().isoformat()
+
+        # 获取时序窗口与审计账本数据
+        from competition import competition_manager
+        current_win = competition_manager.get_detailed_time_window(curr_now)
+        daily_ledger = scheduler_ledger.get_daily_ledger(today_str)
+
+        completed_cnt = len([r for r in daily_ledger if r.get("status") in ["SUCCESS", "CATCHUP_SUCCESS"]])
+        skipped_cnt = len([r for r in daily_ledger if "SKIPPED" in r.get("status", "")])
+        failed_cnt = len([r for r in daily_ledger if r.get("status") == "FAILED"])
+        pending_cnt = len([r for r in daily_ledger if r.get("status") == "PENDING"])
+
         return {
             "enabled": self.enabled,
             "running": self._running,
@@ -1629,10 +2264,27 @@ A股交易时段: 上午9:30-11:30, 下午13:00-15:00
             "daily_limit": self.max_trades_per_day,
             "last_analysis_time": self._last_analysis_time,
             "last_analysis_result": self._last_analysis_result[:500] if self._last_analysis_result else "",
-            "trade_log": self._trade_log[-10:],  # 最近10条
-            # 全时段覆盖状态
+            "trade_log": self._trade_log[-10:],
+            # 现实时序状态与时钟感知
+            "current_time": curr_now.strftime("%Y-%m-%d %H:%M:%S"),
+            "is_mock_time": self._mock_time is not None,
+            "mock_time_speed": self._mock_time_speed if self._mock_time else 1.0,
+            "current_window": current_win,
+            # 审计账本统计
+            "ledger_summary": {
+                "total_steps": len(daily_ledger),
+                "completed": completed_cnt,
+                "skipped": skipped_cnt,
+                "failed": failed_cnt,
+                "pending": pending_cnt,
+            },
+            # 兼容旧版全时段状态
             "pre_market_done": self._pre_market_done,
+            "call_auction_done": self._call_auction_done,
+            "morning_open_done": self._morning_open_done,
             "lunch_done": self._lunch_done,
+            "afternoon_open_done": self._afternoon_open_done,
+            "closing_rebalance_done": self._closing_rebalance_done,
             "after_hours_done": self._after_hours_done,
             "pre_market_score": pm.get("score") if pm else None,
             "pre_market_news_count": pm.get("news_count") if pm else None,

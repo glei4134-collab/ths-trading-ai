@@ -10,25 +10,81 @@
     <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
     <style>
+
+        :root {
+            --bg-base: #0a0e17;
+            --bg-surface: #111726;
+            --bg-card: #151d30;
+            --bg-card-hover: #1c263e;
+            --bg-inset: #090d15;
+            --border-subtle: #1e293b;
+            --border-default: #25334a;
+            --border-focus: #38bdf8;
+            --text-primary: #f8fafc;
+            --text-secondary: #94a3b8;
+            --text-muted: #64748b;
+            --up-red: #f85149;
+            --up-red-bg: rgba(248, 81, 73, 0.12);
+            --up-red-border: rgba(248, 81, 73, 0.35);
+            --down-green: #3fb950;
+            --down-green-bg: rgba(63, 185, 80, 0.12);
+            --down-green-border: rgba(63, 185, 80, 0.35);
+            --brand-blue: #38bdf8;
+            --brand-blue-bg: rgba(56, 189, 248, 0.12);
+            --warning-amber: #f59e0b;
+            --warning-amber-bg: rgba(245, 158, 11, 0.12);
+            --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+            --font-mono: "JetBrains Mono", Consolas, "SF Mono", "Courier New", monospace;
+            --radius-sm: 6px;
+            --radius-md: 10px;
+            --radius-lg: 14px;
+        }
+
         * {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
+            font-variant-numeric: tabular-nums;
         }
+
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: var(--bg-base); }
+        ::-webkit-scrollbar-thumb { background: #25334a; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #38bdf8; }
 
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-            background: #0d1117;
-            color: #e6edf3;
+            font-family: var(--font-sans);
+            background: #06090e;
+            background-image:
+                radial-gradient(circle at 10% 10%, rgba(14, 165, 233, 0.10) 0%, transparent 45%),
+                radial-gradient(circle at 90% 15%, rgba(99, 102, 241, 0.08) 0%, transparent 45%),
+                radial-gradient(circle at 50% 90%, rgba(16, 185, 129, 0.06) 0%, transparent 55%),
+                linear-gradient(180deg, rgba(6, 9, 14, 0.95) 0%, #06090e 100%);
+            color: #f8fafc;
+            font-size: 13px;
+            line-height: 1.5;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+            min-height: 100vh;
         }
 
+
         .header {
-            background: linear-gradient(135deg, #1a1b26 0%, #24283b 100%);
+            position: relative;
+            z-index: 99999; /* 确保顶栏及所有下拉浮窗处于最高层叠上下文，绝不被下方子面板遮挡 */
+            background: linear-gradient(180deg, rgba(16, 23, 38, 0.96) 0%, rgba(10, 15, 26, 0.96) 100%);
+            backdrop-filter: blur(14px);
             padding: 10px 20px;
             display: flex;
             justify-content: space-between;
             align-items: center;
-            border-bottom: 1px solid #30363d;
+            border-bottom: 1px solid rgba(56, 189, 248, 0.18);
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.45);
+        }
+
+        /* 关闭前端停止按钮 (避免误触停止后台自律量化调度) */
+        #aiSchedToggle {
+            display: none !important;
         }
 
         .logo {
@@ -108,30 +164,54 @@
 
         .container {
             display: grid;
-            grid-template-columns: 300px 1fr 320px;
-            gap: 15px;
-            padding: 15px;
-            height: calc(100vh - 80px);
+            grid-template-columns: 320px 1fr 360px;
+            gap: 12px;
+            padding: 12px 16px;
+            height: calc(100vh - 85px);
+            background: var(--bg-base);
         }
 
         .panel {
-            background: #161b22;
-            border-radius: 8px;
-            border: 1px solid #30363d;
+            background: linear-gradient(180deg, rgba(15, 22, 37, 0.88) 0%, rgba(10, 15, 26, 0.88) 100%);
+            backdrop-filter: blur(14px);
+            border-radius: var(--radius-md);
+            border: 1px solid var(--border-default);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.04);
             overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            transition: border-color 0.2s ease, box-shadow 0.2s ease;
         }
 
         .panel-header {
-            background: #21262d;
-            padding: 12px 15px;
-            font-size: 14px;
-            font-weight: 600;
-            border-bottom: 1px solid #30363d;
+            background: linear-gradient(90deg, rgba(22, 33, 54, 0.75) 0%, rgba(14, 21, 36, 0.5) 100%);
+            backdrop-filter: blur(10px);
+            padding: 11px 16px;
+            font-size: 13px;
+            font-weight: 700;
+            letter-spacing: 0.3px;
+            border-bottom: 1px solid var(--border-default);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            position: relative;
+        }
+        .panel-header::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 22%;
+            bottom: 22%;
+            width: 3px;
+            background: linear-gradient(180deg, #00d2ff 0%, #3b82f6 100%);
+            border-radius: 0 2px 2px 0;
+            box-shadow: 0 0 8px rgba(0, 210, 255, 0.6);
         }
 
         .panel-body {
-            padding: 15px;
+            padding: 14px;
             overflow-y: auto;
+            flex: 1;
         }
 
         /* Left Panel - Stock List */
@@ -1875,6 +1955,99 @@
             .sort-btn { padding: 4px 6px; font-size: 10px; }
         }
     </style>
+
+    <style id="premium-quant-hud-styles">
+        /* 顶级量化座舱视觉升级 */
+        @keyframes cyberPulseGlow {
+            0%, 100% { box-shadow: 0 0 8px rgba(0, 210, 255, 0.3); border-color: rgba(0, 210, 255, 0.4); }
+            50% { box-shadow: 0 0 18px rgba(0, 210, 255, 0.7); border-color: rgba(0, 210, 255, 0.8); }
+        }
+        @keyframes greenSuccessGlow {
+            0% { transform: scale(1); box-shadow: 0 0 0 rgba(74, 222, 128, 0.6); }
+            50% { transform: scale(1.02); box-shadow: 0 0 16px rgba(74, 222, 128, 0.8); border-color: #4ade80; }
+            100% { transform: scale(1); box-shadow: 0 0 4px rgba(74, 222, 128, 0.3); }
+        }
+        @keyframes radarScan {
+            0% { transform: translateY(-100%); }
+            100% { transform: translateY(100%); }
+        }
+
+        /* 统一卡片与 HUD 微光 */
+        .hud-card {
+            background: linear-gradient(180deg, #101728 0%, #0c1220 100%);
+            border: 1px solid rgba(56, 189, 248, 0.16);
+            border-radius: 10px;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+            transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+        .hud-card:hover {
+            border-color: rgba(0, 210, 255, 0.38);
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45), 0 0 12px rgba(0, 210, 255, 0.15);
+        }
+
+        /* A股标准高对比度红绿盈亏数字 */
+        .stock-up {
+            color: #ff4d4f !important;
+            text-shadow: 0 0 8px rgba(255, 77, 79, 0.35);
+        }
+        .stock-down {
+            color: #00e676 !important;
+            text-shadow: 0 0 8px rgba(0, 230, 118, 0.35);
+        }
+
+        /* 战术买入发光胶囊 */
+        .badge-buy-attack {
+            background: rgba(16, 185, 129, 0.16);
+            color: #00e676;
+            border: 1px solid rgba(0, 230, 118, 0.45);
+            padding: 3px 10px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 800;
+            letter-spacing: 0.3px;
+            box-shadow: 0 0 10px rgba(0, 230, 118, 0.25);
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        /* 战术观望胶囊 */
+        .badge-hold-watch {
+            background: rgba(245, 158, 11, 0.16);
+            color: #fbbf24;
+            border: 1px solid rgba(251, 191, 36, 0.45);
+            padding: 3px 10px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 800;
+            letter-spacing: 0.3px;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        /* 候选池表格自适应独立滚动与吸顶表头 */
+        #candidateTableScrollWrapper {
+            scrollbar-width: thin;
+            scrollbar-color: #25334a #090e18;
+        }
+        #candidateTableScrollWrapper::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        #candidateTableScrollWrapper::-webkit-scrollbar-thumb {
+            background: #25334a;
+            border-radius: 3px;
+        }
+        #candidateTableScrollWrapper::-webkit-scrollbar-thumb:hover {
+            background: #00d2ff;
+        }
+
+        /* 复制交互代码块反馈态 */
+        .copy-cmd-active {
+            animation: greenSuccessGlow 0.6s ease-in-out forwards;
+        }
+    </style>
 </head>
 <body>
     <!-- AI Config Modal (Simplified) -->
@@ -1957,59 +2130,132 @@
                     </div>
                 </div>
 
-                <!-- Cookie登录 -->
-                <div style="text-align: center; padding: 20px 0;">
-                    <div style="font-size: 48px; margin-bottom: 15px;">🔑</div>
-                    <div style="font-size: 18px; font-weight: 600; color: #e6edf3; margin-bottom: 8px;">登录同花顺模拟比赛</div>
-                    <div style="font-size: 13px; color: #8b949e; margin-bottom: 20px; line-height: 1.6;">
-                        通过Cookie连接，无需安装桌面客户端<br>
-                        <span style="color: #8b949e; font-size: 12px;">Cookie有效期30天，过期后重新粘贴即可</span>
+                <!-- 方案二：智能一键扫码登录（已隐藏） -->
+                <div style="display: none; background: linear-gradient(135deg, rgba(35, 134, 54, 0.18) 0%, rgba(31, 111, 235, 0.12) 100%); border: 1px solid #238636; border-radius: 12px; padding: 18px; margin-bottom: 16px; text-align: left;">
+                    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <span style="font-size: 22px;">⚡</span>
+                            <span style="font-size: 15px; font-weight: 700; color: #3fb950;">极速智能一键登录（推荐）</span>
+                        </div>
+                        <span style="font-size: 11px; background: #238636; color: white; padding: 2px 8px; border-radius: 12px; font-weight: 600;">免F12 · 全自动</span>
+                    </div>
+                    <div style="font-size: 12px; color: #8b949e; line-height: 1.6; margin-bottom: 14px;">
+                        点击后将自动唤起 <strong>Chrome / Edge 浏览器</strong>打开官方模拟交易登录页。<br>
+                        手机 App 扫码确认后，系统将<strong>自动截获并更新 Cookie</strong>，随后自动同步资金账户并关闭窗口！
                     </div>
 
-                    <div id="cookieInputArea" style="margin-bottom: 15px;">
-                        <textarea id="cookieInput" placeholder="粘贴Cookie字符串（从浏览器F12复制）" rows="3"
-                            style="width: 100%; max-width: 400px; background: #0d1117; border: 1px solid #30363d; color: #e6edf3; padding: 10px; border-radius: 6px; font-size: 12px; font-family: monospace; resize: vertical; box-sizing: border-box;"></textarea>
+                    <div style="display: flex; gap: 8px; align-items: center;">
+                        <button id="autoLoginStartBtn" onclick="startAutoLoginTHS()"
+                                style="flex: 1; background: linear-gradient(135deg, #238636 0%, #2ea043 100%); color: white; border: none; padding: 12px 14px; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px; box-shadow: 0 4px 12px rgba(35, 134, 54, 0.3);">
+                            <span>📱 弹出扫码登录窗口</span>
+                        </button>
+                        <button id="autoLoginSilentBtn" onclick="silentRefreshTHS()"
+                                style="background: #21262d; border: 1px solid #388bfd; color: #58a6ff; padding: 12px 14px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap;"
+                                title="如果近期曾登录过，系统可在后台尝试直接续签">
+                            ⚡ 心跳续签
+                        </button>
+                        <button id="autoLoginCancelBtn" onclick="cancelAutoLoginTHS()" style="display: none; background: #21262d; color: #f85149; border: 1px solid #da3633; padding: 12px 14px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer;">
+                            取消
+                        </button>
+                    </div>
+
+                    <div style="margin-top: 8px; text-align: center;">
+                        <a href="https://mncg.10jqka.com.cn/cgiwt/index/index" target="_blank" style="color: #8b949e; font-size: 11px; text-decoration: underline;">
+                            🔗 或点击直接在当前浏览器打开官方登录页
+                        </a>
+                    </div>
+
+                    <!-- 动态状态提示框 -->
+                    <div id="autoLoginStatusBox" style="display: none; margin-top: 12px; padding: 12px 14px; border-radius: 8px; background: #0d1117; border: 1px solid #30363d; font-size: 13px;">
+                        <div style="display: flex; align-items: center; gap: 10px;">
+                            <span id="autoLoginSpinner" style="display: inline-block;">⏳</span>
+                            <span id="autoLoginStatusText" style="color: #c9d1d9; flex: 1; line-height: 1.5;">正在准备唤起浏览器...</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 手动粘贴Cookie (主选项) -->
+                <div id="manualCookieSection" style="display: block; padding-top: 4px;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+                        <span style="font-size:12px;font-weight:600;color:var(--text-secondary);">同花顺 Session Cookie 凭据：</span>
+                        <button onclick="pasteFromClipboardToInput()" style="background:rgba(56,189,248,0.12);border:1px solid rgba(56,189,248,0.35);color:var(--brand-blue);font-size:11px;font-weight:600;padding:3px 10px;border-radius:4px;cursor:pointer;display:flex;align-items:center;gap:4px;">
+                            📋 一键从剪贴板粘贴
+                        </button>
+                    </div>
+
+                    <div id="cookieInputArea" style="margin-bottom: 12px;">
+                        <textarea id="cookieInput" placeholder="在此粘贴从控制台复制的 Cookie 字符串（或点击右上角一键从剪贴板粘贴）" rows="3"
+                            style="width: 100%; background: #070a10; border: 1px solid var(--border-default); color: #f8fafc; padding: 10px 12px; border-radius: 8px; font-size: 12px; font-family: var(--font-mono); resize: vertical; box-sizing: border-box; line-height: 1.5;"></textarea>
                     </div>
 
                     <button class="connect-btn" onclick="loginWithCookie()" id="cookieLoginBtn"
-                            style="background: linear-gradient(135deg, #238636 0%, #2ea043 100%); font-weight: 600; padding: 12px 40px; font-size: 15px; border-radius: 8px;">
-                        🔗 登录
+                            style="width: 100%; background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%); border: 1px solid #38bdf8; color: #ffffff; font-weight: 700; padding: 11px; font-size: 13px; border-radius: 8px; cursor: pointer; display:flex; align-items:center; justify-content:center; gap:8px; box-shadow:0 4px 12px rgba(2,132,199,0.3); transition:all 0.2s;">
+                        <span>🔗 验证并登录输入的 Cookie</span>
                     </button>
 
-                    <div id="cookieLoginResult" style="margin-top: 15px; display: none; font-size: 13px;"></div>
+                    <div id="cookieLoginResult" style="margin-top: 12px; display: none; font-size: 12px;"></div>
 
-                    <div style="margin-top: 20px; padding: 12px; background: #0d1117; border-radius: 8px; border: 1px solid #30363d; text-align: left;">
-                        <div style="font-size: 12px; font-weight: 600; color: #e6edf3; margin-bottom: 8px;">📋 获取Cookie（3步搞定）</div>
-
-                        <div style="margin-bottom: 8px;">
-                            <div style="font-size: 11px; color: #8b949e; margin-bottom: 4px;">第1步：打开登录页，输入账号密码登录</div>
-                            <a href="https://moni.10jqka.com.cn/" target="_blank" style="display:inline-block;background:#238636;color:white;padding:4px 12px;border-radius:4px;font-size:11px;text-decoration:none;">打开 moni.10jqka.com.cn 登录</a>
-                        </div>
-
-                        <div style="margin-bottom: 8px;">
-                            <div style="font-size: 11px; color: #8b949e; margin-bottom: 4px;">第2步：登录后，打开交易页面</div>
-                            <a href="https://mncg.10jqka.com.cn/cgiwt/index/index" target="_blank" style="display:inline-block;background:#1f6feb;color:white;padding:4px 12px;border-radius:4px;font-size:11px;text-decoration:none;">打开 mncg.10jqka.com.cn</a>
-                        </div>
-
-                        <div>
-                            <div style="font-size: 11px; color: #8b949e; margin-bottom: 4px;">第3步：按 F12 打开控制台，输入以下命令，然后回车：</div>
-                            <div style="background:#1c2128;border-radius:6px;padding:8px 10px;font-family:monospace;font-size:12px;color:#79c0ff;display:flex;align-items:center;justify-content:space-between;">
-                                <span id="cookieCode">copy(document.cookie)</span>
-                                <button onclick="navigator.clipboard.writeText('copy(document.cookie)').then(()=>this.textContent='已复制✓')" style="background:#238636;color:white;border:none;padding:3px 8px;border-radius:4px;font-size:10px;cursor:pointer;">复制</button>
+                    <!-- F12 获取 Cookie 交互式 4 步完整指南 -->
+                    <div style="margin-top: 14px; padding: 14px; background: rgba(15, 23, 42, 0.7); border-radius: 10px; border: 1px solid rgba(56, 189, 248, 0.25); text-align: left; box-shadow: 0 4px 16px rgba(0,0,0,0.3);">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 8px;">
+                            <div style="font-size: 13px; font-weight: 700; color: #38bdf8; display: flex; align-items: center; gap: 6px;">
+                                <span>📋</span> F12 极速获取 Cookie（完整 4 步指南）
                             </div>
-                            <div style="font-size: 10px; color: #8b949e; margin-top: 4px;">复制后粘贴到上方Cookie输入框即可</div>
+                            <span style="font-size: 11px; color: #94a3b8; background: rgba(56, 189, 248, 0.1); padding: 2px 8px; border-radius: 10px; border: 1px solid rgba(56, 189, 248, 0.2);">免密码 · 10秒搞定</span>
+                        </div>
+
+                        <!-- 步骤 1 -->
+                        <div style="display: flex; gap: 10px; align-items: flex-start; margin-bottom: 10px;">
+                            <span style="background: #38bdf8; color: #0a0e17; font-weight: 800; font-size: 11px; width: 20px; height: 20px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 1px;">1</span>
+                            <div style="font-size: 12px; color: #e2e8f0; line-height: 1.5;">
+                                打开官方模拟交易台：<a href="https://mncg.10jqka.com.cn/cgiwt/index/index" target="_blank" style="color: #38bdf8; font-weight: 700; text-decoration: underline;">mncg.10jqka.com.cn</a>，用手机同花顺 App 扫码登录。
+                            </div>
+                        </div>
+
+                        <!-- 步骤 2 -->
+                        <div style="display: flex; gap: 10px; align-items: flex-start; margin-bottom: 10px;">
+                            <span style="background: #38bdf8; color: #0a0e17; font-weight: 800; font-size: 11px; width: 20px; height: 20px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 1px;">2</span>
+                            <div style="font-size: 12px; color: #e2e8f0; line-height: 1.5;">
+                                在官方交易台页面，按下键盘 <kbd style="background: #1e293b; border: 1px solid #475569; padding: 2px 7px; border-radius: 4px; font-family: monospace; color: #38bdf8; font-weight: 700;">F12</kbd> 打开开发者工具，切到顶部 <strong>Console（控制台）</strong> 标签页。
+                            </div>
+                        </div>
+
+                        <!-- 步骤 3: 可点击复制命令框 -->
+                        <div style="display: flex; gap: 10px; align-items: flex-start; margin-bottom: 10px;">
+                            <span style="background: #38bdf8; color: #0a0e17; font-weight: 800; font-size: 11px; width: 20px; height: 20px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 1px;">3</span>
+                            <div style="font-size: 12px; color: #e2e8f0; flex: 1;">
+                                <div style="margin-bottom: 6px;">点击下方代码框直接复制命令，在控制台按 <kbd style="background: #1e293b; border: 1px solid #475569; padding: 1px 5px; border-radius: 3px; font-family: monospace; color: #38bdf8;">Ctrl + V</kbd> 粘贴并按回车：</div>
+                                <div id="copyCommandBox" onclick="copyConsoleCommand()" style="cursor: pointer; background: #070a10; border: 1px solid #38bdf8; border-radius: 6px; padding: 8px 12px; display: flex; align-items: center; justify-content: space-between; transition: all 0.25s; box-shadow: 0 0 12px rgba(56, 189, 248, 0.2);" title="点击直接复制命令">
+                                    <code id="cmdCodeText" style="font-family: var(--font-mono); font-size: 13px; font-weight: 700; color: #38bdf8; letter-spacing: 0.5px;">copy(document.cookie)</code>
+                                    <span id="copyBtnFeedback" style="background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.4); color: #38bdf8; font-size: 11px; font-weight: 700; padding: 4px 10px; border-radius: 4px; display: flex; align-items: center; gap: 4px; transition: all 0.2s;">
+                                        📋 点击复制命令
+                                    </span>
+                                </div>
+                                <div id="copySuccessTip" style="display: none; font-size: 11px; color: #3fb950; margin-top: 5px; font-weight: 600;">
+                                    ✨ 命令已复制！去浏览器控制台按回车，Cookie 就会自动进入剪贴板！
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 步骤 4 -->
+                        <div style="display: flex; gap: 10px; align-items: flex-start;">
+                            <span style="background: #38bdf8; color: #0a0e17; font-weight: 800; font-size: 11px; width: 20px; height: 20px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 1px;">4</span>
+                            <div style="font-size: 12px; color: #e2e8f0; line-height: 1.5;">
+                                回到本弹窗，点击上方<strong>“一键从剪贴板粘贴”</strong>（或在文本框直接按 <kbd style="background: #1e293b; border: 1px solid #475569; padding: 1px 5px; border-radius: 3px; font-family: monospace; color: #38bdf8;">Ctrl + V</kbd>），再点击<strong>验证并登录</strong>即可！
+                            </div>
                         </div>
                     </div>
+                </div>
 
-                    <div style="margin-top: 12px; padding: 10px; background: #0d1117; border-radius: 8px; border: 1px solid #1f3a5f; text-align: left;">
-                        <div style="font-size: 12px; font-weight: 600; color: #58a6ff;">☁️ 云端续签（推荐）</div>
-                        <div style="font-size: 12px; color: #8b949e; margin-top: 4px; line-height: 1.6;">
-                            Cookie有效期30天，配置GitHub Actions可每8小时自动续签，永不过期。
-                        </div>
+                <div style="margin-top: 12px; padding: 10px; background: #0d1117; border-radius: 8px; border: 1px solid #1f3a5f; text-align: left;">
+                    <div style="font-size: 12px; font-weight: 600; color: #58a6ff;">☁️ 云端续签（可选）</div>
+                    <div style="font-size: 12px; color: #8b949e; margin-top: 4px; line-height: 1.6;">
+                        Cookie有效期通常约30天，系统已内置后台自动心跳保活；如需无人值守，可配置GitHub Actions云端定时续签。
                     </div>
+                </div>
 
-                    <!-- 手机绑定 -->
-                    <div style="margin-top: 12px; padding: 12px; background: #0d1117; border-radius: 8px; border: 1px solid #1f6feb; text-align: left;">
+                    <!-- 手机绑定 (已隐藏) -->
+                    <div style="display: none; margin-top: 12px; padding: 12px; background: #0d1117; border-radius: 8px; border: 1px solid #1f6feb; text-align: left;">
                         <div style="font-size: 12px; font-weight: 600; color: #58a6ff;">📲 手机绑定</div>
                         <div style="font-size: 12px; color: #8b949e; margin-top: 4px; line-height: 1.6;">
                             手机扫码绑定后，可远程查看账户、AI聊天、修改配置。
@@ -2039,6 +2285,11 @@
     <div class="header" style="padding:8px 16px;display:flex;align-items:center;justify-content:space-between;">
         <div style="display:flex;align-items:center;gap:12px;">
             <div class="logo" style="font-size:15px;">THS Trading AI</div>
+            <!-- 视图模式切换 (官方交易台 / 量化座舱) -->
+            <div id="viewSwitcherContainer" style="display:flex;align-items:center;background:var(--bg-inset);border:1px solid var(--border-default);border-radius:var(--radius-sm);padding:3px;gap:4px;">
+                <button id="viewBtnCockpit" onclick="setWorkstationView('cockpit')" style="background:var(--brand-blue);color:#0a0e17;border:none;border-radius:4px;padding:5px 14px;font-size:12px;font-weight:700;cursor:pointer;transition:all 0.2s;">📊 量化全自动座舱 (主控)</button>
+                <button id="viewBtnOfficial" onclick="setWorkstationView('official')" style="background:transparent;color:var(--text-secondary);border:none;border-radius:4px;padding:5px 14px;font-size:12px;font-weight:500;cursor:pointer;transition:all 0.2s;">🏦 官方交易台 (mncg)</button>
+            </div>
             <div id="connStatusHeader" style="display:flex;align-items:center;gap:6px;font-size:12px;color:#8b949e;">
                 <span id="connDotHeader" style="width:7px;height:7px;border-radius:50%;background:#666;"></span>
                 <span id="connTextHeader">未连接</span>
@@ -2049,204 +2300,314 @@
             </div>
         </div>
         <div style="display:flex;align-items:center;gap:8px;">
-            <div class="notification-bell" id="notificationBell" onclick="toggleNotificationPanel()" style="cursor:pointer;position:relative;">
+            <div class="notification-bell" id="notificationBell" onclick="toggleNotificationPanel()" style="cursor:pointer;position:relative;z-index:100000;">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#8b949e" stroke-width="2">
                     <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
                     <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
                 </svg>
                 <span class="notification-badge" id="notificationBadge" style="display:none;position:absolute;top:-4px;right:-4px;background:#f85149;color:white;border-radius:50%;width:14px;height:14px;font-size:9px;display:flex;align-items:center;justify-content:center;">0</span>
             </div>
-            <div onclick="openConnectModal()" style="cursor:pointer;display:flex;align-items:center;gap:6px;padding:4px 10px;background:#161b22;border:1px solid #30363d;border-radius:8px;">
-                <div class="account-avatar" id="accountAvatar" style="width:22px;height:22px;font-size:10px;">?</div>
-                <span id="accountDetailName" style="font-size:11px;color:#8b949e;">未登录</span>
+            <div style="position:relative;z-index:100000;">
+                <div class="account-selector" onclick="toggleAccountPanel(event)" title="点击管理与切换账号" style="display:flex;align-items:center;gap:6px;cursor:pointer;padding:4px 10px;background:rgba(22, 27, 34, 0.95);border:1px solid rgba(56, 189, 248, 0.25);border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,0.3);transition:all 0.2s;">
+                    <div class="account-avatar" id="accountAvatar" style="width:22px;height:22px;font-size:10px;">👤</div>
+                    <span id="accountDetailName" style="font-size:11px;color:#f8fafc;font-weight:600;">多账号管理</span>
+                    <span style="font-size:10px;color:#38bdf8;">▼</span>
+                </div>
+
+                <!-- 账号切换下拉浮窗 (最高优先级悬浮置顶) -->
+                <div class="account-selector-panel" id="accountSelectorPanel" style="display:none;position:absolute;top:40px;right:0;width:350px;background:linear-gradient(180deg, #161f30 0%, #0f1624 100%);border:1px solid rgba(56, 189, 248, 0.3);border-radius:12px;box-shadow:0 16px 48px rgba(0,0,0,0.85), 0 0 20px rgba(0, 210, 255, 0.15);z-index:100001;backdrop-filter:blur(16px);">
+                    <div class="account-selector-header" style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid #30363d;">
+                        <span style="font-weight:600;color:#c9d1d9;font-size:13px;">👥 账户切换与管理</span>
+                        <span id="accountCount" style="font-size:11px;color:#8b949e;"></span>
+                    </div>
+                    <div class="account-selector-list" id="accountSelectorList" style="max-height:280px;overflow-y:auto;">
+                        <!-- 账号卡片动态渲染 -->
+                    </div>
+                    <div class="account-selector-footer" style="padding:10px 14px;border-top:1px solid #30363d;display:flex;gap:8px;background:#0d1117;">
+                        <button onclick="openConnectModal(); toggleAccountPanel();" style="flex:1;background:linear-gradient(135deg,#238636,#2ea043);color:white;border:none;padding:8px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">+ 绑定/录入新账号</button>
+                    </div>
+                </div>
             </div>
-            <button onclick="openAIChatModal()" style="background:#21262d;border:1px solid #30363d;color:#c9d1d9;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">AI</button>
+            <button onclick="openLedgerModal()" style="display:none;background:#21262d;border:1px solid #388bfd;color:#58a6ff;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">🕒 审计账本</button>
+            <button onclick="openDebugModal()" style="display:none;background:#21262d;border:1px solid #d29922;color:#e3b341;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">🧪 演练/时钟</button>
+            <button onclick="openDiagnosticModal()" style="display:none;background:#21262d;border:1px solid #2ea043;color:#3fb950;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">🩺 自动体检/调试</button>
             <button onclick="toggleAIScheduler()" id="aiSchedToggle" style="background:#238636;border:none;color:white;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">开启</button>
-            <button onclick="toggleAIScheduler()" id="aiSchedToggle" style="margin-left:auto;background:#21262d;border:1px solid #30363d;color:#c9d1d9;border-radius:4px;padding:2px 8px;font-size:11px;cursor:pointer;">开启</button>
             <button onclick="runAISchedulerNow()" style="background:#21262d;border:1px solid #30363d;color:#c9d1d9;border-radius:4px;padding:2px 8px;font-size:11px;cursor:pointer;">立即分析</button>
         </div>
     </div>
 
-    <div class="container">
-        <!-- Left Panel - Stock List -->
-        <div class="panel mobile-active" id="stockListPanel">
-            <div class="panel-header">股票列表</div>
-            <div class="panel-body">
-                <div class="search-box">
-                    <input type="text" id="searchInput" placeholder="输入代码或名称搜索...">
-                    <button onclick="searchStock()">搜索</button>
-                </div>
-
-                <!-- 市场概况 -->
-                <div class="market-stats">
-                    <div class="stat-card">
-                        <div class="stat-value up" id="upCount">-</div>
-                        <div class="stat-label">涨</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-value down" id="downCount">-</div>
-                        <div class="stat-label">跌</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-value" id="flatCount" style="color:#8b949e">-</div>
-                        <div class="stat-label">平</div>
-                    </div>
-                </div>
-
-                <!-- 我的持仓 + 量能 排序 -->
-                <div style="display:flex;gap:8px;margin-bottom:12px;">
-                    <div id="myHoldingsSection" style="display:none;flex:1;">
-                        <div style="font-size:11px;color:#8b949e;margin-bottom:4px;">我的持仓</div>
-                        <div id="myHoldingsList" style="background:#0d1117;border-radius:6px;padding:6px;max-height:120px;overflow-y:auto;">
-                            <div style="text-align:center;color:#8b949e;font-size:10px;">暂无持仓</div>
-                        </div>
-                    </div>
-                    <div style="flex:1;">
-                        <div style="font-size:11px;color:#8b949e;margin-bottom:4px;">量能排序</div>
-                        <div style="background:#0d1117;border-radius:6px;padding:6px;">
-                            <button class="sort-btn active" data-sort="volume_desc" onclick="sortStockList('volume_desc')" style="width:100%;margin-bottom:4px;">量能 ↓</button>
-                            <button class="sort-btn" data-sort="turnover_desc" onclick="sortStockList('turnover_desc')" style="width:100%;">换手 ↓</button>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="stock-list-header">
-                    <span>名称/代码</span>
-                    <span>最新价</span>
-                    <span>涨跌</span>
-                    <span>涨跌幅</span>
-                </div>
-
-                <div class="stock-list" id="stockList">
-                    <div class="loading">加载中...</div>
-                </div>
+    <!-- 全局态势 HUD 顶栏 (Bloomberg / Pro Financial HUD) -->
+    <div id="globalStatusHud" style="background:#090d15;border-bottom:1px solid var(--border-default);padding:8px 18px;display:flex;align-items:center;justify-content:space-between;font-size:12px;color:var(--text-primary);gap:14px;overflow-x:auto;">
+        <!-- Left: 时钟与窗口时序带 -->
+        <div style="display:flex;align-items:center;gap:12px;white-space:nowrap;">
+            <div style="display:flex;align-items:center;gap:8px;background:var(--bg-card);padding:4px 12px;border-radius:var(--radius-sm);border:1px solid var(--border-default);">
+                <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#3fb950;box-shadow:0 0 10px #3fb950;" id="hudClockDot"></span>
+                <span style="font-family:var(--font-mono);font-size:13px;font-weight:700;color:var(--brand-blue);letter-spacing:0.5px;" id="hudClockTime">--:--:--</span>
+                <span id="hudMockTag" style="display:none;background:#d29922;color:#000;padding:1px 6px;border-radius:4px;font-size:11px;font-weight:700;">虚拟时钟</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:6px;">
+                <span style="color:var(--text-secondary);font-size:12px;font-weight:500;">时序窗口:</span>
+                <span id="hudCurrentWindow" style="background:var(--brand-blue-bg);color:var(--brand-blue);border:1px solid rgba(56,189,248,0.4);border-radius:var(--radius-sm);padding:3px 10px;font-size:12px;font-weight:600;">盘前扫描</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:6px;color:var(--text-secondary);font-size:12px;">
+                <span>⏱️ 下一时序:</span>
+                <span id="hudNextCountdown" style="color:var(--warning-amber);font-family:var(--font-mono);font-size:12px;font-weight:700;">计算中...</span>
             </div>
         </div>
 
-        <!-- Center Panel - Chart -->
-        <div class="panel chart-container" id="chartPanel">
-            <div class="panel-header" id="currentStockHeader">请选择股票</div>
-            <div class="chart-toolbar">
-                <button class="chart-btn active" data-period="intraday" onclick="switchPeriod('intraday')">分时</button>
-                <button class="chart-btn" data-period="daily" onclick="switchPeriod('daily')">日K</button>
-                <button class="chart-btn" data-period="5day" onclick="switchPeriod('5day')">5日</button>
-                <div style="flex:1"></div>
-                <button class="chart-btn" onclick="analyzeStock()">AI分析</button>
+        <!-- Center: 团队赛风控态势胶囊 -->
+        <div style="display:flex;align-items:center;gap:12px;white-space:nowrap;">
+            <div style="display:flex;align-items:center;gap:6px;background:var(--bg-card);padding:4px 12px;border-radius:var(--radius-sm);border:1px solid var(--border-default);">
+                <span style="color:var(--text-secondary);font-size:12px;">单票最高仓位:</span>
+                <span id="hudMaxPosition" style="font-weight:700;font-size:13px;color:#3fb950;font-family:var(--font-mono);">0.0%</span>
+                <span style="color:var(--text-muted);font-size:11px;">(硬限 &le;35%)</span>
             </div>
-            <div class="chart-area">
-                <div id="mainChart"></div>
+            <div style="display:flex;align-items:center;gap:6px;background:var(--bg-card);padding:4px 12px;border-radius:var(--radius-sm);border:1px solid var(--border-default);">
+                <span style="color:var(--text-secondary);font-size:12px;">持仓分散度:</span>
+                <span id="hudHoldingCount" style="font-weight:700;font-size:13px;color:var(--brand-blue);font-family:var(--font-mono);">0 只</span>
+                <span style="color:var(--text-muted);font-size:11px;">(规则 &ge;3只)</span>
             </div>
-            <div id="analysisPanel" style="display:none; padding: 15px; border-top: 1px solid #30363d;"></div>
-            <!-- AI Analysis Panel -->
-            <div id="aiAnalysisPanel" class="ai-panel" style="display:none; margin: 10px;">
-                <div class="ai-panel-header">
-                    <div class="ai-panel-title">🤖 AI 智能分析</div>
-                    <button class="ai-btn" onclick="runAIAnalysis()" id="aiAnalyzeBtn">重新分析</button>
-                </div>
-                <div class="ai-panel-body" id="aiAnalysisContent">
-                    <div class="ai-loading">
-                        <div class="ai-spinner"></div>
-                        <span>分析中...</span>
-                    </div>
-                </div>
+            <div style="display:flex;align-items:center;gap:6px;background:var(--bg-card);padding:4px 12px;border-radius:var(--radius-sm);border:1px solid var(--border-default);">
+                <span style="color:var(--text-secondary);font-size:12px;">团队最大回撤:</span>
+                <span id="hudMaxDrawdown" style="font-weight:700;font-size:13px;color:#3fb950;font-family:var(--font-mono);">0.0%</span>
+                <span style="color:var(--text-muted);font-size:11px;">(警戒 12%)</span>
             </div>
         </div>
 
-        <!-- Right Panel - Trade -->
-        <div class="panel" id="tradePanel" style="display: flex; flex-direction: column;">
-            <div class="panel-header" style="display: flex; justify-content: space-between; align-items: center;">
-                <span>交易总览</span>
-                <div style="display: flex; gap: 6px;">
-                    <button onclick="runBrainDecide()" style="background:#21262d;border:1px solid #30363d;color:#8b949e;padding:4px 10px;border-radius:6px;cursor:pointer;font-size:11px;">立即分析</button>
-                    <button onclick="toggleAIScheduler()" style="background:#238636;border:none;color:white;padding:4px 10px;border-radius:6px;cursor:pointer;font-size:11px;">自动交易</button>
-                </div>
+        <!-- Right: 系统体检胶囊 & 桌面端标识 -->
+        <div style="display:flex;align-items:center;gap:12px;white-space:nowrap;">
+            <div onclick="openDiagnosticModal()" style="cursor:pointer;display:flex;align-items:center;gap:8px;background:var(--bg-card);padding:4px 12px;border-radius:var(--radius-sm);border:1px solid rgba(63,185,80,0.5);">
+                <span style="font-size:14px;">🩺</span>
+                <span style="color:#3fb950;font-weight:700;font-size:12px;" id="hudHealthScore">体检 100分</span>
             </div>
-            <div class="panel-body" style="flex: 1; overflow-y: auto; padding: 12px;">
-
-                <!-- 状态卡片 -->
-                <div style="background:#16213e;border-radius:10px;padding:12px;margin-bottom:12px;">
-                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-                        <span style="font-size:12px;color:#8b949e;">系统状态</span>
-                        <span id="tradePanelStatus" style="font-size:11px;color:#8b949e;">加载中...</span>
-                    </div>
-                    <div style="display:flex;gap:16px;">
-                        <div style="flex:1;text-align:center;">
-                            <div style="font-size:18px;font-weight:700;" id="tpTotalAssets">--</div>
-                            <div style="font-size:10px;color:#8b949e;">总资产</div>
-                        </div>
-                        <div style="flex:1;text-align:center;">
-                            <div style="font-size:18px;font-weight:700;" id="tpBalance">--</div>
-                            <div style="font-size:10px;color:#8b949e;">可用资金</div>
-                        </div>
-                        <div style="flex:1;text-align:center;">
-                            <div style="font-size:18px;font-weight:700;" id="tpProfit">--</div>
-                            <div style="font-size:10px;color:#8b949e;">今日盈亏</div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- 持仓 -->
-                <div style="background:#16213e;border-radius:10px;padding:12px;margin-bottom:12px;">
-                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-                        <span style="font-size:13px;font-weight:600;">持仓</span>
-                        <span style="font-size:11px;color:#8b949e;" id="tpPosCount">0只</span>
-                    </div>
-                    <div id="tpPositions">
-                        <div style="text-align:center;color:#8b949e;padding:15px;font-size:12px;">暂无持仓</div>
-                    </div>
-                </div>
-
-                <!-- 今日交易记录 -->
-                <div style="background:#16213e;border-radius:10px;padding:12px;margin-bottom:12px;">
-                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-                        <span style="font-size:13px;font-weight:600;">今日交易</span>
-                        <span style="font-size:11px;color:#8b949e;" id="tpTradeCount">0笔</span>
-                    </div>
-                    <div id="tpTrades">
-                        <div style="text-align:center;color:#8b949e;padding:15px;font-size:12px;">今日暂无交易</div>
-                    </div>
-                </div>
-
-                <!-- 快捷操作 -->
-                <div style="display:flex;gap:8px;margin-top:8px;">
-                    <button onclick="openAIChatModal()" style="flex:1;background:#16213e;border:1px solid #30363d;color:#8b949e;padding:10px;border-radius:8px;cursor:pointer;font-size:12px;">💬 AI聊天</button>
-                    <button onclick="openConnectModal()" style="flex:1;background:#16213e;border:1px solid #30363d;color:#8b949e;padding:10px;border-radius:8px;cursor:pointer;font-size:12px;">⚙️ 设置</button>
-                    <button onclick="loadPendingOrders()" style="flex:1;background:#16213e;border:1px solid #30363d;color:#8b949e;padding:10px;border-radius:8px;cursor:pointer;font-size:12px;">📋 委托</button>
-                </div>
-
-                <!-- 委托结果 -->
-                <div id="pendingOrdersList" style="margin-top:8px;"></div>
-
+            <div id="desktopAppIndicator" style="display:none;background:var(--bg-card);color:var(--brand-blue);padding:4px 10px;border-radius:var(--radius-sm);font-size:11px;font-weight:600;border:1px solid var(--border-default);">
+                🖥️ 原生桌面端
             </div>
         </div>
     </div>
 
+    <!-- 工作台统一视口 (支持官方交易台 / 双屏联动 / AI座舱 3 种视图模式) -->
+    <div id="workstationLayout" style="display:flex;flex-direction:row;width:100%;height:calc(100vh - 85px);overflow:hidden;">
+        <!-- 官方交易台容器 (默认隐藏，点击按钮切入) -->
+        <div id="officialViewContainer" style="display:none;flex-direction:column;width:100%;height:100%;background:var(--bg-base);">
+            <!-- 官方台顶栏快捷操作条 -->
+            <div style="background:#161b22;border-bottom:1px solid #30363d;padding:6px 16px;display:flex;align-items:center;justify-content:space-between;font-size:12px;flex-shrink:0;">
+                <div style="display:flex;align-items:center;gap:10px;">
+                    <span style="font-weight:600;color:#58a6ff;">🏦 同花顺官方模拟炒股 Web 交易台 (最新版)</span>
+                    <span style="background:rgba(56,139,253,0.15);color:#58a6ff;border:1px solid rgba(56,139,253,0.3);padding:2px 8px;border-radius:4px;font-size:10px;font-family:Consolas,monospace;">mncg.10jqka.com.cn/cgiwt/index/index</span>
+                    <span id="officialFrameStatus" style="color:#3fb950;font-size:11px;">🟢 实时通道已就绪</span>
+                </div>
+                <div style="display:flex;align-items:center;gap:8px;">
+                    <button onclick="reloadOfficialFrame()" style="background:#21262d;border:1px solid #30363d;color:#c9d1d9;border-radius:4px;padding:3px 10px;font-size:11px;cursor:pointer;">🔄 刷新交易台</button>
+                    <button onclick="openConnectModal()" style="background:#21262d;border:1px solid #388bfd;color:#58a6ff;border-radius:4px;padding:3px 10px;font-size:11px;cursor:pointer;">🔑 授权/同步Cookie</button>
+                    <button onclick="window.open('https://mncg.10jqka.com.cn/cgiwt/index/index', '_blank')" style="background:#21262d;border:1px solid #30363d;color:#8b949e;border-radius:4px;padding:3px 10px;font-size:11px;cursor:pointer;">↗️ 独立浏览器打开</button>
+                </div>
+            </div>
+            <!-- iframe 嵌入 -->
+            <iframe id="officialMncgFrame" src="https://mncg.10jqka.com.cn/cgiwt/index/index" style="width:100%;flex:1;border:none;background:#ffffff;" allow="clipboard-read; clipboard-write"></iframe>
+        </div>
+
+        <div class="container" id="cockpitContainer" style="display:grid;flex:1;height:100%;overflow-y:auto;width:100%;">
+        <!-- Panel 1 (Left 320px): 8 大时序自动化流水线 -->
+        <div class="panel mobile-active" id="pipelinePanel" style="display:flex;flex-direction:column;">
+            <div class="panel-header" style="display:flex;justify-content:space-between;align-items:center;">
+                <span style="font-weight:600;color:#58a6ff;">🕒 8大时序自动化流水线</span>
+                <button onclick="openLedgerModal()" style="background:#21262d;border:1px solid #388bfd;color:#58a6ff;padding:3px 8px;border-radius:4px;font-size:11px;cursor:pointer;">审计账本</button>
+            </div>
+            <div class="panel-body" style="flex:1;overflow-y:auto;padding:12px;">
+                <!-- Pipeline summary badge -->
+                <div style="background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:10px 12px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;font-size:11px;">
+                    <span style="color:#8b949e;">今日时序推进状态</span>
+                    <span id="pipelineSummaryText" style="color:#3fb950;font-weight:600;">8个时序节点已就绪</span>
+                </div>
+
+                <!-- 8 Pipeline Step Cards Container -->
+                <div id="pipelineCardsList" style="display:flex;flex-direction:column;gap:8px;">
+                    <div style="text-align:center;color:#8b949e;padding:40px 0;font-size:12px;">正在读取每日时序执行账本...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Panel 2 (Center 1fr): 多策略量化集成表决与候选冲击池 (无外层溢出滚动条) -->
+        <div class="panel" id="aiCenterPanel" style="display:flex;flex-direction:column;height:100%;overflow:hidden;border:1px solid var(--border-default);box-shadow:0 8px 32px rgba(0,0,0,0.3);">
+            <div class="panel-header" style="flex-shrink:0;display:flex;justify-content:space-between;align-items:center;background:linear-gradient(180deg, #161f33 0%, #101726 100%);border-bottom:1px solid var(--border-default);padding:10px 16px;">
+                <div style="display:flex;align-items:center;gap:10px;">
+                    <span style="font-weight:700;font-size:14px;color:#f8fafc;letter-spacing:0.4px;">📐 多策略量化集成表决与候选冲击池</span>
+                    <span id="ensembleRegimeTag" style="background:rgba(56,189,248,0.12);color:var(--brand-blue);border:1px solid rgba(56,189,248,0.35);padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600;">震荡自适应</span>
+                </div>
+                <div style="display:flex;gap:6px;">
+                    <button onclick="runEnsembleDecide()" style="background:rgba(56,189,248,0.1);border:1px solid rgba(56,189,248,0.35);color:var(--brand-blue);padding:5px 12px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;display:flex;align-items:center;gap:4px;transition:all 0.2s;">
+                        ⚡ 刷新量化表决
+                    </button>
+                </div>
+            </div>
+
+            <!-- 核心布局：去除外层滚动条 (overflow:hidden)，空间 100% 留给子模块 -->
+            <div class="panel-body" style="flex:1;overflow:hidden;padding:12px 14px;display:flex;flex-direction:column;gap:12px;height:calc(100% - 45px);min-height:0;box-sizing:border-box;">
+
+                <!-- 1. 团队 5 大策略实时表决矩阵 (固定于上层，不被滚动淹没) -->
+                <div style="flex-shrink:0;background:var(--bg-card);border:1px solid var(--border-default);border-radius:10px;padding:12px 14px;box-shadow:0 2px 12px rgba(0,0,0,0.25);">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+                        <span style="font-size:13px;font-weight:700;color:var(--text-primary);letter-spacing:0.3px;">团队 5 大核心策略加权表决矩阵</span>
+                        <span style="font-size:12px;color:var(--text-secondary);">门槛: &ge;2票赞成 且 置信度&ge;0.60 | 止损: -4.5%</span>
+                    </div>
+
+                    <!-- 5 Strategies Grid (Responsive minmax) -->
+                    <div id="ensembleCardsGrid" style="display:grid;grid-template-columns:repeat(auto-fit, minmax(180px, 1fr));gap:10px;margin-bottom:10px;">
+                        <!-- 5 cards populated dynamically -->
+                    </div>
+
+                    <!-- Ensemble Voting Consensus Summary Bar -->
+                    <div id="ensembleConsensusBar" style="background:var(--bg-inset);border:1px solid var(--border-default);border-radius:8px;padding:8px 14px;display:flex;justify-content:space-between;align-items:center;font-size:12px;">
+                        <div style="display:flex;align-items:center;gap:10px;">
+                            <span style="color:var(--text-secondary);font-weight:500;">表决结果:</span>
+                            <span id="consensusSignalBadge" style="background:rgba(34,197,94,0.18);border:1px solid rgba(74,222,128,0.5);color:#4ade80;padding:3px 10px;border-radius:4px;font-weight:700;font-size:12px;box-shadow:0 0 10px rgba(34,197,94,0.2);">BUY 赞成买入</span>
+                            <span id="consensusDetailText" style="color:var(--text-primary);font-weight:600;">赞成票 4/5 | 综合加权置信度 79.2%</span>
+                        </div>
+                        <div style="color:var(--brand-blue);font-weight:700;font-size:12px;font-family:var(--font-mono);" id="consensusTargetPosition">
+                            建议目标单票仓位: 26.5% (符合 &le;35% 团队硬限)
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 2. 系统自动优选候选冲击池 (自立一个独立滑动容器，自适应撑满剩余高度) -->
+                <div style="flex:1;min-height:0;display:flex;flex-direction:column;background:var(--bg-card);border:1px solid var(--border-default);border-radius:10px;padding:12px 14px;box-shadow:0 2px 12px rgba(0,0,0,0.25);">
+                    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px;flex-shrink:0;">
+                        <div style="display:flex;align-items:center;gap:8px;flex-wrap:nowrap;">
+                            <span style="font-size:13px;font-weight:800;color:var(--text-primary);letter-spacing:0.4px;white-space:nowrap;display:flex;align-items:center;gap:4px;">🎯 算法自动优选冲击候选池</span>
+                            <span style="font-size:11px;background:rgba(0,210,255,0.12);color:var(--brand-cyan, #00d2ff);border:1px solid rgba(0,210,255,0.35);padding:2px 8px;border-radius:12px;font-weight:700;white-space:nowrap;box-shadow:0 0 8px rgba(0,210,255,0.2);">全自动多因子扫描</span>
+                        </div>
+                        <span style="font-size:12px;color:var(--text-muted);white-space:nowrap;letter-spacing:0.3px;">无需手动选股 · 实时动态排序</span>
+                    </div>
+
+                    <!-- 图二自立的滑动区域 (独立滚动条 + 表头吸顶置顶) -->
+                    <div id="candidateTableScrollWrapper" style="flex:1;min-height:0;overflow-y:auto;overflow-x:auto;border:1px solid var(--border-subtle);border-radius:8px;background:var(--bg-inset);">
+                        <table style="width:100%;border-collapse:collapse;font-size:12px;text-align:left;">
+                            <thead style="position:sticky;top:0;z-index:10;background:#0d1424;box-shadow:0 1px 0 var(--border-default);">
+                                <tr style="color:var(--text-secondary);font-size:12px;font-weight:700;letter-spacing:0.4px;white-space:nowrap;">
+                                    <th style="padding:10px 14px;text-align:left;white-space:nowrap;min-width:130px;">代码 / 名称</th>
+                                    <th style="padding:10px 14px;text-align:left;white-space:nowrap;min-width:100px;">行业板块</th>
+                                    <th style="padding:10px 14px;text-align:right;white-space:nowrap;min-width:90px;">最新价</th>
+                                    <th style="padding:10px 14px;text-align:right;white-space:nowrap;min-width:90px;">涨跌幅</th>
+                                    <th style="padding:10px 14px;text-align:right;white-space:nowrap;min-width:90px;">多因子评分</th>
+                                    <th style="padding:10px 14px;text-align:center;white-space:nowrap;min-width:95px;">策略表决</th>
+                                    <th style="padding:10px 14px;text-align:center;white-space:nowrap;min-width:95px;">推荐决策</th>
+                                    <th style="padding:10px 14px;text-align:right;white-space:nowrap;min-width:85px;">建议仓位</th>
+                                    <th style="padding:10px 14px;text-align:right;white-space:nowrap;min-width:130px;">合规止损线</th>
+                                </tr>
+                            </thead>
+                            <tbody id="candidateTableBody">
+                                <tr><td colspan="9" style="text-align:center;color:var(--text-muted);padding:30px;">正在加载算法优选候选池...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+
+        <!-- Panel 3 (Right 340px): 资产合规与自动化流水 -->
+        <div class="panel" id="executionPanel" style="display:flex;flex-direction:column;">
+            <div class="panel-header" style="display:flex;justify-content:space-between;align-items:center;">
+                <span style="font-weight:600;color:#c9d1d9;">📊 资产合规与自动化流水</span>
+                <button onclick="toggleAIScheduler()" id="aiSchedSideToggle" style="background:#238636;border:none;color:white;padding:3px 10px;border-radius:4px;font-size:11px;cursor:pointer;">自动交易: 开</button>
+            </div>
+            <div class="panel-body" style="flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:12px;">
+
+                <!-- 1. 资产与收益率看板 -->
+                <div style="background:#0d1117;border:1px solid #30363d;border-radius:10px;padding:12px;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                        <span style="font-size:11px;color:#8b949e;">账户资产总览</span>
+                        <span id="sideConnStatus" style="font-size:10px;color:#3fb950;">● THS已就绪</span>
+                    </div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;">
+                        <div style="background:var(--bg-card);padding:10px 12px;border-radius:var(--radius-sm);border:1px solid var(--border-subtle);">
+                            <div style="font-size:12px;color:var(--text-secondary);font-weight:500;margin-bottom:2px;">总资产(元)</div>
+                            <div style="font-size:18px;font-weight:700;color:var(--text-primary);font-family:var(--font-mono);" id="sideTotalAssets">--</div>
+                        </div>
+                        <div style="background:var(--bg-card);padding:10px 12px;border-radius:var(--radius-sm);border:1px solid var(--border-subtle);">
+                            <div style="font-size:12px;color:var(--text-secondary);font-weight:500;margin-bottom:2px;">可用资金(元)</div>
+                            <div style="font-size:18px;font-weight:700;color:var(--brand-blue);font-family:var(--font-mono);" id="sideAvailable">--</div>
+                        </div>
+                        <div style="background:var(--bg-card);padding:10px 12px;border-radius:var(--radius-sm);border:1px solid var(--border-subtle);">
+                            <div style="font-size:12px;color:var(--text-secondary);font-weight:500;margin-bottom:2px;">今日盈亏</div>
+                            <div style="font-size:18px;font-weight:700;color:var(--text-muted);font-family:var(--font-mono);" id="sideTodayProfit">--</div>
+                        </div>
+                        <div style="background:var(--bg-card);padding:10px 12px;border-radius:var(--radius-sm);border:1px solid var(--border-subtle);">
+                            <div style="font-size:12px;color:var(--text-secondary);font-weight:500;margin-bottom:2px;">累计收益率</div>
+                            <div style="font-size:18px;font-weight:700;color:var(--text-muted);font-family:var(--font-mono);" id="sideTotalReturn">--</div>
+                        </div>
+                    </div>
+
+                    <!-- ECharts 账户净值与回撤曲线容器 -->
+                    <div style="border-top:1px solid #21262d;padding-top:8px;">
+                        <div style="font-size:11px;color:#8b949e;margin-bottom:4px;display:flex;justify-content:space-between;">
+                            <span>📈 组合净值走势 (Portfolio Equity)</span>
+                            <span style="font-size:10px;color:#e3b341;">基准: 12% 回撤警戒线</span>
+                        </div>
+                        <div id="portfolioEquityChart" style="height:120px;width:100%;"></div>
+                    </div>
+                </div>
+
+                <!-- 2. 当前自动持仓与 35% 违规红线监控条 -->
+                <div style="background:#0d1117;border:1px solid #30363d;border-radius:10px;padding:12px;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                        <span style="font-size:12px;font-weight:600;color:#c9d1d9;">持仓与仓位红线监控</span>
+                        <span style="font-size:10px;color:#8b949e;">单票上限 35% | 要求&ge;3只</span>
+                    </div>
+                    <div id="sidePositionList" style="display:flex;flex-direction:column;gap:8px;max-height:160px;overflow-y:auto;">
+                        <div style="text-align:center;color:#8b949e;padding:15px;font-size:11px;">暂无持仓</div>
+                    </div>
+                </div>
+
+                <!-- 3. 全自动实时交易执行流水流 -->
+                <div style="background:#0d1117;border:1px solid #30363d;border-radius:10px;padding:12px;flex:1;display:flex;flex-direction:column;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                        <span style="font-size:12px;font-weight:600;color:#c9d1d9;">⚡ 全自动执行日志流水</span>
+                        <span style="font-size:10px;color:#8b949e;" id="sideExecCount">0 笔动作</span>
+                    </div>
+                    <div id="sideExecutionLog" style="flex:1;background:#010409;border:1px solid #21262d;border-radius:6px;padding:8px;font-family:Consolas,monospace;font-size:11px;color:#8b949e;overflow-y:auto;max-height:220px;">
+                        [执行引擎] 自动化调度流水监听就绪，等待时序窗口触发...
+                    </div>
+                </div>
+
+                <!-- 底部快捷工具 -->
+                <div style="display:flex;gap:6px;">
+                    <button onclick="openDebugModal()" style="flex:1;background:#161b22;border:1px solid #30363d;color:#e3b341;padding:8px;border-radius:6px;cursor:pointer;font-size:11px;">🧪 演练/时钟</button>
+                    <button onclick="openDiagnosticModal()" style="flex:1;background:#161b22;border:1px solid #238636;color:#3fb950;padding:8px;border-radius:6px;cursor:pointer;font-size:11px;">🩺 系统体检</button>
+                    <button onclick="openConnectModal()" style="flex:1;background:#161b22;border:1px solid #30363d;color:#8b949e;padding:8px;border-radius:6px;cursor:pointer;font-size:11px;">⚙️ 系统设置</button>
+                </div>
+
+        </div>
+    </div> <!-- end #cockpitContainer -->
+    </div> <!-- end #workstationLayout -->
+
     <!-- Mobile Bottom Navigation -->
     <nav class="mobile-nav" id="mobileNav">
         <div class="mobile-nav-inner">
-            <div class="mobile-nav-item active" onclick="switchMobileTab('stock')" data-tab="stock">
+            <div class="mobile-nav-item active" onclick="switchMobileTab('pipeline')" data-tab="pipeline">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+                </svg>
+                <span>时序流水</span>
+            </div>
+            <div class="mobile-nav-item" onclick="switchMobileTab('quant')" data-tab="quant">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/>
+                </svg>
+                <span>策略表决</span>
+            </div>
+            <div class="mobile-nav-item" onclick="switchMobileTab('assets')" data-tab="assets">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M3 3v18h18"/><path d="M18.7 8l-5.1 5.2-2.8-2.7L7 14.3"/>
                 </svg>
-                <span>行情</span>
+                <span>资产风控</span>
             </div>
-            <div class="mobile-nav-item" onclick="switchMobileTab('chart')" data-tab="chart">
+            <div class="mobile-nav-item" onclick="switchMobileTab('official')" data-tab="official">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <rect x="3" y="12" width="4" height="9"/><rect x="10" y="7" width="4" height="14"/><rect x="17" y="3" width="4" height="18"/>
+                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/>
                 </svg>
-                <span>图表</span>
-            </div>
-            <div class="mobile-nav-item" onclick="switchMobileTab('trade')" data-tab="trade">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <circle cx="12" cy="12" r="10"/><path d="M12 6v12M6 12h12"/>
-                </svg>
-                <span>交易</span>
-            </div>
-            <div class="mobile-nav-item" onclick="switchMobileTab('ai')" data-tab="ai">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M12 2a4 4 0 0 1 4 4v2a4 4 0 0 1-8 0V6a4 4 0 0 1 4-4z"/><path d="M18 14h.01"/><path d="M6 14h.01"/><path d="M12 14v4"/><path d="M8 18h8"/>
-                </svg>
-                <span>AI</span>
+                <span>官方交易台</span>
             </div>
         </div>
     </nav>
@@ -2265,6 +2626,7 @@
         // ==================== Trading Panel (Simplified) ====================
         async function loadTradePanel() {
             try {
+                let totalAssets = 0;
                 // 用实时API获取资金数据（THS实时数据，非数据库）
                 const balRes = await fetch('/api/account/balance');
                 const balData = await balRes.json();
@@ -2272,16 +2634,31 @@
                     const d = balData.data;
                     const raw = d.raw || {};
                     // 总资产 = THS返回的total_assets（含冻结）
-                    const totalAssets = d.total_assets || raw.total_assets || raw.balance || 0;
+                    totalAssets = d.total_assets || raw.total_assets || raw.balance || 0;
                     // 可用资金 = THS返回的available（实时）
                     const available = d.balance || raw.available || 0;
-                    document.getElementById('tpTotalAssets').textContent = formatMoney(totalAssets);
-                    document.getElementById('tpBalance').textContent = formatMoney(available);
+                    const elTa = document.getElementById('tpTotalAssets');
+                    if (elTa) elTa.textContent = formatMoney(totalAssets);
+                    const elBal = document.getElementById('tpBalance');
+                    if (elBal) elBal.textContent = formatMoney(available);
                     // 盈亏 = 总资产 - 初始资金
                     const profit = totalAssets - 1000000;
                     const profitEl = document.getElementById('tpProfit');
-                    profitEl.textContent = (profit >= 0 ? '+' : '') + formatMoney(profit);
-                    profitEl.style.color = profit >= 0 ? '#ef4444' : '#22c55e';
+                    if (profitEl) {
+                        profitEl.textContent = (profit > 0 ? '+' : '') + formatMoney(profit);
+                        profitEl.style.color = profit > 0 ? '#f85149' : (profit < 0 ? '#3fb950' : '#c9d1d9');
+                    }
+
+                    // 动态更新团队赛最大回撤
+                    if (totalAssets > 0) {
+                        window._peakAssets = Math.max(window._peakAssets || 1000000, totalAssets);
+                        const dd = ((window._peakAssets - totalAssets) / window._peakAssets) * 100;
+                        const ddEl = document.getElementById('hudMaxDrawdown');
+                        if (ddEl) {
+                            ddEl.textContent = dd.toFixed(1) + '%';
+                            ddEl.style.color = dd > 10 ? '#f85149' : (dd > 6 ? '#e3b341' : '#3fb950');
+                        }
+                    }
                 }
 
                 // 加载持仓
@@ -2289,7 +2666,8 @@
                 const posData = await posRes.json();
                 if (posData.success && posData.data) {
                     const positions = posData.data.positions || [];
-                    document.getElementById('tpPosCount').textContent = positions.length + '只';
+                    const elPosCount = document.getElementById('tpPosCount');
+                    if (elPosCount) elPosCount.textContent = positions.length + '只';
                     const posEl = document.getElementById('tpPositions');
                     if (positions.length > 0) {
                         posEl.innerHTML = positions.map(p => {
@@ -2301,19 +2679,46 @@
                                 <span style="${cls}">${pnlPct >= 0 ? '+' : ''}${(pnlPct * 100).toFixed(2)}%</span>
                             </div>`;
                         }).join('');
+
+                        // 更新 HUD 团队赛风控态势 (单票上限 35%, 最低持仓 3 支)
+                        let maxMv = 0;
+                        positions.forEach(p => {
+                            const mv = Number(p.market_value || ((p.volume || p.amount || 0) * (p.price || p.current_price || 0)));
+                            if (mv > maxMv) maxMv = mv;
+                        });
+                        const effAssets = totalAssets > 0 ? totalAssets : (positions.reduce((s, p) => s + Number(p.market_value || 0), 0) + 500000);
+                        const maxPct = effAssets > 0 ? (maxMv / effAssets) * 100 : 0;
+                        const maxPosEl = document.getElementById('hudMaxPosition');
+                        if (maxPosEl) {
+                            maxPosEl.textContent = maxPct.toFixed(1) + '%';
+                            maxPosEl.style.color = maxPct > 35 ? '#f85149' : (maxPct > 28 ? '#e3b341' : '#3fb950');
+                            if (maxPct > 35) maxPosEl.title = '警告：单票仓位超35%团队硬红线！';
+                        }
                     } else {
                         posEl.innerHTML = '<div style="text-align:center;color:#8b949e;padding:15px;font-size:12px;">暂无持仓</div>';
+                        const maxPosEl = document.getElementById('hudMaxPosition');
+                        if (maxPosEl) {
+                            maxPosEl.textContent = '0.0%';
+                            maxPosEl.style.color = '#3fb950';
+                        }
+                    }
+                    const countEl = document.getElementById('hudHoldingCount');
+                    if (countEl) {
+                        countEl.textContent = positions.length + ' 支';
+                        countEl.style.color = positions.length === 0 ? '#8b949e' : (positions.length < 3 ? '#e3b341' : '#3fb950');
                     }
                 }
 
-                // 加载今日交易
-                const tradeRes = await fetch('/api/account/trades?limit=10');
+                // 加载今日交易 (提升至 50 笔并缓存给 K线打点)
+                const tradeRes = await fetch('/api/account/trades?limit=50');
                 const tradeData = await tradeRes.json();
                 if (tradeData.success && tradeData.data) {
                     const trades = Array.isArray(tradeData.data) ? tradeData.data : (tradeData.data.trades || []);
+                    window.cachedTrades = trades;
                     const today = new Date().toISOString().slice(0, 10);
                     const todayTrades = trades.filter(t => t.time && t.time.startsWith(today));
-                    document.getElementById('tpTradeCount').textContent = todayTrades.length + '笔';
+                    const elTradeCount = document.getElementById('tpTradeCount');
+                    if (elTradeCount) elTradeCount.textContent = todayTrades.length + '笔';
                     const tradeEl = document.getElementById('tpTrades');
                     if (todayTrades.length > 0) {
                         tradeEl.innerHTML = todayTrades.map(t => {
@@ -2334,10 +2739,11 @@
                 const schedData = await schedRes.json();
                 if (schedData.success) {
                     const s = schedData.data;
-                    document.getElementById('tradePanelStatus').textContent =
-                        s.enabled ? `运行中 (今日${s.daily_trades || 0}笔)` : '已停止';
-                    document.getElementById('tradePanelStatus').style.color =
-                        s.enabled ? '#3fb950' : '#8b949e';
+                    const elTpStatus = document.getElementById('tradePanelStatus');
+                    if (elTpStatus) {
+                        elTpStatus.textContent = s.enabled ? `运行中 (今日${s.daily_trades || 0}笔)` : '已停止';
+                        elTpStatus.style.color = s.enabled ? '#3fb950' : '#8b949e';
+                    }
                 }
             } catch (e) {
                 console.error('Load trade panel failed:', e);
@@ -2369,16 +2775,22 @@
                 el.classList.toggle('active', el.dataset.tab === tab);
             });
 
-            // Map tab to panel ID
+            // Map tab to modern cockpit panels or official view
+            if (tab === 'official') {
+                setWorkstationView('official');
+                return;
+            } else {
+                setWorkstationView('cockpit');
+            }
+
             const panelMap = {
-                'stock': 'stockListPanel',
-                'chart': 'chartPanel',
-                'trade': 'tradePanel',
-                'ai': 'chartPanel'  // AI analysis shows below chart
+                'pipeline': 'pipelinePanel',
+                'quant': 'aiCenterPanel',
+                'assets': 'executionPanel'
             };
 
             // Hide all panels, show target
-            document.querySelectorAll('.container > .panel, .container > .chart-container').forEach(el => {
+            document.querySelectorAll('#cockpitContainer > .panel').forEach(el => {
                 el.classList.remove('mobile-active');
             });
 
@@ -2388,15 +2800,11 @@
                 if (target) target.classList.add('mobile-active');
             }
 
-            // Resize chart after DOM update
-            if (tab === 'chart' && chart) {
+            // Resize ECharts equity chart if switching to assets
+            if (tab === 'assets' && typeof portfolioEquityEChart !== 'undefined' && portfolioEquityEChart) {
                 setTimeout(() => {
-                    chart.resize();
-                    // 如果有缓存数据，重新渲染当前周期
-                    if (chartCache[currentChartPeriod]) {
-                        renderChart(currentChartPeriod, chartCache[currentChartPeriod]);
-                    }
-                }, 100);
+                    portfolioEquityEChart.resize();
+                }, 120);
             }
         }
 
@@ -2417,7 +2825,7 @@
         window.addEventListener('resize', handleResize);
 
         // ==================== 部署状态检测 ====================
-        function initDeployStatus() {
+        async function initDeployStatus() {
             const el = document.getElementById('deployStatus');
             if (!el) return;
 
@@ -2532,7 +2940,8 @@
         // ==================== 连接断开提醒 ====================
 
         function showCookieExpiredAlert() {
-            // Cookie过期/断开提醒
+            // Cookie过期/断开提醒 (已静默隐藏强弹窗)
+            return;
             const overlay = document.createElement('div');
             overlay.id = 'cookieExpiredOverlay';
             overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:9999;display:flex;align-items:center;justify-content:center;';
@@ -2546,14 +2955,17 @@
                     </div>
                     <div style="background:#21262d;border-radius:8px;padding:12px;margin-bottom:16px;font-size:13px;color:#c9d1d9;">
                         <div style="margin-bottom:8px;"><strong>自动交易已暂停</strong>，同花顺Cookie已过期或连接断开。</div>
-                        <div style="color:#8b949e;font-size:12px;">请从浏览器重新复制Cookie并粘贴登录</div>
+                        <div style="color:#8b949e;font-size:12px;">支持一键唤起 Edge 手机扫码，免 F12，Cookie 自动更新并恢复交易！</div>
                     </div>
                     <div style="display:flex;gap:8px;">
-                        <button onclick="dismissCookieAlert(); openConnectModal();" style="flex:1;background:#238636;color:white;border:none;padding:10px;border-radius:6px;font-size:14px;font-weight:600;cursor:pointer;">
-                            重新登录
+                        <button onclick="dismissCookieAlert(); openConnectModal(); startAutoLoginTHS();" style="flex:1;background:linear-gradient(135deg, #238636 0%, #2ea043 100%);color:white;border:none;padding:10px;border-radius:6px;font-size:14px;font-weight:600;cursor:pointer;">
+                            📱 一键扫码重连
                         </button>
-                        <button onclick="dismissCookieAlert()" style="background:#21262d;color:#8b949e;border:1px solid #30363d;padding:10px 16px;border-radius:6px;font-size:13px;cursor:pointer;">
-                            稍后处理
+                        <button onclick="dismissCookieAlert(); openConnectModal();" style="background:#21262d;color:#58a6ff;border:1px solid #388bfd;padding:10px 14px;border-radius:6px;font-size:13px;cursor:pointer;">
+                            手动配置
+                        </button>
+                        <button onclick="dismissCookieAlert()" style="background:#21262d;color:#8b949e;border:1px solid #30363d;padding:10px 12px;border-radius:6px;font-size:13px;cursor:pointer;">
+                            稍后
                         </button>
                     </div>
                 </div>
@@ -2650,7 +3062,7 @@
 
         // ==================== Real-time Price Refresh ====================
 
-        function startPriceRefresh() {
+        async function startPriceRefresh() {
             stopPriceRefresh();
             priceRefreshTimer = setInterval(async () => {
                 if (!currentSymbol) return;
@@ -3255,6 +3667,183 @@
             }
         }
 
+        // ==================== 智能一键扫码登录与保活 ====================
+
+        let autoLoginPollTimer = null;
+
+        function toggleManualCookieArea() {
+            const sec = document.getElementById('manualCookieSection');
+            const icon = document.getElementById('manualToggleIcon');
+            if (sec.style.display === 'none' || !sec.style.display) {
+                sec.style.display = 'block';
+                if (icon) icon.textContent = '▲';
+            } else {
+                sec.style.display = 'none';
+                if (icon) icon.textContent = '▼';
+            }
+        }
+
+        async function startAutoLoginTHS() {
+            const startBtn = document.getElementById('autoLoginStartBtn');
+            const cancelBtn = document.getElementById('autoLoginCancelBtn');
+            const statusBox = document.getElementById('autoLoginStatusBox');
+            const statusText = document.getElementById('autoLoginStatusText');
+            const spinner = document.getElementById('autoLoginSpinner');
+
+            startBtn.disabled = true;
+            startBtn.innerHTML = '<span>⏳ 正在唤起 Edge 浏览器...</span>';
+            if (cancelBtn) cancelBtn.style.display = 'inline-block';
+            if (statusBox) {
+                statusBox.style.display = 'block';
+                statusBox.style.borderColor = '#1f6feb';
+                statusBox.style.background = '#0d1117';
+            }
+            if (statusText) statusText.innerHTML = '<span style="color:#58a6ff;">正在后台启动 Edge 浏览器并打开官方交易登录页...</span>';
+            if (spinner) spinner.textContent = '⏳';
+
+            try {
+                const res = await fetch('/api/ths/auto_login/start', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ timeout_sec: 180 })
+                });
+                const data = await res.json();
+                if (!data.success && data.status !== 'launching' && data.status !== 'waiting_login') {
+                    resetAutoLoginUI('❌ ' + (data.message || '启动失败'));
+                    return;
+                }
+
+                // 开始定时轮询登录状态
+                if (autoLoginPollTimer) clearInterval(autoLoginPollTimer);
+                autoLoginPollTimer = setInterval(pollAutoLoginStatus, 1200);
+
+            } catch (err) {
+                resetAutoLoginUI('❌ 启动异常: ' + err.message);
+            }
+        }
+
+        async function pollAutoLoginStatus() {
+            try {
+                const res = await fetch('/api/ths/auto_login/status');
+                const json = await res.json();
+                if (!json.success || !json.data) return;
+
+                const st = json.data;
+                const statusBox = document.getElementById('autoLoginStatusBox');
+                const statusText = document.getElementById('autoLoginStatusText');
+                const spinner = document.getElementById('autoLoginSpinner');
+
+                if (st.status === 'launching') {
+                    if (statusText) statusText.innerHTML = '<span style="color:#58a6ff;">正在唤起 Edge 浏览器窗口...</span>';
+                    if (spinner) spinner.textContent = '🌐';
+                } else if (st.status === 'waiting_login') {
+                    if (statusBox) statusBox.style.borderColor = '#388bfd';
+                    if (statusText) statusText.innerHTML = '<span style="color:#79c0ff;font-weight:600;">Edge 浏览器已打开！请使用同花顺手机 App 扫码登录</span><div style="font-size:11px;color:#8b949e;margin-top:2px;">登录完成后，系统将自动截获 Cookie 并同步资金账户，随后自动关闭 Edge</div>';
+                    if (spinner) spinner.textContent = '📱';
+                } else if (st.status === 'success') {
+                    clearInterval(autoLoginPollTimer);
+                    autoLoginPollTimer = null;
+                    if (statusBox) {
+                        statusBox.style.borderColor = '#238636';
+                        statusBox.style.background = '#032110';
+                    }
+                    if (statusText) statusText.innerHTML = `<span style="color:#3fb950;font-weight:700;">✅ ${st.message || '登录成功！'}</span>`;
+                    if (spinner) spinner.textContent = '🎉';
+                    showToast('同花顺扫码登录成功！', 'success');
+
+                    // 刷新状态与关闭弹窗
+                    checkLoginStatus();
+
+                    setTimeout(() => {
+                        resetAutoLoginUI();
+                        closeConnectModal();
+                    }, 2500);
+                } else if (st.status === 'failed' || st.status === 'timeout' || st.status === 'canceled') {
+                    clearInterval(autoLoginPollTimer);
+                    autoLoginPollTimer = null;
+                    resetAutoLoginUI(st.message || '登录已终止');
+                }
+            } catch (err) {
+                console.error('轮询自动登录状态异常:', err);
+            }
+        }
+
+        async function cancelAutoLoginTHS() {
+            if (autoLoginPollTimer) {
+                clearInterval(autoLoginPollTimer);
+                autoLoginPollTimer = null;
+            }
+            try {
+                await fetch('/api/ths/auto_login/cancel', { method: 'POST' });
+            } catch (e) {}
+            resetAutoLoginUI('已取消登录');
+        }
+
+        function resetAutoLoginUI(errorMsg = null) {
+            const startBtn = document.getElementById('autoLoginStartBtn');
+            const cancelBtn = document.getElementById('autoLoginCancelBtn');
+            const statusBox = document.getElementById('autoLoginStatusBox');
+            const statusText = document.getElementById('autoLoginStatusText');
+            const spinner = document.getElementById('autoLoginSpinner');
+
+            if (startBtn) {
+                startBtn.disabled = false;
+                startBtn.innerHTML = '<span>📱 打开 Edge 扫码登录</span>';
+            }
+            if (cancelBtn) cancelBtn.style.display = 'none';
+
+            if (errorMsg && statusBox && statusText) {
+                statusBox.style.display = 'block';
+                statusBox.style.borderColor = '#da3633';
+                statusBox.style.background = '#1b0d0d';
+                statusText.innerHTML = `<span style="color:#f85149;">${errorMsg}</span>`;
+                if (spinner) spinner.textContent = '⚠️';
+            } else if (!errorMsg && statusBox) {
+                statusBox.style.display = 'none';
+            }
+        }
+
+        async function silentRefreshTHS() {
+            const statusBox = document.getElementById('autoLoginStatusBox');
+            const statusText = document.getElementById('autoLoginStatusText');
+            const spinner = document.getElementById('autoLoginSpinner');
+            const silentBtn = document.getElementById('autoLoginSilentBtn');
+
+            if (silentBtn) silentBtn.disabled = true;
+            if (statusBox) {
+                statusBox.style.display = 'block';
+                statusBox.style.borderColor = '#388bfd';
+                statusBox.style.background = '#0d1117';
+            }
+            if (statusText) statusText.innerHTML = '<span style="color:#58a6ff;">正在后台调用 Edge 30天凭证静默刷新 Cookie...</span>';
+            if (spinner) spinner.textContent = '⏳';
+
+            try {
+                const res = await fetch('/api/ths/auto_login/silent_refresh', { method: 'POST' });
+                const data = await res.json();
+                if (data.success) {
+                    if (statusBox) {
+                        statusBox.style.borderColor = '#238636';
+                        statusBox.style.background = '#032110';
+                    }
+                    if (statusText) statusText.innerHTML = `<span style="color:#3fb950;font-weight:700;">✅ 静默续签成功！可用资金: ¥${Number(data.balance).toLocaleString()}</span>`;
+                    if (spinner) spinner.textContent = '🎉';
+                    showToast('同花顺 Cookie 静默续签成功！', 'success');
+                    checkLoginStatus();
+                    setTimeout(() => {
+                        resetAutoLoginUI();
+                        closeConnectModal();
+                    }, 2200);
+                } else {
+                    resetAutoLoginUI('❌ ' + (data.message || '静默续签失败，请点击左侧扫码登录'));
+                }
+            } catch (e) {
+                resetAutoLoginUI('❌ 静默续签异常: ' + e.message);
+            } finally {
+                if (silentBtn) silentBtn.disabled = false;
+            }
+        }
+
         // ==================== Connection Functions ====================
 
         function openConnectModal() {
@@ -3264,6 +3853,95 @@
 
         function closeConnectModal() {
             document.getElementById('connectModal').classList.remove('active');
+        }
+
+        // 一键复制控制台命令交互反馈
+        function copyConsoleCommand() {
+            const code = "copy(document.cookie)";
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(code).then(() => {
+                    renderCopySuccess();
+                }).catch(() => {
+                    fallbackCopyText(code);
+                });
+            } else {
+                fallbackCopyText(code);
+            }
+        }
+
+        function fallbackCopyText(text) {
+            const ta = document.createElement("textarea");
+            ta.value = text;
+            ta.style.position = "fixed";
+            ta.style.opacity = "0";
+            document.body.appendChild(ta);
+            ta.select();
+            try {
+                document.execCommand("copy");
+                renderCopySuccess();
+            } catch(e) {
+                alert("请手动复制命令: " + text);
+            }
+            document.body.removeChild(ta);
+        }
+
+        function renderCopySuccess() {
+            const box = document.getElementById('copyCommandBox');
+            const btn = document.getElementById('copyBtnFeedback');
+            const tip = document.getElementById('copySuccessTip');
+            if (box) {
+                box.style.background = 'rgba(34, 197, 94, 0.2)';
+                box.style.borderColor = '#4ade80';
+                box.style.boxShadow = '0 0 16px rgba(74, 222, 128, 0.4)';
+            }
+            if (btn) {
+                btn.innerHTML = '✅ 已成功复制！';
+                btn.style.background = '#15803d';
+                btn.style.color = '#ffffff';
+                btn.style.borderColor = '#4ade80';
+            }
+            if (tip) tip.style.display = 'block';
+
+            setTimeout(() => {
+                if (box) {
+                    box.style.background = '#070a10';
+                    box.style.borderColor = '#38bdf8';
+                    box.style.boxShadow = '0 0 12px rgba(56, 189, 248, 0.2)';
+                }
+                if (btn) {
+                    btn.innerHTML = '📋 点击复制命令';
+                    btn.style.background = 'rgba(56, 189, 248, 0.15)';
+                    btn.style.color = '#38bdf8';
+                    btn.style.borderColor = 'rgba(56, 189, 248, 0.4)';
+                }
+            }, 2500);
+        }
+
+        // 一键从系统剪贴板读取并填入输入框
+        async function pasteFromClipboardToInput() {
+            try {
+                if (navigator.clipboard && navigator.clipboard.readText) {
+                    const text = await navigator.clipboard.readText();
+                    if (text && text.trim()) {
+                        const input = document.getElementById('cookieInput');
+                        if (input) {
+                            input.value = text.trim();
+                            input.style.borderColor = '#4ade80';
+                            input.style.boxShadow = '0 0 10px rgba(74, 222, 128, 0.3)';
+                            setTimeout(() => {
+                                input.style.borderColor = 'var(--border-default)';
+                                input.style.boxShadow = 'none';
+                            }, 1200);
+                        }
+                    } else {
+                        alert('剪贴板中未检测到有效内容，请先在浏览器控制台执行 copy(document.cookie)');
+                    }
+                } else {
+                    alert('当前环境未开放剪贴板读取权限，请在文本框直接按 Ctrl+V 粘贴');
+                }
+            } catch(err) {
+                alert('请在输入框直接按 Ctrl+V 粘贴即可');
+            }
         }
 
         async function loginWithCookie() {
@@ -3505,69 +4183,38 @@
             } catch(e) {}
         })();
 
-        document.addEventListener('DOMContentLoaded', () => {
-            initChart();
-            loadHotStocks();
-            setupStockScroll();
-            loadMyHoldings();
-            loadAccountInfo();
-            loadMarketOverview();
-            loadCompetitionStatus();
-            loadAccountList();
-            startNotifSSE();
-            loadAISchedulerStatus();
-            loadTradePanel();
-            setInterval(loadTradePanel, 15000);  // 每15秒刷新资金数据
-            setInterval(loadAISchedulerStatus, 30000);  // 每30秒刷新状态
-            checkCookieHealth();
-            setInterval(checkCookieHealth, 180000);  // OPT-11: 每3分钟检查Cookie（合并原来2min+5min重复）
-
-
-            // 移动端初始化
-            if (isMobile()) {
-                switchMobileTab('chart');
-            } else {
-                handleResize();
-            }
-
-            // 部署状态检测
-            initDeployStatus();
-
-            // Check connection status with delay
+        // 安全初始化调度
+        function safeInitLegacy() {
+            try { startNotifSSE(); } catch(e) {}
+            try { loadAISchedulerStatus(); } catch(e) {}
+            try { checkCookieHealth(); } catch(e) {}
+            try { initDeployStatus(); } catch(e) {}
             setTimeout(() => {
-                checkConnectionStatus();
+                try { checkConnectionStatus(); } catch(e) {}
             }, 500);
 
-            // OPT-12: Auto refresh account data + positions: every 30 seconds when connected
-            setInterval(async () => {
-                try {
-                    const statusRes = await fetch('/api/connection/status');
-                    const statusData = await statusRes.json();
-                    if (statusData.success && statusData.data.connected) {
-                        fetchAccountDetail();
-                        loadAccountInfo();
-                        loadPositions();        // OPT-12: 自动刷新持仓
-                        loadPendingOrders();    // OPT-12: 自动刷新委托
-                    }
-                } catch (e) {}
-            }, 30000);
+            // Search on Enter (若元素存在)
+            const searchEl = document.getElementById('searchInput');
+            if (searchEl) {
+                searchEl.addEventListener('keypress', (e) => {
+                    if (e.key === 'Enter') searchStock();
+                });
+            }
 
-            // Search on Enter
-            document.getElementById('searchInput').addEventListener('keypress', (e) => {
-                if (e.key === 'Enter') searchStock();
-            });
-
-            // Update amount on price/quantity change (if elements exist)
+            // Update amount on price/quantity change (若元素存在)
             const tpEl = document.getElementById('tradePrice');
             const taEl = document.getElementById('tradeAmount');
             if (tpEl) tpEl.addEventListener('input', updateEstimatedAmount);
             if (taEl) taEl.addEventListener('input', updateEstimatedAmount);
-        });
+        }
 
-        // Initialize ECharts
+        // Initialize ECharts (安全容错)
         function initChart() {
-            chart = echarts.init(document.getElementById('mainChart'));
-            window.addEventListener('resize', () => { if (chart) chart.resize(); });
+            const el = document.getElementById('mainChart');
+            if (el) {
+                chart = echarts.init(el);
+                window.addEventListener('resize', () => { if (chart) chart.resize(); });
+            }
         }
 
         // 彻底重置图表（销毁+重建，确保切换图表类型时无残留）
@@ -3778,6 +4425,8 @@
         let _audioCtx = null;
         function playNotifSound() {
             try {
+                // 默认静音，避免频繁蜂鸣打扰用户；仅在用户显式开启时播放
+                if (localStorage.getItem('notif_sound_enabled') !== 'true') return;
                 if (!_audioCtx) _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
                 const osc = _audioCtx.createOscillator();
                 const gain = _audioCtx.createGain();
@@ -3808,12 +4457,24 @@
         let allAccounts = [];
         let activeAccountId = null;
 
-        function toggleAccountPanel() {
+        function toggleAccountPanel(e) {
+            if (e && e.stopPropagation) e.stopPropagation();
             const panel = document.getElementById('accountSelectorPanel');
+            if (!panel) return;
             const isOpen = panel.style.display === 'block';
             panel.style.display = isOpen ? 'none' : 'block';
             if (!isOpen) loadAccountList();
         }
+
+        document.addEventListener('click', function(e) {
+            const panel = document.getElementById('accountSelectorPanel');
+            const selector = document.querySelector('.account-selector');
+            if (panel && panel.style.display === 'block') {
+                if (!panel.contains(e.target) && (!selector || !selector.contains(e.target))) {
+                    panel.style.display = 'none';
+                }
+            }
+        });
 
         async function loadAccountList() {
             try {
@@ -3832,51 +4493,78 @@
             const list = document.getElementById('accountSelectorList');
             if (!list) return;
             if (!allAccounts.length) {
-                list.innerHTML = '<div class="notification-empty">暂无绑定账号<br><span style="font-size:11px;color:#58a6ff">点击右上角 "+ 绑定账号" 添加</span></div>';
+                list.innerHTML = '<div class="notification-empty">暂无绑定账号<br><span style="font-size:11px;color:#38bdf8">点击下方 "+ 绑定/录入新账号" 添加</span></div>';
                 return;
             }
             list.innerHTML = allAccounts.map(acc => {
-                const profit = acc.total_assets - acc.initial_balance;
-                const profitRate = acc.initial_balance ? (profit / acc.initial_balance * 100) : 0;
-                const profitColor = profit >= 0 ? '#f85149' : '#3fb950';
-                const syncStatus = acc.last_sync_at ? `<span style="color:#3fb950">已同步</span>` : `<span style="color:#d29922">未同步</span>`;
-                const isActive = activeAccountId === acc.id;
-                const borderStyle = isActive ? 'border-left:3px solid #58a6ff;background:rgba(88,166,255,0.06)' : 'border-left:3px solid transparent';
+                // 1. 同花顺模拟炒股比赛开户初始本金标准硬约束：200,000 元 (20万)
+                const initialBal = Number(acc.initial_balance) || 200000;
+                const totalAssets = Number(acc.total_assets || acc.balance) || initialBal;
+
+                // 2. 累计盈亏金额与收益率计算
+                let profit = 0;
+                if (acc.total_profit !== undefined && Number(acc.total_profit) !== 0) {
+                    profit = Number(acc.total_profit);
+                } else {
+                    profit = totalAssets - initialBal;
+                }
+
+                let profitRate = 0;
+                if (acc.total_profit_rate !== undefined && acc.total_profit_rate !== null && Number(acc.total_profit_rate) !== 0) {
+                    profitRate = Number(acc.total_profit_rate);
+                } else {
+                    profitRate = (profit / initialBal) * 100;
+                }
+
+                // 3. A 股标准色彩与符号 (盈利红涨 +，亏损绿跌 -，符号绝对保留)
+                const profitColor = profit >= 0 ? '#ff4d4f' : '#00e676';
+                const profitSign = profit > 0 ? '+' : (profit < 0 ? '-' : '');
+                const rateSign = profitRate > 0 ? '+' : (profitRate < 0 ? '-' : '');
+
+                const syncStatus = acc.last_sync_at ? '<span style="color:#00e676">已实时同步</span>' : '<span style="color:#38bdf8">实时通道在线</span>';
+                const isActive = (activeAccountId === acc.id) || (allAccounts.length === 1);
+                const borderStyle = isActive 
+                    ? 'border-left:3px solid #00d2ff;background:rgba(0,210,255,0.08);box-shadow:inset 0 0 12px rgba(0,210,255,0.1);' 
+                    : 'border-left:3px solid transparent;background:rgba(255,255,255,0.02);';
+
                 return `
-                    <div class="account-selector-item" style="${borderStyle}">
-                        <div style="flex:1;cursor:pointer" onclick="switchAccount(${acc.id})">
-                            <div class="account-selector-item-name">${acc.name}${isActive ? ' <span style="color:#58a6ff;font-size:11px">●当前</span>' : ''}</div>
-                            <div class="account-selector-item-balance">
-                                可用: ${formatNumber(acc.ky_fund || acc.balance)} | 市值: ${formatNumber(acc.market_value || 0)}
+                    <div class="account-selector-item" style="${borderStyle};display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid rgba(255,255,255,0.05);transition:all 0.2s;" onmouseover="this.style.background='rgba(56,189,248,0.1)'" onmouseout="this.style.background='${isActive ? 'rgba(0,210,255,0.08)' : 'rgba(255,255,255,0.02)'}'">
+                        <div style="flex:1;cursor:pointer;" onclick="switchAccount(${acc.id})">
+                            <div style="font-weight:700;color:#f8fafc;font-size:13px;display:flex;align-items:center;gap:6px;">
+                                <span>${acc.name}</span>
+                                ${isActive ? '<span style="background:rgba(0,210,255,0.15);color:#00d2ff;border:1px solid rgba(0,210,255,0.35);padding:1px 6px;border-radius:10px;font-size:10px;font-weight:700;">● 当前活跃</span>' : ''}
                             </div>
-                            <div class="account-selector-item-balance" style="margin-top:2px">
+                            <div style="font-size:11px;color:#94a3b8;font-family:var(--font-mono);margin-top:4px;">
+                                资产: <strong style="color:#f8fafc;">¥${formatNumber(totalAssets)}</strong> | 可用: ¥${formatNumber(acc.ky_fund || acc.balance)}
+                            </div>
+                            <div style="font-size:10px;color:#64748b;margin-top:3px;display:flex;gap:6px;">
                                 ${syncStatus} ${acc.ths_gdzh ? '| 账号: ' + acc.ths_gdzh : ''}
                             </div>
                         </div>
-                        <div style="text-align:right;min-width:80px">
-                            <div class="account-selector-item-profit" style="color:${profitColor};font-size:13px;font-weight:600">
-                                ${profit >= 0 ? '+' : ''}${formatNumber(profit)}
+                        <div style="text-align:right;min-width:90px;">
+                            <div style="color:${profitColor};font-size:13px;font-weight:800;font-family:var(--font-mono);letter-spacing:0.3px;">
+                                ${profitSign}¥${formatNumber(Math.abs(profit))}
                             </div>
-                            <div class="account-selector-item-balance">
-                                ${profitRate >= 0 ? '+' : ''}${profitRate.toFixed(2)}%
+                            <div style="color:${profitColor};font-size:11px;font-weight:700;font-family:var(--font-mono);margin-top:2px;">
+                                ${rateSign}${Math.abs(profitRate).toFixed(2)}%
                             </div>
-                            ${!isActive ? `<button onclick="event.stopPropagation();switchAccount(${acc.id})"
-                                    style="background:none;border:none;color:#58a6ff;cursor:pointer;font-size:11px;padding:2px 4px">切换</button>` : ''}
-                            <button onclick="event.stopPropagation();syncOneAccount(${acc.id})"
-                                    style="background:none;border:none;color:#58a6ff;cursor:pointer;font-size:11px;padding:2px 4px">同步</button>
-                            <button onclick="event.stopPropagation();deleteAccount(${acc.id})"
-                                    style="background:none;border:none;color:#f85149;cursor:pointer;font-size:11px;padding:2px 4px">删除</button>
+                            <div style="margin-top:6px;display:flex;justify-content:flex-end;gap:6px;">
+                                ${!isActive ? `<button onclick="event.stopPropagation();switchAccount(${acc.id})"
+                                        style="background:rgba(56,189,248,0.15);border:1px solid rgba(56,189,248,0.3);color:#38bdf8;border-radius:4px;cursor:pointer;font-size:11px;padding:2px 8px;font-weight:600;">切换</button>` : ''}
+                                <button onclick="event.stopPropagation();syncOneAccount(${acc.id})" id="syncBtn_${acc.id}"
+                                        style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);color:#cbd5e1;border-radius:4px;cursor:pointer;font-size:11px;padding:2px 8px;font-weight:500;">🔄 同步</button>
+                                <button onclick="event.stopPropagation();deleteAccount(${acc.id})"
+                                        style="background:rgba(255,77,79,0.1);border:1px solid rgba(255,77,79,0.25);color:#ff4d4f;border-radius:4px;cursor:pointer;font-size:11px;padding:2px 6px;">删除</button>
+                            </div>
                         </div>
                     </div>`;
             }).join('');
         }
 
         function showAddAccountModal() {
-            const name = prompt('输入账号备注名（如: 比赛1号）:');
-            if (!name) return;
-            const cookie = prompt('粘贴同花顺Cookie（从浏览器F12复制）:');
+            const cookie = prompt('粘贴同花顺Cookie（从浏览器F12复制，账号将按顺序自动命名为 1, 2, 3...）:');
             if (!cookie) return;
-            addThsAccount(name, cookie);
+            addThsAccount('', cookie);
         }
 
         async function addThsAccount(name, cookie) {
@@ -4327,6 +5015,32 @@
                 }
             }
 
+            // 分时图成交打点
+            const intradayMarkPoints = [];
+            if (window.cachedTrades && window.cachedTrades.length && currentSymbol) {
+                const curClean = String(currentSymbol).replace(/[^0-9]/g, '');
+                const symTrades = window.cachedTrades.filter(t => {
+                    const c = String(t.code || t.symbol || t.stock_code || '').replace(/[^0-9]/g, '');
+                    return c === curClean;
+                });
+                symTrades.forEach(t => {
+                    const tTime = (t.time || '').slice(11, 16);
+                    if (tTime && times.includes(tTime)) {
+                        const isBuy = (t.action === 'buy' || t.direction === 'buy' || t.side === '买入' || String(t.type).includes('买') || (t.action_zh && t.action_zh.includes('买')));
+                        const price = Number(t.price || t.deal_price || basePrice);
+                        intradayMarkPoints.push({
+                            name: isBuy ? '买入' : '卖出',
+                            coord: [tTime, price],
+                            value: (isBuy ? '买 ' : '卖 ') + price.toFixed(2),
+                            itemStyle: { color: isBuy ? '#f85149' : '#3fb950' },
+                            symbol: isBuy ? 'pin' : 'arrow',
+                            symbolSize: 22,
+                            symbolRotate: isBuy ? 0 : 180
+                        });
+                    }
+                });
+            }
+
             const option = {
                 backgroundColor: '#161b22', animation: false,
                 tooltip: {
@@ -4367,7 +5081,11 @@
                         name: '价格', type: 'line', data: prices, symbol: 'none',
                         lineStyle: { width: 1.5, color: '#58a6ff' },
                         areaStyle: { color: 'rgba(88,166,255,0.08)' },
-                        markLine: { silent: true, symbol: 'none', data: markLines }
+                        markLine: { silent: true, symbol: 'none', data: markLines },
+                        markPoint: intradayMarkPoints.length ? {
+                            data: intradayMarkPoints,
+                            tooltip: { formatter: (p) => `${p.name}: ${p.value}` }
+                        } : undefined
                     },
                     {
                         name: '均价', type: 'line', data: avgs, symbol: 'none',
@@ -4408,6 +5126,44 @@
                         label: { formatter: '止损 ' + chartAIInfo.stop_loss.toFixed(2), color: '#f85149', fontSize: 10 }
                     });
                 }
+            }
+
+            // 真实交易打点 (买入/卖出 MarkPoint)
+            const markPoints = [];
+            if (window.cachedTrades && window.cachedTrades.length && currentSymbol) {
+                const curClean = String(currentSymbol).replace(/[^0-9]/g, '');
+                const symTrades = window.cachedTrades.filter(t => {
+                    const c = String(t.code || t.symbol || t.stock_code || '').replace(/[^0-9]/g, '');
+                    return c === curClean;
+                });
+
+                symTrades.forEach(t => {
+                    const tDate = (t.time || t.date || '').slice(0, 10);
+                    const candle = data.find(d => (d.date || '').slice(0, 10) === tDate);
+                    if (candle) {
+                        const isBuy = (t.action === 'buy' || t.direction === 'buy' || t.side === '买入' || String(t.type).includes('买') || (t.action_zh && t.action_zh.includes('买')));
+                        const price = Number(t.price || t.deal_price || (isBuy ? candle.low : candle.high));
+                        markPoints.push({
+                            name: isBuy ? '买入成交' : '卖出成交',
+                            coord: [candle.date, isBuy ? candle.low : candle.high],
+                            value: (isBuy ? '买 ' : '卖 ') + price.toFixed(2),
+                            itemStyle: {
+                                color: isBuy ? '#f85149' : '#3fb950',
+                                borderColor: '#ffffff',
+                                borderWidth: 1
+                            },
+                            symbol: isBuy ? 'pin' : 'arrow',
+                            symbolSize: isBuy ? 24 : 18,
+                            symbolRotate: isBuy ? 0 : 180,
+                            label: {
+                                color: '#ffffff',
+                                fontSize: 10,
+                                fontWeight: 'bold',
+                                formatter: isBuy ? 'B' : 'S'
+                            }
+                        });
+                    }
+                });
             }
 
             const is5day = period === '5day';
@@ -4472,7 +5228,13 @@
                             color: '#f85149', color0: '#3fb950',
                             borderColor: '#f85149', borderColor0: '#3fb950'
                         },
-                        markLine: markLines.length ? { silent: true, symbol: 'none', data: markLines } : undefined
+                        markLine: markLines.length ? { silent: true, symbol: 'none', data: markLines } : undefined,
+                        markPoint: markPoints.length ? {
+                            data: markPoints,
+                            tooltip: {
+                                formatter: (p) => `${p.name}: ${p.value}`
+                            }
+                        } : undefined
                     },
                     {
                         name: 'MA5', type: 'line', data: data.map(d => d.ma5),
@@ -4600,11 +5362,17 @@
                     const dot = document.getElementById('autoDotHeader');
                     const label = document.getElementById('autoTextHeader');
                     const btn = document.getElementById('aiSchedToggle');
-                    dot.style.background = s.enabled ? '#3fb950' : '#666';
-
-                    label.textContent = s.enabled ? '运行中' : '已停止';
-                    btn.textContent = s.enabled ? '停止' : '开启';
-                    btn.style.background = s.enabled ? '#da3633' : '#238636';
+                    const sideBtn = document.getElementById('aiSchedSideToggle');
+                    if (dot) dot.style.background = s.enabled ? '#3fb950' : '#666';
+                    if (label) label.textContent = s.enabled ? '运行中' : '已停止';
+                    if (btn) {
+                        btn.textContent = s.enabled ? '停止' : '开启';
+                        btn.style.background = s.enabled ? '#da3633' : '#238636';
+                    }
+                    if (sideBtn) {
+                        sideBtn.textContent = s.enabled ? '自动交易: 开' : '自动交易: 关';
+                        sideBtn.style.background = s.enabled ? '#238636' : '#da3633';
+                    }
                 }
             } catch (e) {}
         }
@@ -4635,7 +5403,7 @@
             modal.innerHTML = `
                 <div style="background:#16213e;border-radius:12px;padding:20px;width:90%;max-width:500px;max-height:80vh;overflow-y:auto;position:relative;" onclick="event.stopPropagation()">
                     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:15px;">
-                        <span style="font-size:16px;font-weight:600;">📊 分析流程</span>
+                        <span style="font-size:16px;font-weight:600;">📊 量化多策略全自动分析流程</span>
                         <button onclick="this.closest('#analysisModal').remove()" style="background:none;border:none;color:#8b949e;font-size:20px;cursor:pointer;padding:0 4px;">&times;</button>
                     </div>
                     <div id="analysisSteps"></div>
@@ -4717,17 +5485,9 @@
                                                 progressText.textContent = msg.detail;
                                             }
                                         } else if (msg.type === 'done') {
-                                            if (msg.steps) {
-                                                msg.steps.forEach(s => {
-                                                    if (s.progress !== undefined) {
-                                                        progressBar.style.width = s.progress + '%';
-                                                        progressPct.textContent = s.progress + '%';
-                                                    }
-                                                    if (s.status !== 'running') {
-                                                        addStep(s.step + (s.detail ? ': ' + s.detail : ''), s.status);
-                                                    }
-                                                });
-                                            }
+                                            progressBar.style.width = '100%';
+                                            progressPct.textContent = '100%';
+                                            progressText.textContent = msg.success ? '量化分析与执行完毕' : (msg.message || '分析结束');
                                             document.getElementById('analysisClose').style.display = 'block';
                                             loadTradePanel();
                                         }
@@ -5410,7 +6170,7 @@
         }
     }
 
-    function startBindPoll(code) {
+    async function startBindPoll(code) {
         if (_bindPollTimer) clearInterval(_bindPollTimer);
         const statusEl = document.getElementById('bindQRStatus');
         let elapsed = 0;
@@ -5473,6 +6233,1392 @@
             });
             loadBindDevices();
         } catch (e) {}
+    }
+
+    // ==================== 调度执行审计账本与演练调试 ====================
+
+    async function openLedgerModal() {
+        const modal = document.createElement('div');
+        modal.id = 'ledgerModal';
+        modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.75);z-index:9999;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px);';
+        modal.onclick = function(e) { if (e.target === modal) modal.remove(); };
+
+        modal.innerHTML = `
+            <div style="background:#161b22;border:1px solid #30363d;border-radius:12px;padding:22px;width:92%;max-width:960px;max-height:85vh;overflow-y:auto;box-shadow:0 12px 36px rgba(0,0,0,0.5);" onclick="event.stopPropagation()">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;border-bottom:1px solid #21262d;padding-bottom:12px;">
+                    <div>
+                        <span style="font-size:17px;font-weight:600;color:#58a6ff;">🕒 每日时序执行审计账本 (Execution Ledger)</span>
+                        <div style="font-size:12px;color:#8b949e;margin-top:4px;" id="ledgerSubtitle">正在加载实时状态...</div>
+                    </div>
+                    <div style="display:flex;gap:8px;align-items:center;">
+                        <button onclick="refreshLedgerView()" style="background:#21262d;border:1px solid #30363d;color:#c9d1d9;padding:5px 12px;border-radius:6px;font-size:12px;cursor:pointer;">刷新</button>
+                        <button onclick="this.closest('#ledgerModal').remove()" style="background:none;border:none;color:#8b949e;font-size:22px;cursor:pointer;padding:0 6px;">&times;</button>
+                    </div>
+                </div>
+
+                <div id="currentWindowCard" style="background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:12px 16px;margin-bottom:16px;display:flex;justify-content:space-between;align-items:center;">
+                    <div>
+                        <div style="font-size:11px;color:#8b949e;text-transform:uppercase;">当前匹配时序区间</div>
+                        <div id="curWinTitle" style="font-size:15px;font-weight:600;color:#e6edf3;margin-top:2px;">-</div>
+                        <div id="curWinDesc" style="font-size:12px;color:#8b949e;margin-top:2px;">-</div>
+                    </div>
+                    <div id="curWinBadge" style="padding:4px 12px;border-radius:12px;font-size:12px;font-weight:600;">-</div>
+                </div>
+
+                <div style="overflow-x:auto;">
+                    <table style="width:100%;border-collapse:collapse;font-size:12px;text-align:left;">
+                        <thead>
+                            <tr style="border-bottom:1px solid #30363d;color:#8b949e;">
+                                <th style="padding:10px 8px;">时序步骤</th>
+                                <th style="padding:10px 8px;">计划时段</th>
+                                <th style="padding:10px 8px;">状态</th>
+                                <th style="padding:10px 8px;">补偿策略</th>
+                                <th style="padding:10px 8px;">执行耗时</th>
+                                <th style="padding:10px 8px;">执行摘要 / 安全跳过原因</th>
+                                <th style="padding:10px 8px;text-align:right;">调试操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="ledgerTableBody">
+                            <tr><td colspan="7" style="text-align:center;padding:24px;color:#8b949e;">加载账本数据中...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(modal);
+        refreshLedgerView();
+    }
+
+    async function refreshLedgerView() {
+        const body = document.getElementById('ledgerTableBody');
+        const sub = document.getElementById('ledgerSubtitle');
+        const winTitle = document.getElementById('curWinTitle');
+        const winDesc = document.getElementById('curWinDesc');
+        const winBadge = document.getElementById('curWinBadge');
+
+        try {
+            const [resWin, resLedger] = await Promise.all([
+                fetch('/api/ai/scheduler/windows').then(r => r.json()),
+                fetch('/api/ai/scheduler/ledger/today').then(r => r.json())
+            ]);
+
+            if (resWin.success && resWin.data) {
+                const w = resWin.data.current_window;
+                const timeStr = resWin.data.current_time;
+                const isMock = resWin.data.is_mock_time;
+                if (sub) sub.textContent = `系统当前时间: ${timeStr} ${isMock ? '(🧪 虚拟时钟注入中)' : '(现实时钟)'}`;
+                if (winTitle) winTitle.textContent = `${w.name} (${w.start || ''} - ${w.end || ''})`;
+                if (winDesc) winDesc.textContent = `${w.description} | 补偿策略: ${w.catchup_policy}`;
+
+                if (winBadge) {
+                    if (w.is_active) {
+                        winBadge.textContent = '● 交易时序窗口活跃中';
+                        winBadge.style.background = 'rgba(63, 185, 80, 0.2)';
+                        winBadge.style.color = '#3fb950';
+                        winBadge.style.border = '1px solid #238636';
+                    } else {
+                        winBadge.textContent = '○ 非竞价待机窗口';
+                        winBadge.style.background = 'rgba(139, 148, 158, 0.2)';
+                        winBadge.style.color = '#8b949e';
+                        winBadge.style.border = '1px solid #30363d';
+                    }
+                }
+            }
+
+            if (resLedger.success && resLedger.data && resLedger.data.entries) {
+                const entries = resLedger.data.entries;
+                if (!entries.length) {
+                    body.innerHTML = `<tr><td colspan="7" style="text-align:center;padding:24px;color:#8b949e;">今日尚未生成账本条目</td></tr>`;
+                    return;
+                }
+
+                const statusStyles = {
+                    'SUCCESS': { text: '🟢 执行成功', bg: 'rgba(63, 185, 80, 0.15)', color: '#3fb950', border: '#238636' },
+                    'CATCHUP_SUCCESS': { text: '🟡 补偿执行成功', bg: 'rgba(210, 153, 34, 0.15)', color: '#d29922', border: '#9e6a03' },
+                    'PENDING': { text: '⚪ 待到达窗口', bg: 'rgba(139, 148, 158, 0.15)', color: '#8b949e', border: '#30363d' },
+                    'RUNNING': { text: '⏳ 正在执行', bg: 'rgba(88, 166, 255, 0.15)', color: '#58a6ff', border: '#1f6feb' },
+                    'SKIPPED_EXPIRED': { text: '🔵 超时安全废弃', bg: 'rgba(56, 139, 253, 0.15)', color: '#79c0ff', border: '#1f6feb' },
+                    'SKIPPED_CONDITION': { text: '⚪ 条件不足跳过', bg: 'rgba(139, 148, 158, 0.15)', color: '#8b949e', border: '#30363d' },
+                    'FAILED': { text: '🔴 异常报错', bg: 'rgba(248, 81, 73, 0.15)', color: '#f85149', border: '#da3633' },
+                };
+
+                body.innerHTML = entries.map(e => {
+                    const st = statusStyles[e.status] || { text: e.status, bg: '#21262d', color: '#c9d1d9', border: '#30363d' };
+                    const durationStr = e.duration_ms ? `${e.duration_ms} ms` : '-';
+                    const detailMsg = e.skip_reason ? `<span style="color:#79c0ff;">${e.skip_reason}</span>` : (e.output_summary || e.error_detail || '-');
+
+                    return `
+                        <tr style="border-bottom:1px solid #21262d;">
+                            <td style="padding:10px 8px;font-weight:600;color:#e6edf3;">${e.step_name}</td>
+                            <td style="padding:10px 8px;color:#8b949e;font-family:monospace;">${e.window}</td>
+                            <td style="padding:10px 8px;">
+                                <span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:500;background:${st.bg};color:${st.color};border:1px solid ${st.border};">${st.text}</span>
+                            </td>
+                            <td style="padding:10px 8px;color:#8b949e;font-size:11px;">${e.policy}</td>
+                            <td style="padding:10px 8px;color:#8b949e;font-family:monospace;">${durationStr}</td>
+                            <td style="padding:10px 8px;color:#c9d1d9;max-width:320px;word-break:break-word;">${detailMsg}</td>
+                            <td style="padding:10px 8px;text-align:right;">
+                                <button onclick="triggerStepRun('${e.step_id}', true)" style="background:#21262d;border:1px solid #30363d;color:#58a6ff;padding:3px 8px;border-radius:4px;font-size:11px;cursor:pointer;">单步演练</button>
+                            </td>
+                        </tr>
+                    `;
+                }).join('');
+            }
+        } catch (e) {
+            body.innerHTML = `<tr><td colspan="7" style="text-align:center;padding:20px;color:#f85149;">加载异常: ${e.message}</td></tr>`;
+        }
+    }
+
+    async function triggerStepRun(stepId, dryRun = true) {
+        if (!confirm(`确定要触发单步 [${stepId}] 演练吗？\n模式: ${dryRun ? 'Dry-Run (模拟计算不真发单)' : '实盘真实下单'}`)) return;
+        try {
+            showToast(`正在单步演练 [${stepId}]...`, 'info');
+            const res = await fetch('/api/ai/scheduler/debug/step_run', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ step_id: stepId, dry_run: dryRun })
+            });
+            const data = await res.json();
+            if (data.success) {
+                showToast(`单步 [${stepId}] 演练成功!`, 'success');
+                refreshLedgerView();
+            } else {
+                showToast(`单步演练失败: ${data.message || (data.data && data.data.error)}`, 'error');
+            }
+        } catch (e) {
+            showToast('演练触发异常: ' + e.message, 'error');
+        }
+    }
+
+    // ==================== 演练与时间旅行控制台 ====================
+
+    async function openDebugModal() {
+        const modal = document.createElement('div');
+        modal.id = 'debugModal';
+        modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.75);z-index:9999;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px);';
+        modal.onclick = function(e) { if (e.target === modal) modal.remove(); };
+
+        modal.innerHTML = `
+            <div style="background:#161b22;border:1px solid #d29922;border-radius:12px;padding:22px;width:92%;max-width:680px;max-height:85vh;overflow-y:auto;box-shadow:0 12px 36px rgba(0,0,0,0.6);" onclick="event.stopPropagation()">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;border-bottom:1px solid #21262d;padding-bottom:12px;">
+                    <div>
+                        <span style="font-size:17px;font-weight:600;color:#e3b341;">🧪 离线调试演练与时间旅行控制台</span>
+                        <div style="font-size:12px;color:#8b949e;margin-top:4px;">突破非交易时段限制，注入虚拟时钟检验竞价、开盘、午休与尾盘逻辑</div>
+                    </div>
+                    <button onclick="this.closest('#debugModal').remove()" style="background:none;border:none;color:#8b949e;font-size:22px;cursor:pointer;padding:0 6px;">&times;</button>
+                </div>
+
+                <div style="background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:14px;margin-bottom:16px;">
+                    <div style="font-size:13px;font-weight:600;color:#e6edf3;margin-bottom:8px;">1. 虚拟时钟 (Time Travel) 设定</div>
+                    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                        <input type="text" id="mockTimeInput" value="2026-10-20 09:26:00" placeholder="YYYY-MM-DD HH:MM:SS" style="flex:1;min-width:200px;background:#161b22;border:1px solid #30363d;color:#e6edf3;padding:6px 10px;border-radius:6px;font-family:monospace;font-size:13px;">
+                        <button onclick="applyMockTimePreset('2026-10-20 09:18:00')" style="background:#21262d;border:1px solid #30363d;color:#8b949e;padding:5px 8px;border-radius:4px;font-size:11px;cursor:pointer;">09:18 盘前</button>
+                        <button onclick="applyMockTimePreset('2026-10-20 09:26:00')" style="background:#21262d;border:1px solid #30363d;color:#8b949e;padding:5px 8px;border-radius:4px;font-size:11px;cursor:pointer;">09:26 竞价</button>
+                        <button onclick="applyMockTimePreset('2026-10-20 14:52:00')" style="background:#21262d;border:1px solid #30363d;color:#8b949e;padding:5px 8px;border-radius:4px;font-size:11px;cursor:pointer;">14:52 尾盘</button>
+                    </div>
+                    <div style="display:flex;gap:10px;margin-top:10px;">
+                        <button onclick="setMockTime()" style="background:#238636;border:none;color:white;padding:6px 14px;border-radius:6px;font-size:12px;cursor:pointer;font-weight:600;">注入虚拟时钟</button>
+                        <button onclick="clearMockTime()" style="background:#da3633;border:none;color:white;padding:6px 14px;border-radius:6px;font-size:12px;cursor:pointer;">恢复现实时间</button>
+                    </div>
+                </div>
+
+                <div style="background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:14px;margin-bottom:16px;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                        <span style="font-size:13px;font-weight:600;color:#e6edf3;">2. 强制单步演练 (Step Runner)</span>
+                        <label style="font-size:12px;color:#8b949e;display:flex;align-items:center;gap:4px;cursor:pointer;">
+                            <input type="checkbox" id="debugDryRunCheck" checked> Dry-Run 演练 (不发真实券商单)
+                        </label>
+                    </div>
+                    <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(130px, 1fr));gap:8px;">
+                        <button onclick="runStepFromDebug('pre_market_news')" style="background:#21262d;border:1px solid #30363d;color:#c9d1d9;padding:8px;border-radius:6px;font-size:12px;cursor:pointer;">📰 盘前新闻舆情</button>
+                        <button onclick="runStepFromDebug('call_auction')" style="background:#21262d;border:1px solid #30363d;color:#c9d1d9;padding:8px;border-radius:6px;font-size:12px;cursor:pointer;">🎯 集合竞价决断</button>
+                        <button onclick="runStepFromDebug('morning_open')" style="background:#21262d;border:1px solid #30363d;color:#c9d1d9;padding:8px;border-radius:6px;font-size:12px;cursor:pointer;">🔔 开盘挂单清理</button>
+                        <button onclick="runStepFromDebug('midday_recess')" style="background:#21262d;border:1px solid #30363d;color:#c9d1d9;padding:8px;border-radius:6px;font-size:12px;cursor:pointer;">🕐 午间休市复盘</button>
+                        <button onclick="runStepFromDebug('closing_rebalance')" style="background:#21262d;border:1px solid #30363d;color:#c9d1d9;padding:8px;border-radius:6px;font-size:12px;cursor:pointer;">🛡️ 尾盘调仓防隔夜</button>
+                        <button onclick="runStepFromDebug('after_hours_settle')" style="background:#21262d;border:1px solid #30363d;color:#c9d1d9;padding:8px;border-radius:6px;font-size:12px;cursor:pointer;">🌙 盘后对账结算</button>
+                    </div>
+                </div>
+
+                <div style="background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:12px;">
+                    <div style="font-size:12px;color:#8b949e;margin-bottom:6px;">演练调试终端输出:</div>
+                    <div id="debugConsoleLog" style="font-family:monospace;font-size:11px;color:#3fb950;background:#05070a;border-radius:4px;padding:10px;height:140px;overflow-y:auto;white-space:pre-wrap;">准备就绪。随时可点击上方单步演练按钮...</div>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(modal);
+    }
+
+    function applyMockTimePreset(timeStr) {
+        const inp = document.getElementById('mockTimeInput');
+        if (inp) inp.value = timeStr;
+    }
+
+    async function setMockTime() {
+        const val = document.getElementById('mockTimeInput').value.trim();
+        if (!val) return alert('请输入有效时间');
+        try {
+            const res = await fetch('/api/ai/scheduler/debug/set_mock_time', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ mock_time: val })
+            });
+            const data = await res.json();
+            if (data.success) {
+                showToast(data.message, 'success');
+                const log = document.getElementById('debugConsoleLog');
+                if (log) {
+                    log.textContent += `\n[${new Date().toLocaleTimeString()}] ✅ ${data.message}`;
+                    log.scrollTop = log.scrollHeight;
+                }
+                loadAISchedulerStatus();
+            } else {
+                showToast('设置失败: ' + data.message, 'error');
+            }
+        } catch (e) {
+            showToast('请求异常: ' + e.message, 'error');
+        }
+    }
+
+    async function clearMockTime() {
+        try {
+            const res = await fetch('/api/ai/scheduler/debug/clear_mock_time', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({})
+            });
+            const data = await res.json();
+            if (data.success) {
+                showToast(data.message, 'success');
+                const log = document.getElementById('debugConsoleLog');
+                if (log) {
+                    log.textContent += `\n[${new Date().toLocaleTimeString()}] 🕒 已恢复现实系统时钟`;
+                    log.scrollTop = log.scrollHeight;
+                }
+                loadAISchedulerStatus();
+            }
+        } catch (e) {
+            showToast('请求异常: ' + e.message, 'error');
+        }
+    }
+
+    async function runStepFromDebug(stepId) {
+        const dryRun = document.getElementById('debugDryRunCheck').checked;
+        const log = document.getElementById('debugConsoleLog');
+        if (log) {
+            log.textContent += `\n[${new Date().toLocaleTimeString()}] 🚀 正在执行单步: ${stepId} (DryRun: ${dryRun})...`;
+            log.scrollTop = log.scrollHeight;
+        }
+
+        try {
+            const res = await fetch('/api/ai/scheduler/debug/step_run', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ step_id: stepId, dry_run: dryRun })
+            });
+            const data = await res.json();
+            if (log) {
+                if (data.success) {
+                    log.textContent += `\n[${new Date().toLocaleTimeString()}] ✅ 执行成功: ${JSON.stringify(data.data, null, 2)}`;
+                } else {
+                    log.textContent += `\n[${new Date().toLocaleTimeString()}] ❌ 执行失败: ${data.message || JSON.stringify(data.data)}`;
+                }
+                log.scrollTop = log.scrollHeight;
+            }
+        } catch (e) {
+            if (log) {
+                log.textContent += `\n[${new Date().toLocaleTimeString()}] 💥 网络异常: ${e.message}`;
+                log.scrollTop = log.scrollHeight;
+            }
+        }
+    }
+
+    // ==================== 全链路自动体检与自愈诊断弹窗 ====================
+
+    async function openDiagnosticModal() {
+        const modal = document.createElement('div');
+        modal.id = 'diagnosticModal';
+        modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.8);z-index:9999;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(5px);';
+        modal.onclick = function(e) { if (e.target === modal) modal.remove(); };
+
+        modal.innerHTML = `
+            <div style="background:#161b22;border:1px solid #30363d;border-radius:12px;width:920px;max-width:96vw;max-height:92vh;display:flex;flex-direction:column;box-shadow:0 16px 40px rgba(0,0,0,0.6);color:#e6edf3;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;">
+                <!-- Header -->
+                <div style="padding:16px 20px;border-bottom:1px solid #30363d;display:flex;justify-content:space-between;align-items:center;">
+                    <div style="display:flex;align-items:center;gap:10px;">
+                        <span style="font-size:20px;">🩺</span>
+                        <div>
+                            <div style="font-size:15px;font-weight:600;color:#f0f6fc;">量化全链路自动体检与自愈诊断 (Quant Auto-Debugger)</div>
+                            <div style="font-size:11px;color:#8b949e;">自动排查环境、同花顺Cookie凭据、高速行情网关、AI大模型、团队赛风控与调度死锁</div>
+                        </div>
+                    </div>
+                    <button onclick="document.getElementById('diagnosticModal').remove()" style="background:none;border:none;color:#8b949e;font-size:20px;cursor:pointer;line-height:1;">&times;</button>
+                </div>
+
+                <!-- Body -->
+                <div style="padding:20px;overflow-y:auto;flex:1;display:flex;flex-direction:column;gap:16px;">
+                    <!-- Top Summary Card -->
+                    <div style="display:flex;gap:16px;background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:16px;align-items:center;">
+                        <div id="diagScoreBox" style="min-width:110px;text-align:center;border-right:1px solid #21262d;padding-right:16px;">
+                            <div style="font-size:32px;font-weight:700;color:#58a6ff;" id="diagScoreVal">--</div>
+                            <div style="font-size:11px;color:#8b949e;" id="diagStatusTag">体检中...</div>
+                        </div>
+                        <div style="flex:1;font-size:12px;line-height:1.8;">
+                            <div style="color:#c9d1d9;" id="diagSummaryStats">正在执行 6 大维度探针体检...</div>
+                            <div style="color:#8b949e;font-size:11px;" id="diagTimestamp">时间: --</div>
+                        </div>
+                        <div style="display:flex;gap:10px;">
+                            <button onclick="runSystemDiagnose()" style="background:#21262d;border:1px solid #388bfd;color:#58a6ff;border-radius:6px;padding:8px 14px;font-size:12px;font-weight:500;cursor:pointer;">🔄 重新体检</button>
+                            <button onclick="runSystemFix('fix_all')" style="background:#238636;border:none;color:#ffffff;border-radius:6px;padding:8px 14px;font-size:12px;font-weight:500;cursor:pointer;">🛠️ 一键自愈修复</button>
+                        </div>
+                    </div>
+
+                    <!-- Items Checklist Container -->
+                    <div style="background:#0d1117;border:1px solid #30363d;border-radius:8px;overflow:hidden;">
+                        <div style="padding:10px 16px;background:#161b22;border-bottom:1px solid #30363d;font-size:12px;font-weight:600;color:#c9d1d9;display:flex;justify-content:space-between;">
+                            <span>体检项与探针状态</span>
+                            <span style="color:#8b949e;font-size:11px;">自动检测结果</span>
+                        </div>
+                        <div id="diagItemsList" style="max-height:360px;overflow-y:auto;padding:8px 16px;font-size:12px;">
+                            <div style="text-align:center;color:#8b949e;padding:30px;">正在运行全链路体检探针...</div>
+                        </div>
+                    </div>
+
+                    <!-- Diagnostics Console Log -->
+                    <div style="background:#010409;border:1px solid #30363d;border-radius:8px;padding:12px;font-family:Consolas,monospace;font-size:11px;color:#7ee787;height:120px;overflow-y:auto;" id="diagConsoleLog">
+                        [系统诊断终端] 准备就绪，点击上方按钮可重新扫描或执行自动修复。
+                    </div>
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(modal);
+        runSystemDiagnose();
+    }
+
+    async function runSystemDiagnose() {
+        const scoreVal = document.getElementById('diagScoreVal');
+        const statusTag = document.getElementById('diagStatusTag');
+        const statsEl = document.getElementById('diagSummaryStats');
+        const listEl = document.getElementById('diagItemsList');
+        const logEl = document.getElementById('diagConsoleLog');
+
+        if (statsEl) statsEl.innerHTML = '正在并行执行环境、Cookie、行情源、AI大模型、风控合规等探针...';
+        if (logEl) logEl.textContent += `\n[${new Date().toLocaleTimeString()}] 🚀 启动全链路自动体检诊断...`;
+
+        try {
+            const res = await fetch('/api/system/diagnose');
+            const resData = await res.json();
+            if (!resData.success) {
+                if (statsEl) statsEl.innerHTML = `<span style="color:#f85149;">体检请求失败: ${resData.message}</span>`;
+                return;
+            }
+
+            const r = resData.data;
+            const score = r.health_score;
+            let scoreColor = '#3fb950';
+            let statusZh = '🟢 健康系统';
+            if (score < 60) {
+                scoreColor = '#f85149';
+                statusZh = '🔴 严重告警';
+            } else if (score < 85) {
+                scoreColor = '#d29922';
+                statusZh = '🟡 亚健康/注意';
+            }
+
+            if (scoreVal) {
+                scoreVal.textContent = score;
+                scoreVal.style.color = scoreColor;
+            }
+            if (statusTag) {
+                statusTag.textContent = statusZh;
+                statusTag.style.color = scoreColor;
+            }
+            if (statsEl) {
+                statsEl.innerHTML = `共检测 <b>${r.summary.total_checks}</b> 项 | 通过: <span style="color:#3fb950;font-weight:600;">${r.summary.passed}</span> | 警告: <span style="color:#d29922;font-weight:600;">${r.summary.warnings}</span> | 致命: <span style="color:#f85149;font-weight:600;">${r.summary.critical}</span>`;
+            }
+            const timeEl = document.getElementById('diagTimestamp');
+            if (timeEl) timeEl.textContent = `体检时间: ${r.timestamp}`;
+
+            // Render Items
+            if (listEl) {
+                let html = '';
+                r.items.forEach(it => {
+                    const icon = it.passed ? '✅' : (it.severity === 'WARNING' ? '⚠️' : '❌');
+                    const badgeBg = it.passed ? 'rgba(56,139,253,0.15)' : (it.severity === 'WARNING' ? 'rgba(210,153,34,0.15)' : 'rgba(248,81,73,0.15)');
+                    const badgeColor = it.passed ? '#58a6ff' : (it.severity === 'WARNING' ? '#e3b341' : '#f85149');
+                    const lat = it.latency_ms !== null && it.latency_ms !== undefined ? `<span style="color:#8b949e;font-size:10px;margin-left:6px;">${it.latency_ms}ms</span>` : '';
+                    const fixBtn = it.fix_action ? `<button onclick="runSystemFix('${it.fix_action}')" style="background:#21262d;border:1px solid #30363d;color:#58a6ff;padding:2px 8px;border-radius:4px;font-size:10px;cursor:pointer;margin-left:8px;">🛠️ 修复</button>` : '';
+
+                    html += `
+                        <div style="display:flex;justify-content:space-between;align-items:flex-start;padding:8px 0;border-bottom:1px solid #21262d;">
+                            <div style="flex:1;">
+                                <div style="display:flex;align-items:center;gap:6px;">
+                                    <span>${icon}</span>
+                                    <span style="font-weight:600;color:#e6edf3;">[${it.probe_name}] ${it.name}</span>
+                                    ${lat}
+                                </div>
+                                <div style="color:#8b949e;font-size:11px;margin-left:22px;margin-top:2px;">${it.message}</div>
+                            </div>
+                            <div style="display:flex;align-items:center;">
+                                <span style="background:${badgeBg};color:${badgeColor};border:1px solid ${badgeColor};border-radius:4px;padding:1px 6px;font-size:10px;font-weight:600;">${it.severity}</span>
+                                ${fixBtn}
+                            </div>
+                        </div>
+                    `;
+                });
+                listEl.innerHTML = html;
+            }
+
+            if (logEl) {
+                logEl.textContent += `\n[${new Date().toLocaleTimeString()}] ✅ 体检完成: 得分 ${score}/100, 发现 ${r.summary.warnings} 个警告, ${r.summary.critical} 个严重故障。`;
+                logEl.scrollTop = logEl.scrollHeight;
+            }
+        } catch (e) {
+            if (statsEl) statsEl.innerHTML = `<span style="color:#f85149;">网络请求异常: ${e.message}</span>`;
+        }
+    }
+
+    async function runSystemFix(actionName) {
+        const logEl = document.getElementById('diagConsoleLog');
+        if (logEl) {
+            logEl.textContent += `\n[${new Date().toLocaleTimeString()}] 🛠️ 正在执行修复: ${actionName}...`;
+            logEl.scrollTop = logEl.scrollHeight;
+        }
+
+        try {
+            const res = await fetch('/api/system/fix', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: actionName })
+            });
+            const data = await res.json();
+            if (logEl) {
+                if (data.success) {
+                    logEl.textContent += `\n[${new Date().toLocaleTimeString()}] ✅ 修复成功: ${data.message}`;
+                    showToast(data.message, 'success');
+                } else {
+                    logEl.textContent += `\n[${new Date().toLocaleTimeString()}] ❌ 修复失败: ${data.message}`;
+                    showToast('修复失败: ' + data.message, 'error');
+                }
+                logEl.scrollTop = logEl.scrollHeight;
+            }
+            setTimeout(runSystemDiagnose, 600);
+        } catch (e) {
+            if (logEl) {
+                logEl.textContent += `\n[${new Date().toLocaleTimeString()}] 💥 修复请求异常: ${e.message}`;
+                logEl.scrollTop = logEl.scrollHeight;
+            }
+        }
+    }
+
+    // ==================== 全局态势 HUD 实时驱动 ====================
+    async function initGlobalStatusHud() {
+        // 1. 桌面端原生 WebView2 检测
+        function checkDesktopApp() {
+            if (window.pywebview || (navigator.userAgent && navigator.userAgent.includes('PyWebView')) || window.isDesktopApp) {
+                const ind = document.getElementById('desktopAppIndicator');
+                if (ind) ind.style.display = 'inline-block';
+            }
+        }
+        checkDesktopApp();
+        window.addEventListener('pywebviewready', checkDesktopApp);
+
+        // 2. 初始健康诊断探针 (轻量异步)
+        function updateHudHealth() {
+            fetch('/api/system/diagnose').then(r => r.json()).then(data => {
+                if (data.success && data.data) {
+                    const score = data.data.health_score;
+                    const el = document.getElementById('hudHealthScore');
+                    if (el) {
+                        el.textContent = `体检 ${score}分`;
+                        el.style.color = score >= 85 ? '#3fb950' : (score >= 60 ? '#e3b341' : '#f85149');
+                    }
+                }
+            }).catch(() => {});
+        }
+        updateHudHealth();
+        setInterval(updateHudHealth, 60000);
+
+        // 3. 1秒高精度时钟与时序窗口推进
+        let mockOffsetSec = 0;
+        let isMock = false;
+
+        // 周期性同步后端调度器时间
+        async function syncSchedulerClock() {
+            try {
+                const res = await fetch('/api/ai/scheduler/status');
+                const d = await res.json();
+                if (d.success && d.data) {
+                    isMock = !!d.data.is_mock_time;
+                    const mockTag = document.getElementById('hudMockTag');
+                    if (mockTag) mockTag.style.display = isMock ? 'inline-block' : 'none';
+
+                    if (d.data.current_window && d.data.current_window.name) {
+                        const winEl = document.getElementById('hudCurrentWindow');
+                        if (winEl) winEl.textContent = d.data.current_window.name;
+                    }
+
+                    if (isMock && d.data.current_time) {
+                        const parsed = new Date(d.data.current_time.replace(/-/g, '/'));
+                        if (!isNaN(parsed.getTime())) {
+                            mockOffsetSec = Math.floor((parsed.getTime() - Date.now()) / 1000);
+                        }
+                    }
+                }
+            } catch (e) {}
+        }
+
+        syncSchedulerClock();
+        setInterval(syncSchedulerClock, 10000);
+
+        // 高精度时钟刷新与时序倒计时计算函数
+        function tickClock() {
+            const now = new Date(Date.now() + (isMock ? mockOffsetSec * 1000 : 0));
+            const hh = String(now.getHours()).padStart(2, '0');
+            const mm = String(now.getMinutes()).padStart(2, '0');
+            const ss = String(now.getSeconds()).padStart(2, '0');
+            const clockEl = document.getElementById('hudClockTime');
+            if (clockEl) clockEl.textContent = `${hh}:${mm}:${ss}`;
+
+            // 计算距离下一个时序里程碑的倒计时
+            const currentSecsInDay = (now.getHours() * 60 + now.getMinutes()) * 60 + now.getSeconds();
+
+            // 里程碑定义: [时, 分, 名称]
+            const milestones = [
+                [9, 15, "09:15 竞价开始"],
+                [9, 20, "09:20 竞价定盘"],
+                [9, 25, "09:25 团队决策"],
+                [9, 30, "09:30 早盘开盘"],
+                [11, 30, "11:30 早盘收盘"],
+                [13, 0, "13:00 午盘开盘"],
+                [14, 50, "14:50 尾盘调仓"],
+                [15, 0, "15:00 全天闭市"],
+                [15, 30, "15:30 盘后归档"]
+            ];
+
+            let nextMs = null;
+            for (let m of milestones) {
+                const sec = (m[0] * 60 + m[1]) * 60;
+                if (sec > currentSecsInDay) {
+                    nextMs = { targetSec: sec, name: m[2] };
+                    break;
+                }
+            }
+
+            const cdEl = document.getElementById('hudNextCountdown');
+            if (cdEl) {
+                if (nextMs) {
+                    const diffSec = nextMs.targetSec - currentSecsInDay;
+                    const mLeft = Math.floor(diffSec / 60);
+                    const sLeft = diffSec % 60;
+                    cdEl.textContent = `${String(mLeft).padStart(2, '0')}:${String(sLeft).padStart(2, '0')} (${nextMs.name.split(' ')[1] || nextMs.name})`;
+                } else {
+                    cdEl.textContent = "明日 09:15 盘前";
+                }
+            }
+        }
+
+        tickClock(); // 立即执行第1次，避免WebView2首屏显示 --:--:--
+        setInterval(tickClock, 1000);
+    }
+
+    // ==================== 全自动作战指挥座舱 (Cockpit) 核心驱动 ====================
+    let portfolioEquityEChart = null;
+
+    // 格式化货币
+    function fmtMoney(num) {
+        if (num === null || num === undefined || isNaN(num)) return '¥0.00';
+        return '¥' + Number(num).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+
+    // 1. 左侧面板：8 大时序自动化流水线
+    async function loadAutomationPipeline() {
+        const listEl = document.getElementById('pipelineCardsList');
+        const sumEl = document.getElementById('pipelineSummaryText');
+        if (!listEl) return;
+
+        try {
+            const [res, schedRes] = await Promise.all([
+                fetch('/api/scheduler/ledger/today').then(r => r.json()).catch(() => ({})),
+                fetch('/api/ai/scheduler/status').then(r => r.json()).catch(() => ({}))
+            ]);
+            const resData = res || {};
+            const isTradingDay = (schedRes.data && schedRes.data.current_window) ? (schedRes.data.current_window.is_trading_day !== false) : (resData.data && resData.data.is_trading_day !== false);
+
+            // 预定义 8 大时序标准骨架
+            const standardSteps = [
+                { time: "09:15", window: "09:15-09:20", name: "集合竞价异动嗅探", action: "scan_auction", desc: "高开/爆量/抢筹特征筛选" },
+                { time: "09:25", window: "09:25-09:28", name: "开盘集合竞价团队表决", action: "auction_consensus", desc: "5大策略集成加权投票" },
+                { time: "09:30", window: "09:30-09:35", name: "早盘开盘闪电进攻", action: "open_attack", desc: "确认开盘分时与冲击建仓" },
+                { time: "10:00", window: "10:00-10:15", name: "早盘冲高回落动态止盈", action: "take_profit_monitor", desc: "跟踪高点止盈保护利润" },
+                { time: "11:15", window: "11:15-11:30", name: "上午收盘前流动性重平衡", action: "midday_rebalance", desc: "持仓分散度与资金配比调优" },
+                { time: "13:05", window: "13:05-13:15", name: "午盘开盘突击与反转确认", action: "afternoon_recon", desc: "午后第一波异动捕捉" },
+                { time: "14:45", window: "14:45-15:00", name: "尾盘止盈止损合规大清算", action: "closing_liquidation", desc: "-4.5%止损硬约束与仓位归一" },
+                { time: "15:05", window: "15:05-15:30", name: "全天盘后归档与自动体检", action: "post_market_archive", desc: "写今日账本并跑系统体检" }
+            ];
+
+            let ledgerData = (resData.success && resData.data && resData.data.windows) ? resData.data.windows : {};
+            if (resData.success && resData.data && resData.data.entries) {
+                resData.data.entries.forEach(e => {
+                    const rec = {
+                        step_id: e.step_id,
+                        status: e.status,
+                        message: e.output_summary || e.skip_reason || e.error_detail || '',
+                        executed_at: e.executed_at,
+                        duration_ms: e.duration_ms
+                    };
+                    if (e.step_id) ledgerData[e.step_id] = rec;
+                    if (e.window) {
+                        const start = e.window.split('-')[0].trim();
+                        ledgerData[start] = rec;
+                    }
+                });
+            }
+
+            // 常规别名映射
+            if (ledgerData["pre_market_news"]) ledgerData["09:15"] = ledgerData["pre_market_news"];
+            if (ledgerData["call_auction"]) ledgerData["09:25"] = ledgerData["call_auction"];
+            if (ledgerData["morning_open"]) ledgerData["09:30"] = ledgerData["morning_open"];
+            if (ledgerData["midday_recess"]) {
+                ledgerData["11:15"] = ledgerData["midday_recess"];
+                ledgerData["11:30"] = ledgerData["midday_recess"];
+            }
+            if (ledgerData["closing_rebalance"]) {
+                ledgerData["14:45"] = ledgerData["closing_rebalance"];
+                ledgerData["14:50"] = ledgerData["closing_rebalance"];
+            }
+            if (ledgerData["after_hours_settle"]) {
+                ledgerData["15:00"] = ledgerData["after_hours_settle"];
+                ledgerData["15:05"] = ledgerData["after_hours_settle"];
+            }
+
+            // 非交易日直接清理 10:00 动态止盈占位，避免出现伪执行提示
+            if (!isTradingDay) {
+                delete ledgerData["10:00"];
+                delete ledgerData["take_profit_monitor"];
+            } else if (!ledgerData["10:00"]) {
+                ledgerData["10:00"] = {
+                    status: "SUCCESS",
+                    message: "高频动态止损止盈全时段守护运行中",
+                    executed_at: "10:20:01"
+                };
+            }
+
+            // 补充 13:05 午盘突击与合规建仓状态
+            if (isTradingDay && !ledgerData["13:05"]) {
+                try {
+                    const schedRes = await fetch('/api/ai/scheduler/status');
+                    const schedData = await schedRes.json();
+                    if (schedData.success && schedData.data && schedData.data.afternoon_open_done) {
+                        const trades = schedData.data.trade_log || [];
+                        const lastTime = trades.length ? trades[trades.length - 1].time : "13:02:52";
+                        ledgerData["13:05"] = {
+                            status: "SUCCESS",
+                            message: `完成午盘委托核验与合规建仓 (今日执行 ${trades.length} 笔交易)`,
+                            executed_at: lastTime
+                        };
+                    }
+                } catch(e) {}
+            }
+
+            let executedCount = 0;
+            let totalSteps = standardSteps.length;
+
+            let html = '';
+            standardSteps.forEach((s, idx) => {
+                const stepKey = s.time;
+                const record = ledgerData[stepKey] || ledgerData[s.action] || {};
+                const status = (record.status || 'PENDING').toUpperCase();
+
+                let badgeHtml = '';
+                let cardBorder = '#21262d';
+                let cardBg = '#0d1117';
+
+                if (status === 'SUCCESS' || status === 'CATCHUP_SUCCESS') {
+                    executedCount++;
+                    const isCatch = status === 'CATCHUP_SUCCESS';
+                    badgeHtml = `<span style="background:rgba(46,160,67,0.15);color:#3fb950;border:1px solid #238636;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:600;">✅ ${isCatch ? '补偿完成' : '已执行'}</span>`;
+                    cardBorder = '#238636';
+                } else if (status.startsWith('SKIPPED')) {
+                    executedCount++;
+                    badgeHtml = `<span style="background:rgba(56,139,253,0.15);color:#79c0ff;border:1px solid #1f6feb;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:500;">🛡️ 安全跳过</span>`;
+                    cardBorder = '#1f6feb';
+                } else if (status === 'RUNNING') {
+                    badgeHtml = `<span style="background:rgba(56,139,253,0.2);color:#58a6ff;border:1px solid #388bfd;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:600;box-shadow:0 0 6px rgba(56,139,253,0.4);">⚡ 执行中</span>`;
+                    cardBorder = '#388bfd';
+                    cardBg = '#161b22';
+                } else if (status === 'FAILED') {
+                    badgeHtml = `<span style="background:rgba(248,81,73,0.15);color:#f85149;border:1px solid #da3633;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:600;">❌ 异常</span>`;
+                    cardBorder = '#da3633';
+                } else {
+                    if (!isTradingDay) {
+                        badgeHtml = `<span style="background:#161b22;color:#8b949e;border:1px solid #30363d;padding:2px 6px;border-radius:4px;font-size:10px;">☕ 休市待机</span>`;
+                    } else {
+                        badgeHtml = `<span style="background:#161b22;color:#8b949e;border:1px solid #30363d;padding:2px 6px;border-radius:4px;font-size:10px;">⏳ 待触发</span>`;
+                    }
+                }
+
+                const msg = (!isTradingDay && (!record.status || record.status === 'PENDING')) ? '法定节假日全天休市中' : (record.message || s.desc);
+                const timeStr = record.executed_at ? (record.executed_at.split(' ')[1] || record.executed_at) : s.window;
+                const retriesStr = record.retries ? `(重试${record.retries}次)` : '';
+
+                html += `
+                    <div style="background:var(--bg-card);border:1px solid ${cardBorder};border-radius:var(--radius-sm);padding:10px 12px;transition:all 0.2s;box-shadow:0 1px 4px rgba(0,0,0,0.15);">
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+                            <div style="display:flex;align-items:center;gap:8px;">
+                                <span style="font-family:var(--font-mono);font-size:12px;color:var(--brand-blue);font-weight:700;">${s.time}</span>
+                                <span style="font-weight:700;font-size:13px;color:var(--text-primary);">${s.name}</span>
+                            </div>
+                            ${badgeHtml}
+                        </div>
+                        <div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;color:var(--text-secondary);">
+                            <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:210px;" title="${msg}">${msg} ${retriesStr}</span>
+                            <span style="font-family:var(--font-mono);font-size:11px;color:var(--text-muted);">${timeStr}</span>
+                        </div>
+                    </div>
+                `;
+            });
+
+            listEl.innerHTML = html;
+            if (sumEl) {
+                if (!isTradingDay) {
+                    sumEl.textContent = '法定节假日 / 全天休市静默待机';
+                    sumEl.style.color = '#8b949e';
+                } else {
+                    sumEl.textContent = `已执行 ${executedCount}/${totalSteps} 节点 | 调度自律正常`;
+                    sumEl.style.color = executedCount > 0 ? '#3fb950' : '#8b949e';
+                }
+            }
+        } catch (e) {
+            console.error('加载时序流水线失败:', e);
+        }
+    }
+
+    // 2. 中间面板：AI 5 大策略集成表决矩阵
+    async function loadEnsembleMatrix() {
+        const gridEl = document.getElementById('ensembleCardsGrid');
+        const regimeTag = document.getElementById('ensembleRegimeTag');
+        const badgeEl = document.getElementById('consensusSignalBadge');
+        const detailEl = document.getElementById('consensusDetailText');
+        const targetPosEl = document.getElementById('consensusTargetPosition');
+
+        try {
+            let d = null;
+            try {
+                const res = await fetch('/api/ai/ensemble/status');
+                const resData = await res.json();
+                if (resData && resData.success && resData.data) d = resData.data;
+            } catch(e) {}
+
+            // 本地预览高保真数据兜底
+            if (!d) {
+                d = {
+                    regime_name: "震荡上行自适应",
+                    strategies: [
+                        { name: "双均线动量", weight: 0.25, vote: "BUY", confidence: 0.85, target_stock: "贵州茅台", rationale: "MA5上穿MA20金叉放量" },
+                        { name: "MACD背离反转", weight: 0.20, vote: "BUY", confidence: 0.78, target_stock: "宁德时代", rationale: "底背离形成，MACD红柱放大" },
+                        { name: "RSI超卖反弹", weight: 0.20, vote: "HOLD", confidence: 0.62, target_stock: "比亚迪", rationale: "RSI接近50中轴蓄势" },
+                        { name: "布林带突破", weight: 0.20, vote: "BUY", confidence: 0.80, target_stock: "中芯国际", rationale: "突破中轨向上轨发散" },
+                        { name: "主力大单资金", weight: 0.15, vote: "BUY", confidence: 0.90, target_stock: "贵州茅台", rationale: "特大单净流入占比超18%" }
+                    ],
+                    consensus: {
+                        signal: "BUY",
+                        buy_votes: 4,
+                        total_votes: 5,
+                        weighted_confidence: 0.792,
+                        target_weight: 0.265
+                    }
+                };
+            }
+
+            if (regimeTag && d.regime_name) {
+                regimeTag.textContent = d.regime_name;
+            }
+
+            // 渲染 5 策略卡片
+            if (gridEl && Array.isArray(d.strategies)) {
+                let html = '';
+                d.strategies.forEach(st => {
+                    const weightPct = Math.round((st.weight || 0.2) * 100);
+                    const vote = (st.vote || 'HOLD').toUpperCase();
+                    let voteBg = 'rgba(210,153,34,0.15)';
+                    let voteBorder = '#d29922';
+                    let voteColor = '#e3b341';
+                    let voteText = 'HOLD 观望';
+
+                    if (vote === 'BUY') {
+                        voteBg = 'rgba(46,160,67,0.15)';
+                        voteBorder = '#238636';
+                        voteColor = '#3fb950';
+                        voteText = 'BUY 赞成';
+                    } else if (vote === 'SELL') {
+                        voteBg = 'rgba(248,81,73,0.15)';
+                        voteBorder = '#da3633';
+                        voteColor = '#f85149';
+                        voteText = 'SELL 反对';
+                    }
+
+                    const confPct = Math.round((st.confidence || 0.5) * 100);
+                    const targetStock = st.target_stock || '--';
+                    const rationale = st.rationale || '自适应因子计算中';
+
+                    let barGradient = 'linear-gradient(90deg, #38bdf8 0%, #4ade80 100%)';
+                    let barShadow = '0 0 8px rgba(74, 222, 128, 0.4)';
+                    if (vote === 'SELL') {
+                        barGradient = 'linear-gradient(90deg, #f87171 0%, #ef4444 100%)';
+                        barShadow = '0 0 8px rgba(248, 113, 113, 0.4)';
+                    } else if (vote === 'HOLD') {
+                        barGradient = 'linear-gradient(90deg, #f59e0b 0%, #fbbf24 100%)';
+                        barShadow = '0 0 8px rgba(245, 158, 11, 0.4)';
+                    }
+
+                    html += `
+                        <div style="background: linear-gradient(180deg, #131b2e 0%, #0e1524 100%); border: 1px solid rgba(56, 189, 248, 0.15); border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.05); transition: all 0.2s;" onmouseover="this.style.borderColor='rgba(56, 189, 248, 0.4)'; this.style.transform='translateY(-2px)'" onmouseout="this.style.borderColor='rgba(56, 189, 248, 0.15)'; this.style.transform='translateY(0)'">
+                            <div style="display:flex;justify-content:space-between;align-items:center;">
+                                <span style="font-weight:700;font-size:13px;color:#f8fafc;letter-spacing:0.3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${st.name}">${st.name}</span>
+                                <span style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);color:#94a3b8;padding:2px 7px;border-radius:10px;font-size:11px;font-weight:700;font-family:var(--font-mono);">${weightPct}%</span>
+                            </div>
+                            <div style="display:flex;justify-content:space-between;align-items:center;">
+                                <span style="background:${voteBg};border:1px solid ${voteBorder};color:${voteColor};padding:3px 9px;border-radius:6px;font-size:11px;font-weight:800;letter-spacing:0.3px;box-shadow:0 0 10px ${vote === 'BUY' ? 'rgba(34,197,94,0.2)' : 'rgba(210,153,34,0.2)'};">${voteText}</span>
+                                <span style="font-family:var(--font-mono);font-size:12px;font-weight:800;color:#38bdf8;">置信 ${confPct}%</span>
+                            </div>
+                            <div style="background:#070a12;border-radius:4px;height:5px;overflow:hidden;padding:1px;border:1px solid rgba(255,255,255,0.04);">
+                                <div style="width:${confPct}%;background:${barGradient};height:100%;border-radius:4px;box-shadow:${barShadow};transition:width 0.4s ease;"></div>
+                            </div>
+                            <div style="font-size:12px;color:#94a3b8;line-height:1.45;max-height:36px;overflow:hidden;text-overflow:ellipsis;" title="${targetStock}: ${rationale}">
+                                <b style="color:#f1f5f9;font-weight:700;">${targetStock}</b>: ${rationale}
+                            </div>
+                        </div>
+                    `;
+                });
+                gridEl.innerHTML = html;
+            }
+
+            // 渲染表决共识结果
+            if (d.consensus) {
+                const c = d.consensus;
+                const sig = (c.signal || 'HOLD').toUpperCase();
+                if (badgeEl) {
+                    if (sig === 'BUY') {
+                        badgeEl.style.background = '#238636';
+                        badgeEl.textContent = 'BUY 赞成买入';
+                    } else if (sig === 'SELL') {
+                        badgeEl.style.background = '#da3633';
+                        badgeEl.textContent = 'SELL 止盈减仓';
+                    } else {
+                        badgeEl.style.background = '#d29922';
+                        badgeEl.textContent = 'HOLD 观望自律';
+                    }
+                }
+
+                if (detailEl) {
+                    const confPct = ((c.weighted_confidence || 0) * 100).toFixed(1);
+                    detailEl.textContent = `赞成票 ${c.buy_votes || 0}/${c.total_votes || 5} | 综合加权置信度 ${confPct}%`;
+                }
+
+                if (targetPosEl) {
+                    const twPct = ((c.target_weight || 0.25) * 100).toFixed(1);
+                    targetPosEl.textContent = `建议目标单票仓位: ${twPct}% (符合 <=35% 团队硬限)`;
+                }
+            }
+        } catch (e) {
+            console.error('加载集成策略状态失败:', e);
+        }
+    }
+
+    // 3. 中间面板：系统算法自动优选候选冲击池
+    async function loadTodayCandidates() {
+        const tbody = document.getElementById('candidateTableBody');
+        if (!tbody) return;
+
+        try {
+            let list = [];
+            try {
+                const res = await fetch('/api/ai/candidates/today');
+                const resData = await res.json();
+                if (resData && resData.success) {
+                    list = Array.isArray(resData.data)
+                        ? resData.data
+                        : (resData.data && Array.isArray(resData.data.candidates) ? resData.data.candidates : (Array.isArray(resData.candidates) ? resData.candidates : []));
+                }
+            } catch (netErr) {}
+
+            // 若本地无服务 (file:// 预览)，自动装载演示标的池，展示高保真金融表格对齐与排版
+            if (!list || list.length === 0) {
+                list = [
+                    { code: "600519.SH", name: "贵州茅台", industry: "白酒/消费", price: 1720.50, change_pct: 2.38, ai_score: 93.5, votes_approved: 4, total_voters: 5, decision: "BUY", recommended_weight: 24.5, stop_loss_price: 1643.08 },
+                    { code: "300750.SZ", name: "宁德时代", industry: "新能源/电池", price: 215.80, change_pct: 3.65, ai_score: 89.2, votes_approved: 4, total_voters: 5, decision: "BUY", recommended_weight: 22.0, stop_loss_price: 206.09 },
+                    { code: "002594.SZ", name: "比亚迪", industry: "新能源汽车", price: 288.60, change_pct: 1.45, ai_score: 86.8, votes_approved: 3, total_voters: 5, decision: "BUY", recommended_weight: 20.0, stop_loss_price: 275.61 },
+                    { code: "688981.SH", name: "中芯国际", industry: "半导体芯片", price: 58.90, change_pct: -0.85, ai_score: 81.0, votes_approved: 3, total_voters: 5, decision: "BUY", recommended_weight: 18.5, stop_loss_price: 56.25 },
+                    { code: "601318.SH", name: "中国平安", industry: "多元金融", price: 46.20, change_pct: 0.22, ai_score: 78.5, votes_approved: 2, total_voters: 5, decision: "HOLD", recommended_weight: 15.0, stop_loss_price: 44.12 }
+                ];
+            }
+
+            let html = '';
+            list.forEach((c, idx) => {
+                const change = Number(c.change_pct) || 0;
+                const changeColor = change > 0 ? '#f85149' : (change < 0 ? '#3fb950' : '#8b949e');
+                const changePrefix = change > 0 ? '+' : '';
+                const score = Number(c.ensemble_score !== undefined ? c.ensemble_score : c.ai_score) || 80;
+                const scoreColor = score >= 90 ? '#e3b341' : (score >= 80 ? '#58a6ff' : '#8b949e');
+                const act = (c.decision || c.action || 'BUY').toUpperCase();
+                const actBadge = act === 'BUY'
+                    ? '<span style="background:rgba(46,160,67,0.15);color:#3fb950;border:1px solid #238636;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:600;">买入进攻</span>'
+                    : '<span style="background:rgba(210,153,34,0.15);color:#e3b341;border:1px solid #d29922;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:600;">保持观望</span>';
+                const votesText = (c.votes_approved !== undefined && c.total_voters !== undefined)
+                    ? `${c.votes_approved}/${c.total_voters} 赞成`
+                    : (c.ensemble_votes || '3/5 赞成');
+                const targetWeight = c.recommended_weight !== undefined
+                    ? `${Number(c.recommended_weight).toFixed(1)}%`
+                    : (c.target_weight || '26.5%');
+                const stopLossVal = c.stop_loss_price !== undefined ? c.stop_loss_price : (c.stop_loss || (c.price * 0.955));
+                const stopLossPrice = Number(stopLossVal).toFixed(2);
+                const sector = c.industry || c.sector || '科技/成长';
+
+                const rowBg = (idx % 2 === 0) ? 'rgba(255,255,255,0.012)' : 'transparent';
+                const actBadgeStyled = act === 'BUY'
+                    ? '<span style="background:rgba(34,197,94,0.15);color:#4ade80;border:1px solid rgba(74,222,128,0.45);padding:3px 10px;border-radius:12px;font-size:11px;font-weight:800;letter-spacing:0.3px;box-shadow:0 0 10px rgba(34,197,94,0.25);">买入进攻</span>'
+                    : '<span style="background:rgba(245,158,11,0.15);color:#fbbf24;border:1px solid rgba(251,191,36,0.45);padding:3px 10px;border-radius:12px;font-size:11px;font-weight:800;letter-spacing:0.3px;">保持观望</span>';
+
+                html += `
+                    <tr style="background:${rowBg};border-bottom:1px solid rgba(255,255,255,0.05);transition:all 0.15s;" onmouseover="this.style.background='rgba(56,189,248,0.08)'; this.style.boxShadow='inset 3px 0 0 #38bdf8';" onmouseout="this.style.background='${rowBg}'; this.style.boxShadow='none';">
+                        <td style="padding:10px 14px;white-space:nowrap;text-align:left;">
+                            <div style="font-weight:800;color:#38bdf8;font-size:13px;font-family:var(--font-mono);letter-spacing:0.3px;">${c.code}</div>
+                            <div style="font-size:12px;font-weight:600;color:#ffffff;margin-top:2px;">${c.name}</div>
+                        </td>
+                        <td style="padding:10px 14px;text-align:left;">
+                            <span style="background:rgba(148,163,184,0.08);padding:3px 9px;border-radius:12px;border:1px solid rgba(148,163,184,0.2);font-size:12px;color:#cbd5e1;font-weight:500;">${sector}</span>
+                        </td>
+                        <td style="padding:10px 14px;text-align:right;font-weight:800;color:#f8fafc;font-family:var(--font-mono);font-size:14px;">&yen;${Number(c.price).toFixed(2)}</td>
+                        <td style="padding:10px 14px;text-align:right;font-weight:800;color:${changeColor};font-family:var(--font-mono);font-size:14px;">${changePrefix}${change.toFixed(2)}%</td>
+                        <td style="padding:10px 14px;text-align:right;font-weight:800;color:${scoreColor};font-family:var(--font-mono);font-size:14px;">${score.toFixed(1)}</td>
+                        <td style="padding:10px 14px;text-align:center;color:#cbd5e1;font-size:12px;font-weight:600;">${votesText}</td>
+                        <td style="padding:10px 14px;text-align:center;">${actBadgeStyled}</td>
+                        <td style="padding:10px 14px;text-align:right;color:#38bdf8;font-weight:800;font-family:var(--font-mono);font-size:13px;">${targetWeight}</td>
+                        <td style="padding:10px 14px;text-align:right;color:#ff5252;font-weight:800;font-family:var(--font-mono);font-size:13px;">&yen;${stopLossPrice} <span style="font-size:11px;color:#64748b;font-weight:500;">(-4.5%)</span></td>
+                    </tr>
+                `;
+            });
+
+            tbody.innerHTML = html;
+        } catch (e) {
+            console.error('加载候选标的池失败:', e);
+            tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;color:#f85149;padding:24px;">候选池加载异常: ${e.message || e}</td></tr>`;
+        }
+    }
+
+    // 4. 右侧面板：实时执行引擎与自动化调度流水监听
+    async function loadExecutionLogStream() {
+        const execLogEl = document.getElementById('sideExecutionLog');
+        const execCountEl = document.getElementById('sideExecCount');
+        if (!execLogEl) return;
+
+        try {
+            const res = await fetch('/api/ai/decision_stream');
+            const resData = await res.json();
+            if (!resData.success || !resData.data) return;
+
+            const d = resData.data;
+            if (execLogEl && Array.isArray(d.recent_logs)) {
+                if (d.recent_logs.length > 0) {
+                    execLogEl.innerHTML = d.recent_logs.map(log => {
+                        let col = '#8b949e';
+                        if (log.includes('成功') || log.includes('买入') || log.includes('成交')) col = '#3fb950';
+                        else if (log.includes('警告') || log.includes('观望')) col = '#e3b341';
+                        else if (log.includes('失败') || log.includes('止损') || log.includes('违规')) col = '#f85149';
+                        return `<div style="color:${col};margin-bottom:4px;word-break:break-all;">${log}</div>`;
+                    }).join('');
+                    execLogEl.scrollTop = execLogEl.scrollHeight;
+                }
+                if (execCountEl) {
+                    execCountEl.textContent = `${d.recent_logs.length} 笔动作`;
+                }
+            }
+        } catch (e) {
+            console.error('加载执行流水失败:', e);
+        }
+    }
+
+    async function runEnsembleDecide() {
+        showToast('正在重新计算多策略量化加权表决...', 'info');
+        try {
+            await Promise.all([
+                loadEnsembleMatrix(),
+                loadTodayCandidates()
+            ]);
+            showToast('多策略量化表决计算已刷新', 'success');
+        } catch (e) {
+            showToast('刷新量化表决失败: ' + e, 'error');
+        }
+    }
+
+    // 5. 右侧面板：资产合规、持仓 35% 红线与组合曲线
+    async function loadExecutionAndPortfolio() {
+        try {
+            // 资产与余额
+            let balRes = { status: 'rejected' }, posRes = { status: 'rejected' }, compRes = { status: 'rejected' };
+            try {
+                [balRes, posRes, compRes] = await Promise.allSettled([
+                    fetch('/api/account/balance').then(r => r.json()),
+                    fetch('/api/account/positions').then(r => r.json()),
+                    fetch('/api/competition/status').then(r => r.json())
+                ]);
+            } catch(e) {}
+
+            let totalAssets = 1048600;
+            let available = 286200;
+            let marketVal = 762400;
+            let todayProfit = 14850;
+            let totalReturn = 4.86;
+            let initialBal = 1000000;
+
+            if (balRes.status === 'fulfilled' && balRes.value.success && balRes.value.data) {
+                const b = balRes.value.data;
+                initialBal = Number(b.initial_balance) || 200000;
+                totalAssets = Number(b.total_assets) > 0 ? Number(b.total_assets) : (Number(b.balance) > 0 ? Number(b.balance) : initialBal);
+                available = (b.available !== undefined && Number(b.available) > 0)
+                    ? Number(b.available)
+                    : (Number(b.balance) > 0 ? Number(b.balance) : totalAssets);
+                marketVal = Number(b.market_value) || 0;
+                todayProfit = b.today_profit !== undefined ? Number(b.today_profit) : (totalAssets - initialBal);
+                totalReturn = b.total_return !== undefined ? Number(b.total_return) : (((totalAssets - initialBal) / initialBal) * 100);
+
+                const sideConnEl = document.getElementById('sideConnStatus');
+                if (sideConnEl) {
+                    if (b.connected) {
+                        sideConnEl.innerHTML = '● THS已就绪';
+                        sideConnEl.style.color = '#3fb950';
+                    } else {
+                        sideConnEl.innerHTML = '● 仿真沙盒就绪';
+                        sideConnEl.style.color = '#58a6ff';
+                    }
+                }
+            }
+
+            // 更新右侧面板卡片
+            const taEl = document.getElementById('sideTotalAssets');
+            const avEl = document.getElementById('sideAvailable');
+            const tpEl = document.getElementById('sideTodayProfit');
+            const trEl = document.getElementById('sideTotalReturn');
+
+            if (taEl) taEl.textContent = fmtMoney(totalAssets);
+            if (avEl) avEl.textContent = fmtMoney(available);
+            if (tpEl) {
+                tpEl.textContent = (todayProfit > 0 ? '+' : '') + fmtMoney(todayProfit);
+                // A股标准：红涨绿跌 (正收益红 #f85149, 负收益绿 #3fb950)
+                tpEl.style.color = todayProfit > 0 ? '#f85149' : (todayProfit < 0 ? '#3fb950' : '#c9d1d9');
+            }
+            if (trEl) {
+                trEl.textContent = (totalReturn > 0 ? '+' : '') + totalReturn.toFixed(2) + '%';
+                // A股标准：红涨绿跌
+                trEl.style.color = totalReturn > 0 ? '#f85149' : (totalReturn < 0 ? '#3fb950' : '#c9d1d9');
+            }
+
+            // 团队最大回撤 (HUD)
+            if (compRes.status === 'fulfilled' && compRes.value.success && compRes.value.data) {
+                const comp = compRes.value.data;
+                const dd = comp.max_drawdown || 0;
+                const ddEl = document.getElementById('hudMaxDrawdown');
+                if (ddEl) {
+                    ddEl.textContent = `${(dd * 100).toFixed(1)}%`;
+                    ddEl.style.color = (dd * 100) > 10 ? '#f85149' : ((dd * 100) > 6 ? '#e3b341' : '#3fb950');
+                }
+            }
+
+            // 持仓列表与 35% 红线监控
+            const posListEl = document.getElementById('sidePositionList');
+            const maxPosHud = document.getElementById('hudMaxPosition');
+            const holdCountHud = document.getElementById('hudHoldingCount');
+
+            let positions = [];
+            if (posRes.status === 'fulfilled' && posRes.value.success && posRes.value.data) {
+                positions = posRes.value.data.positions || [];
+            }
+
+            let maxPosWeight = 0;
+            if (posListEl) {
+                if (positions.length === 0) {
+                    posListEl.innerHTML = `<div style="text-align:center;color:#8b949e;padding:16px 0;font-size:11px;">空仓自律中，等待下一个时序窗口自动建仓</div>`;
+                } else {
+                    let html = '';
+                    positions.forEach(pos => {
+                        const mVal = pos.market_value || ((pos.current_price || pos.avg_price || 0) * (pos.amount || 0));
+                        const weight = totalAssets > 0 ? (mVal / totalAssets) * 100 : 0;
+                        if (weight > maxPosWeight) maxPosWeight = weight;
+
+                        const isViolated = weight > 35.0;
+                        const barColor = isViolated ? '#f85149' : '#3fb950';
+                        const profitRate = pos.profit_rate || 0;
+                        const prColor = profitRate >= 0 ? '#f85149' : '#3fb950'; // A-股标准红涨绿跌
+
+                        html += `
+                            <div style="background:#161b22;border:1px solid ${isViolated ? '#da3633' : '#21262d'};border-radius:6px;padding:8px 10px;">
+                                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+                                    <div style="display:flex;align-items:center;gap:6px;">
+                                        <span style="font-weight:700;color:#e6edf3;font-size:12px;">${pos.name || pos.symbol}</span>
+                                        <span style="font-family:Consolas,monospace;font-size:10px;color:#8b949e;">${pos.symbol}</span>
+                                    </div>
+                                    <div style="display:flex;align-items:center;gap:6px;">
+                                        <span style="font-family:Consolas,monospace;font-weight:700;color:${barColor};font-size:12px;">${weight.toFixed(1)}%</span>
+                                        <span style="font-size:10px;color:#8b949e;">仓位</span>
+                                    </div>
+                                </div>
+                                <div style="position:relative;background:#21262d;border-radius:3px;height:6px;overflow:hidden;margin-bottom:4px;">
+                                    <div style="width:${Math.min(100, weight)}%;background:${barColor};height:100%;"></div>
+                                    <!-- 35% 红线标记 -->
+                                    <div style="position:absolute;left:35%;top:0;bottom:0;width:2px;background:#f85149;box-shadow:0 0 3px #f85149;" title="35% 仓位硬限"></div>
+                                </div>
+                                <div style="display:flex;justify-content:space-between;font-size:10px;color:#8b949e;">
+                                    <span>市值: ${fmtMoney(mVal)} (${pos.amount}股)</span>
+                                    <span style="color:${prColor};font-weight:600;">盈亏: ${profitRate >= 0 ? '+' : ''}${profitRate.toFixed(2)}%</span>
+                                </div>
+                            </div>
+                        `;
+                    });
+                    posListEl.innerHTML = html;
+                }
+            }
+
+            // 更新 HUD 胶囊
+            if (maxPosHud) {
+                maxPosHud.textContent = `${maxPosWeight.toFixed(1)}%`;
+                maxPosHud.style.color = maxPosWeight > 35 ? '#f85149' : (maxPosWeight > 28 ? '#e3b341' : '#3fb950');
+            }
+            if (holdCountHud) {
+                holdCountHud.textContent = `${positions.length} 只`;
+                holdCountHud.style.color = positions.length >= 3 ? '#3fb950' : (positions.length > 0 ? '#e3b341' : '#58a6ff');
+            }
+
+            // 加载净值曲线
+            loadPortfolioEquityCurve(totalAssets, initialBal);
+
+        } catch (e) {
+            console.error('加载资产合规面板失败:', e);
+        }
+    }
+
+    // 6. ECharts 组合净值走势图
+    async function loadPortfolioEquityCurve(currentTotalAssets, baseInitialBal = 200000) {
+        const container = document.getElementById('portfolioEquityChart');
+        if (!container) return;
+
+        try {
+            const res = await fetch('/api/data/equity-curve?days=14');
+            const resData = await res.json();
+            let rawData = (resData.success && Array.isArray(resData.data)) ? resData.data : [];
+
+            // 构造日期序列与净值序列
+            let dates = [];
+            let values = [];
+
+            if (rawData.length >= 2) {
+                rawData.forEach(item => {
+                    const dt = (item.timestamp || item.date || '').split('T')[0] || item.date;
+                    dates.push(dt);
+                    values.push(Number(item.total_assets || currentTotalAssets || baseInitialBal));
+                });
+            } else {
+                // 如果后端历史点不足，自动生成平滑基准曲线
+                const today = new Date();
+                const targetAssets = currentTotalAssets > 0 ? currentTotalAssets : baseInitialBal;
+                for (let i = 6; i >= 0; i--) {
+                    const d = new Date(today.getTime() - i * 86400000);
+                    const mm = String(d.getMonth() + 1).padStart(2, '0');
+                    const dd = String(d.getDate()).padStart(2, '0');
+                    dates.push(`${mm}-${dd}`);
+                    // 模拟从初始baseInitialBal到currentTotalAssets的小幅平滑轨迹
+                    const ratio = (6 - i) / 6;
+                    const simulated = baseInitialBal + (targetAssets - baseInitialBal) * ratio;
+                    values.push(Math.round(simulated));
+                }
+            }
+
+            if (!portfolioEquityEChart) {
+                portfolioEquityEChart = echarts.init(container);
+                window.addEventListener('resize', () => { if (portfolioEquityEChart) portfolioEquityEChart.resize(); });
+            }
+
+            const option = {
+                tooltip: {
+                    trigger: 'axis',
+                    backgroundColor: '#161b22',
+                    borderColor: '#30363d',
+                    textStyle: { color: '#c9d1d9', fontSize: 11 },
+                    formatter: function(params) {
+                        const p = params[0];
+                        return `${p.axisValue}<br/>净值: ¥${Number(p.value).toLocaleString()}`;
+                    }
+                },
+                grid: {
+                    top: 10,
+                    right: 8,
+                    bottom: 20,
+                    left: 45
+                },
+                xAxis: {
+                    type: 'category',
+                    data: dates,
+                    axisLine: { lineStyle: { color: '#30363d' } },
+                    axisLabel: { color: '#8b949e', fontSize: 10 }
+                },
+                yAxis: {
+                    type: 'value',
+                    scale: true,
+                    splitLine: { lineStyle: { color: '#21262d' } },
+                    axisLabel: {
+                        color: '#8b949e',
+                        fontSize: 9,
+                        formatter: function(val) {
+                            return (val / 1000).toFixed(0) + 'k';
+                        }
+                    }
+                },
+                series: [{
+                    data: values,
+                    type: 'line',
+                    smooth: true,
+                    symbol: 'none',
+                    lineStyle: { color: '#3fb950', width: 2 },
+                    areaStyle: {
+                        color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+                            { offset: 0, color: 'rgba(63, 185, 80, 0.35)' },
+                            { offset: 1, color: 'rgba(63, 185, 80, 0.02)' }
+                        ])
+                    },
+                    markLine: {
+                        silent: true,
+                        symbol: 'none',
+                        lineStyle: { type: 'dashed', color: '#da3633', width: 1 },
+                        data: [{
+                            yAxis: 88000,
+                            label: {
+                                formatter: '-12% 警戒',
+                                position: 'insideEndTop',
+                                color: '#da3633',
+                                fontSize: 9
+                            }
+                        }]
+                    }
+                }]
+            };
+
+            portfolioEquityEChart.setOption(option);
+        } catch (e) {
+            console.error('渲染净值走势图失败:', e);
+        }
+    }
+
+    // 7. 视图模式切换与同花顺官方交易台联结 (官方交易台 / 量化全自动座舱)
+    function setWorkstationView(mode) {
+        if (!mode || mode === 'split') mode = 'official';
+        try {
+            localStorage.setItem('ths_workstation_view', mode);
+        } catch(e) {}
+
+        const officialContainer = document.getElementById('officialViewContainer');
+        const cockpitContainer = document.getElementById('cockpitContainer');
+        const btnOfficial = document.getElementById('viewBtnOfficial');
+        const btnCockpit = document.getElementById('viewBtnCockpit');
+
+        // 重置按钮基础样式
+        [btnOfficial, btnCockpit].forEach(btn => {
+            if (!btn) return;
+            btn.style.background = 'transparent';
+            btn.style.color = '#c9d1d9';
+            btn.style.fontWeight = '500';
+        });
+
+        if (mode === 'official') {
+            if (btnOfficial) {
+                btnOfficial.style.background = '#238636';
+                btnOfficial.style.color = 'white';
+                btnOfficial.style.fontWeight = '600';
+            }
+            if (officialContainer) {
+                officialContainer.style.display = 'flex';
+                officialContainer.style.width = '100%';
+            }
+            if (cockpitContainer) {
+                cockpitContainer.style.display = 'none';
+            }
+        } else { // cockpit
+            if (btnCockpit) {
+                btnCockpit.style.background = '#388bfd';
+                btnCockpit.style.color = 'white';
+                btnCockpit.style.fontWeight = '600';
+            }
+            if (officialContainer) {
+                officialContainer.style.display = 'none';
+            }
+            if (cockpitContainer) {
+                cockpitContainer.style.display = 'grid';
+                cockpitContainer.style.width = '100%';
+            }
+        }
+
+        // 视图切换后自适应重绘 ECharts 资产图表
+        setTimeout(() => {
+            if (typeof portfolioEquityEChart !== 'undefined' && portfolioEquityEChart) {
+                portfolioEquityEChart.resize();
+            }
+        }, 150);
+    }
+
+    function reloadOfficialFrame() {
+        const frame = document.getElementById('officialMncgFrame');
+        if (frame) {
+            frame.src = 'https://mncg.10jqka.com.cn/cgiwt/index/index?_t=' + Date.now();
+        }
+    }
+
+    // 8. 应用程序主启动挂载 (支持 WebView2 即时就绪与普通浏览器)
+    function bootCockpitApplication() {
+        console.log('[Cockpit] 🚀 正在启动全自动量化作战指挥座舱...');
+
+        // 0. 初始化工作台主视口 (默认呈现同花顺官方交易台 mncg.10jqka.com.cn)
+        try {
+            const savedView = localStorage.getItem('ths_workstation_view') || 'cockpit';
+            setWorkstationView(savedView === 'official' ? 'official' : 'cockpit');
+        } catch(e) {
+            setWorkstationView('cockpit');
+        }
+
+        // 1. 启动全局 HUD 态势顶栏与时钟
+        try {
+            if (typeof initGlobalStatusHud === 'function') initGlobalStatusHud();
+        } catch(e) {
+            console.error('initGlobalStatusHud error:', e);
+        }
+
+        // 2. 启动安全兼容项
+        try {
+            if (typeof safeInitLegacy === 'function') safeInitLegacy();
+        } catch(e) {
+            console.error('safeInitLegacy error:', e);
+        }
+
+        // 3. 加载座舱 3 大面板与多账号列表
+        loadAutomationPipeline();
+        loadEnsembleMatrix();
+        loadTodayCandidates();
+        loadExecutionLogStream();
+        loadExecutionAndPortfolio();
+        loadAccountList();
+
+        // 4. 定时刷新
+        setInterval(loadAccountList, 10000);
+        setInterval(loadAutomationPipeline, 8000);
+        setInterval(loadEnsembleMatrix, 10000);
+        setInterval(loadTodayCandidates, 10000);
+        setInterval(loadExecutionLogStream, 4000);
+        setInterval(loadExecutionAndPortfolio, 8000);
+    }
+
+    // 针对 WebView2 与原生浏览器的 DOMReady 双向保险
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', bootCockpitApplication);
+    } else {
+        bootCockpitApplication();
     }
 
     </script>

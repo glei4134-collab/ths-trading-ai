@@ -3226,7 +3226,7 @@
 
             try {
                 // 直接在用户浏览器中打开，不经过后端
-                const win = window.open('https://moni.10jqka.com.cn/', '_blank');
+                const win = window.open('https://mncg.10jqka.com.cn/cgiwt/index/index/', '_blank');
                 if (win && !win.closed) {
                     status.style.color = '#3fb950';
                     status.innerHTML = '✓ 已在新标签页打开同花顺，请登录后复制Cookie';
@@ -3234,12 +3234,12 @@
                 } else {
                     // 弹窗被阻止，提供链接
                     status.style.color = '#d29922';
-                    status.innerHTML = '⚠ 弹窗被阻止，请 <a href="https://moni.10jqka.com.cn/" target="_blank" style="color:#58a6ff;">点击此处手动打开</a>，登录后复制Cookie';
+                    status.innerHTML = '⚠ 弹窗被阻止，请 <a href="https://mncg.10jqka.com.cn/cgiwt/index/index/" target="_blank" style="color:#58a6ff;">点击此处手动打开</a>，登录后复制Cookie';
                     btn.innerHTML = '<span class="login-open-icon">🌐</span><span>打开同花顺模拟炒股</span>';
                 }
             } catch (e) {
                 status.style.color = '#f85149';
-                status.innerHTML = '✗ 打开失败: ' + e.message + '。请 <a href="https://moni.10jqka.com.cn/" target="_blank" style="color:#58a6ff;">点击此处手动打开</a>';
+                status.innerHTML = '✗ 打开失败: ' + e.message + '。请 <a href="https://mncg.10jqka.com.cn/cgiwt/index/index/" target="_blank" style="color:#58a6ff;">点击此处手动打开</a>';
                 btn.innerHTML = '<span class="login-open-icon">🌐</span><span>打开同花顺模拟炒股</span>';
             }
             btn.disabled = false;
@@ -3615,6 +3615,7 @@
         let _audioCtx = null;
         function playNotifSound() {
             try {
+                if (localStorage.getItem('notif_sound_enabled') !== 'true') return;
                 if (!_audioCtx) _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
                 const osc = _audioCtx.createOscillator();
                 const gain = _audioCtx.createGain();

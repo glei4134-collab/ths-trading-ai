@@ -12,5 +12,7 @@ from . import volatility_strategies
 from . import volume_strategies
 from . import pattern_strategies
 from . import composite_strategies
+from . import competition_strategies
+from . import team_ensemble
 
 __all__ = ["BaseStrategy", "StrategyResult", "Signal"]

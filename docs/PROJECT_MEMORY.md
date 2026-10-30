@@ -1,6 +1,49 @@
-# THS Trading AI - 项目记忆
+# THS Trading AI - 项目记忆与工程交接档案
 
-## 最后更新: 2026-05-04
+## 最后更新: 2026-10-30 (v2.5 团队赛多账户全自动座舱版)
+
+---
+
+## 零、最新交接核心纪要 (2026-10-30 Handover)
+
+### 1. 生产环境与运维铁律
+- **生产云服务器**: 
+oot@81.70.51.173（SSH 密钥：~/.ssh/id_ed25519）
+- **云端部署路径**: /opt/ths-trading-ai
+- **Systemd 守护服务**: 	hs-trading.service（端口 5000，开机自启，自动重启）
+  - 状态检查：systemctl status ths-trading
+  - 重启服务：systemctl restart ths-trading
+  - 实时日志：journalctl -u ths-trading -f
+- **【绝对铁律】**: **严禁在本地电脑启动或常驻运行 python api.py / desktop_app.py（本地 5000 端口必须保持关闭）**，防止本地进程与云服务器同时轮询同花顺接口导致 Cookie 互踢失效或重复下单。本地仓库仅用于代码开发、Git 版本管理与向云服务器 scp 部署。
+
+### 2. 多账户管理与数据隔离机制 (src/db_store.py, src/account_manager.py, pi.py)
+- **账号自动编号**: 所有绑定的同花顺比赛账号按存入 Cookie 的先后顺序（数据库 ccounts.id 升序）自动命名为 **1、2、3...**（由 db_store.resequence_account_names() 在新增、删除及启动时自动维护）。
+- **当前在库账号**（云端 /opt/ths-trading-ai/data/trading.db）：
+  - 账号 **1** (id=8)、账号 **2** (id=9)、账号 **3** (id=10)。
+- **开户本金与盈亏算法硬约束**:
+  - 同花顺模拟比赛每个账号标准初始本金硬性锁定为 **200,000.0 元（20万）**，严禁将绑定时的剩余可用现金（ky_fund / zjye）误写入 initial_balance。
+  - **累计盈亏 (	otal_profit)** = 	otal_assets - 200000.0；**累计收益率 (	otal_return)** = 	otal_profit / 200000.0 * 100%。
+  - **今日盈亏 (	oday_profit)**: 由 db_store.get_today_pnl(account_id, current_total) 基于昨日收盘快照（若无则取今日首个快照 aseline_assets）独立计算，与累计盈亏彻底解耦。
+- **数据隔离与共享边界**:
+  - **完全隔离**: ccounts、positions（主键 ccount_id, symbol）、	rades、signals、ccount_snapshots 均按 ccount_id 严格隔离；每次同步及每小时定时任务均为全部已连接账号写入独立快照；集合竞价买入、盘中调仓、尾盘风控均遍历各有效账号独立计算仓位（单票上限 ≤35%）并独立委托。
+  - **全局共享**: 5 大核心策略表决矩阵（src/strategies/team_ensemble.py）、全市场行情缓存（src/data_cache.py）、8 大时序流水账本（src/scheduler_ledger.py）为全局共享。
+
+### 3. 同花顺接口字段映射关键修复 (src/ths_connector.py, src/auto_trader.py)
+- 修复了 	hs_connector.py 中 get_positions() 解析同花顺 qryChicang 返回字段的错位问题：
+  - d_2102 = 股票代码 (symbol)
+  - d_2103 = 股票名称 (
+ame)
+  - d_2164 / d_2117 = 持仓总股数 (mount)
+  - d_2121 = 可卖股数 (vailable)
+  - d_2122 = 成本价 (cost_price / vg_price)
+  - **d_2124 = 当前最新价 (current_price)**（此前漏提取）
+  - **d_2125 = 最新市值 (market_value)**（此前误用 d_2117 股数当作市值，且 uto_trader.py 用 market_value / amount 导致算出 1.0 元异常现价，现已彻底根除）。
+
+### 4. 前端全自动量化座舱升级 (static/index.html)
+- 采用黑曜极光量化 HUD 视觉体系（#premium-quant-hud-styles），严格遵循 **A 股红涨（#ff4d4f）绿跌（#00e676）** 标准及正负号显式保留。
+- 修复顶栏 .header（z-index: 99999）与多账号下拉面板 #accountSelectorPanel（z-index: 100001）层级，解决被下方毛玻璃面板遮挡问题。
+- 隐藏顶栏 #aiSchedToggle 停止按钮，防止误触关停后台调度器。
+- 切换账号（switchAccount）时自动静默触发 /api/accounts/sync/<id> 并即时刷新右侧四宫格资产看板与持仓列表，无需手动点同步。
 
 ---
 

@@ -1,8 +1,8 @@
 {
   "provider": "openai",
-  "base_url": "https://api.openai.com/v1",
-  "api_key": "",
-  "model": "gpt-4o-mini",
+  "base_url": "https://token-plan-cn.xiaomimimo.com/v1",
+  "api_key": "tp-cye5dn5yqj5orhwpubkfgdbljlh0672i1ag1qhwykpxpm3yb",
+  "model": "mimo-v2.5",
   "temperature": 0.7,
   "max_tokens": 2000
 }

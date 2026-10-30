@@ -3,7 +3,10 @@ AI策略引擎模块
 提供多种交易策略和信号生成
 """
 
-import akshare as ak
+try:
+    import akshare as ak
+except ImportError:
+    ak = None
 import pandas as pd
 import numpy as np
 from datetime import datetime

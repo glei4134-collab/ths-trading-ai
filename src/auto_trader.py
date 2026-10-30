@@ -228,12 +228,16 @@ class AutoTrader:
                 symbol = p.get("symbol", "")
                 if not symbol:
                     continue
+                cost_p = float(p.get("cost_price") or p.get("avg_price") or 0)
+                cur_p = float(p.get("current_price") or 0)
+                if cur_p <= 0:
+                    cur_p = (float(p.get("market_value") or 0) / max(p.get("amount", 1), 1)) or cost_p
                 self.positions[symbol] = Position(
                     symbol=symbol,
                     name=p.get("name", symbol),
                     amount=p.get("amount", 0),
-                    avg_price=p.get("cost_price", 0),
-                    current_price=p.get("market_value", 0) / max(p.get("amount", 1), 1),
+                    avg_price=cost_p,
+                    current_price=cur_p,
                     buy_date=""
                 )
 
@@ -425,8 +429,18 @@ class AutoTrader:
         self.orders.append(order)
         return order
 
-    def execute_order(self, order: TradeOrder, stock_data: Dict = None) -> Dict:
-        """执行订单 — 先尝试真实THS连接器，不可用时退回内存模拟"""
+    def execute_order(self, order_or_symbol, action_or_stock_data=None, amount: int = None,
+                      price: float = None, notes: str = "", stock_data: Dict = None) -> Dict:
+        """执行订单 — 支持 TradeOrder 对象或 (symbol, action, amount, price, notes) 直接入参"""
+        if isinstance(order_or_symbol, TradeOrder):
+            order = order_or_symbol
+            stock_data = action_or_stock_data if isinstance(action_or_stock_data, dict) else stock_data
+        else:
+            symbol = str(order_or_symbol)
+            action = str(action_or_stock_data or "buy")
+            order = self.create_order(symbol, action, int(amount or 0), float(price or 0.0))
+            if notes:
+                order.notes = notes
         # 风控检查
         risk_check = self.check_risk(order.symbol, order.action, order.price, order.amount)
         if not risk_check["allowed"]:
@@ -1003,11 +1017,19 @@ class AutoTrader:
                 })
 
     def _save_hourly_snapshot(self):
-        """每小时保存一次账户快照（用于绘制日内收益曲线）"""
+        """每小时保存一次所有账户快照（用于绘制日内收益曲线并维护各账户昨收基线）"""
+        try:
+            from account_manager import account_manager
+            account_manager.sync_all()
+        except Exception as e:
+            logger.debug(f"多账户小时同步快照失败: {e}")
         try:
             total_mv = sum(pos.market_value for pos in self.positions.values())
-            total_assets = self.balance + total_mv
-            initial = self._ds.account.get("initial_balance", 1000000)
+            acc_info = self._ds.account or {}
+            total_assets = float(acc_info.get("total_assets") or (self.balance + total_mv))
+            initial = float(acc_info.get("initial_balance") or 200000.0)
+            if initial < 150000:
+                initial = 200000.0
             total_profit = total_assets - initial
             self._db_store().save_snapshot(
                 balance=self.balance,

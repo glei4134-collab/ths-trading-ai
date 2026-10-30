@@ -35,6 +35,7 @@ class DBStore:
         self._migrate_json_if_needed()
         self._ensure_account_id_columns()
         self._init_sentiment_tables()
+        self.resequence_account_names()
 
     def _init_tables(self):
         """创建表结构"""
@@ -121,6 +122,28 @@ class DBStore:
         c.execute("CREATE INDEX IF NOT EXISTS idx_trades_time ON trades(time)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_signals_strategy ON signals(strategy_name)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_signals_time ON signals(timestamp)")
+
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS scheduler_execution_ledger (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT NOT NULL,
+                step_id TEXT NOT NULL,
+                step_name TEXT NOT NULL,
+                window TEXT,
+                status TEXT NOT NULL,
+                policy TEXT NOT NULL,
+                scheduled_time TEXT,
+                executed_at TEXT,
+                duration_ms INTEGER DEFAULT 0,
+                skip_reason TEXT DEFAULT '',
+                output_summary TEXT DEFAULT '',
+                error_detail TEXT DEFAULT '',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(date, step_id)
+            )
+        """)
+        c.execute("CREATE INDEX IF NOT EXISTS idx_ledger_date ON scheduler_execution_ledger(date)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_ledger_status ON scheduler_execution_ledger(status)")
 
         self.conn.commit()
 
@@ -218,6 +241,16 @@ class DBStore:
                 change_5d REAL DEFAULT 0,
                 regime TEXT DEFAULT '',
                 record_date TEXT
+            )
+        """)
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS sentiment_outcomes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                buy_id INTEGER,
+                symbol TEXT NOT NULL,
+                profit_pct REAL DEFAULT 0,
+                hold_days INTEGER DEFAULT 0,
+                created_at TEXT
             )
         """)
         c.execute("CREATE INDEX IF NOT EXISTS idx_sentiment_history_symbol ON sentiment_history(symbol)")
@@ -411,22 +444,39 @@ class DBStore:
 
     # ==================== 账户管理 ====================
 
-    def create_account(self, name: str, balance: float = 1000000,
+    def resequence_account_names(self):
+        """按存入Cookie顺序（id升序）将账号名称依次命名为 1, 2, 3..."""
+        with self._lock:
+            c = self.conn.cursor()
+            c.execute("SELECT id FROM accounts ORDER BY id ASC")
+            rows = c.fetchall()
+            for idx, r in enumerate(rows, start=1):
+                c.execute("UPDATE accounts SET name = ? WHERE id = ?", (str(idx), r["id"]))
+            self.conn.commit()
+
+    def create_account(self, name: str, balance: float = 200000.0,
                        cookie: str = '', ths_gdzh: str = '',
-                       ths_competition_id: str = '') -> Dict:
-        """创建新账户（绑定同花顺Cookie）"""
+                       ths_competition_id: str = '',
+                       initial_balance: float = 200000.0) -> Dict:
+        """创建新账户（绑定同花顺Cookie，初始本金硬约束标准20万，按存入顺序1,2,3命名）"""
         with self._lock:
             c = self.conn.cursor()
             now = datetime.now(ZoneInfo('Asia/Shanghai')).strftime("%Y-%m-%d %H:%M:%S")
+            c.execute("SELECT COUNT(*) FROM accounts")
+            seq_num = (c.fetchone()[0] or 0) + 1
+            seq_name = str(seq_num)
+            # 无论传入的当前可用现金是多少，比赛初始本金严格固定为200,000元
+            init_bal = 200000.0 if (initial_balance is None or initial_balance < 150000) else float(initial_balance)
             c.execute("""
                 INSERT INTO accounts (name, cookie, ths_gdzh, ths_competition_id,
                                       balance, initial_balance, created_at, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, (name, encrypt_cookie(cookie), ths_gdzh, ths_competition_id, balance, balance, now, now))
+            """, (seq_name, encrypt_cookie(cookie), ths_gdzh, ths_competition_id, balance, init_bal, now, now))
             self.conn.commit()
             account_id = c.lastrowid
-            return {"id": account_id, "name": name, "balance": balance,
-                    "initial_balance": balance, "created_at": now, "updated_at": now}
+        self.resequence_account_names()
+        return {"id": account_id, "name": seq_name, "balance": balance,
+                "initial_balance": init_bal, "created_at": now, "updated_at": now}
 
     def list_accounts(self) -> List[Dict]:
         """列出所有账户（不含cookie明文）"""
@@ -478,6 +528,16 @@ class DBStore:
         row = c.fetchone()
         return decrypt_cookie(row["cookie"]) if row and row["cookie"] else ""
 
+    def update_account_cookie(self, account_id: int, cookie: str):
+        """更新指定账户的Cookie（自动加密存储）"""
+        with self._lock:
+            c = self.conn.cursor()
+            now = datetime.now(ZoneInfo('Asia/Shanghai')).strftime("%Y-%m-%d %H:%M:%S")
+            c.execute("UPDATE accounts SET cookie = ?, updated_at = ? WHERE id = ?",
+                      (encrypt_cookie(cookie), now, account_id))
+            self.conn.commit()
+            logger.info(f"账户 {account_id} Cookie已更新")
+
     def update_account_sync(self, account_id: int, balance: float, ky_fund: float,
                             market_value: float, total_assets: float):
         """更新账户同步数据（从THS拉取后）"""
@@ -500,7 +560,7 @@ class DBStore:
             self.conn.commit()
 
     def delete_account(self, account_id: int) -> bool:
-        """删除账户"""
+        """删除账户并重排剩余账号序号"""
         with self._lock:
             c = self.conn.cursor()
             c.execute("DELETE FROM accounts WHERE id = ?", (account_id,))
@@ -509,7 +569,8 @@ class DBStore:
             c.execute("DELETE FROM signals WHERE account_id = ?", (account_id,))
             c.execute("DELETE FROM account_snapshots WHERE account_id = ?", (account_id,))
             self.conn.commit()
-            return True
+        self.resequence_account_names()
+        return True
 
     def rename_account(self, account_id: int, name: str):
         """重命名账户"""
@@ -660,6 +721,38 @@ class DBStore:
         c.execute(query, params)
         return [dict(row) for row in c.fetchall()]
 
+    def get_today_pnl(self, account_id: int, current_total: float) -> Dict:
+        """精准计算今日盈亏与今日收益率（基于昨收基准或今日首个快照）"""
+        today_str = datetime.now(ZoneInfo('Asia/Shanghai')).strftime("%Y-%m-%d")
+        c = self.conn.cursor()
+
+        # 1. 优先获取今天之前的最新一条快照作为昨日收盘基线
+        c.execute("""
+            SELECT total_assets FROM account_snapshots 
+            WHERE account_id = ? AND timestamp < ? AND total_assets > 0
+            ORDER BY timestamp DESC LIMIT 1
+        """, (account_id, f"{today_str} 00:00:00"))
+        row = c.fetchone()
+
+        # 2. 若无昨日快照，则获取今日最早的一条快照作为开盘基线
+        if not row:
+            c.execute("""
+                SELECT total_assets FROM account_snapshots 
+                WHERE account_id = ? AND timestamp >= ? AND total_assets > 0
+                ORDER BY timestamp ASC LIMIT 1
+            """, (account_id, f"{today_str} 00:00:00"))
+            row = c.fetchone()
+
+        base_assets = float(row["total_assets"]) if (row and row["total_assets"]) else current_total
+        today_profit = current_total - base_assets
+        today_profit_rate = (today_profit / base_assets * 100) if base_assets > 0 else 0.0
+
+        return {
+            "baseline_assets": round(base_assets, 2),
+            "today_profit": round(today_profit, 2),
+            "today_profit_rate": round(today_profit_rate, 2)
+        }
+
     # ==================== 统计 ====================
 
     def get_trade_stats(self, account_id: int = None) -> Dict:
@@ -689,24 +782,29 @@ class DBStore:
                     "total_assets": 0, "total_profit": 0, "total_profit_rate": 0,
                     "position_count": 0, "created_at": ""}
         positions = self.get_positions(account_id)
-        total_market_value = sum(
+        calc_market_value = sum(
             pos.get("current_price", pos.get("avg_price", 0)) * pos.get("amount", 0)
             for pos in positions.values()
         )
-        total_profit = sum(pos.get("profit", 0) for pos in positions.values())
-        initial = account.get("initial_balance", 1000000)
+        total_market_value = calc_market_value if calc_market_value > 0 else float(account.get("market_value") or 0)
+        initial = float(account.get("initial_balance") or 200000.0)
+        if initial < 150000:
+            initial = 200000.0
         # total_assets 从数据库读取（含冻结金额），不等于 balance
-        total_assets = account.get("total_assets", 0) or account.get("balance", 0)
-        balance = account.get("balance", 0)
+        total_assets = float(account.get("total_assets") or account.get("balance") or 0)
+        balance = float(account.get("ky_fund") or account.get("balance") or 0)
+        total_profit = total_assets - initial if total_assets > 0 else 0.0
 
         return {
             "id": account_id,
             "name": account.get("name", ""),
             "balance": round(balance, 2),
+            "ky_fund": round(float(account.get("ky_fund") or 0), 2),
             "market_value": round(total_market_value, 2),
             "total_assets": round(total_assets, 2),
             "total_profit": round(total_profit, 2),
             "total_profit_rate": round((total_assets - initial) / initial * 100, 2) if initial else 0,
+            "initial_balance": initial,
             "position_count": len(positions),
             "created_at": account.get("created_at", "")
         }

@@ -326,55 +326,8 @@ class AIBrain:
     def decide_with_ai(self, symbol: str, stock_data: Dict, indicators: Dict,
                        account_info: Dict = None) -> BrainDecision:
         """
-        AI 深度决策：先让AI选择策略，再综合判断
+        纯量化策略综合决策：彻底去除外部大模型调用，直接由多策略矩阵评估
         """
-        # 1. 构建上下文给AI
-        catalog = self.get_strategy_catalog()
-        perf = strategy_tracker.get_strategy_summary()
-
-        system_prompt = f"""你是一个专业的AI交易决策系统。你需要：
-1. 分析股票数据
-2. 从可用策略中选择最适合当前市场条件的策略
-3. 综合策略结果和你的判断做出最终决策
-
-可用策略目录:
-{catalog}
-
-策略历史表现:
-{json.dumps(perf, ensure_ascii=False, indent=2)}
-
-请根据市场条件选择3-5个最适合的策略，并说明理由。"""
-
-        user_prompt = f"""
-股票代码: {symbol}
-当前价格: {stock_data.get('price', 'N/A')}
-涨跌幅: {stock_data.get('change_pct', 'N/A')}%
-成交量: {stock_data.get('volume', 'N/A')}
-换手率: {stock_data.get('turnover', 'N/A')}%
-
-技术指标:
-{json.dumps(indicators, ensure_ascii=False, indent=2)}
-
-账户信息:
-{json.dumps(account_info or {}, ensure_ascii=False, indent=2)}
-
-请分析并给出:
-1. 选择哪些策略（列出策略名称）
-2. 综合判断（买入/卖出/持有）
-3. 理由
-"""
-
-        # 2. 调用AI
-        if ai_connector.connected:
-            ai_result = ai_connector.chat(user_prompt, system_prompt)
-            if ai_result.get("success"):
-                ai_content = ai_result["data"]["content"]
-                # 解析AI选择的策略（简单解析）
-                selected = self._parse_ai_strategy_selection(ai_content)
-                if selected:
-                    return self.decide(symbol, stock_data, indicators, account_info, selected)
-
-        # AI不可用时回退到自动选择
         return self.decide(symbol, stock_data, indicators, account_info)
 
     def _auto_select_strategies(self, stock_data: Dict, indicators: Dict,

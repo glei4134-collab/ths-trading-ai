@@ -53,6 +53,91 @@ def symbol_prefix(symbol: str) -> str:
     return "sh" if symbol.startswith("6") else "sz"
 
 
+# ==================== 仿真/虚拟时钟行情提供器 ====================
+
+class MockMarketDataProvider:
+    """虚拟时钟/离线仿真行情提供者（解决虚拟时钟模式下无实时行情脱节痛点）"""
+
+    @staticmethod
+    def is_mock_active() -> bool:
+        try:
+            from ai_scheduler import ai_scheduler
+            return ai_scheduler.is_mock_time
+        except Exception:
+            return False
+
+    @staticmethod
+    def generate_mock_realtime(symbols: List[str]) -> Dict[str, Dict]:
+        """为给定股票代码列表生成逼真的快照报价"""
+        try:
+            from ai_scheduler import ai_scheduler
+            now_dt = ai_scheduler.now()
+        except Exception:
+            now_dt = datetime.now()
+
+        date_seed = int(now_dt.strftime("%Y%m%d"))
+        quotes = {}
+        for s in symbols:
+            code_int = sum(ord(c) for c in s)
+            base_p = 10.0 + (code_int % 80)
+            day_pct = ((code_int + date_seed) % 11 - 4.5)  # -4.5% ~ +5.5%
+            pre_close = round(base_p, 2)
+            curr_price = round(pre_close * (1 + day_pct / 100), 2)
+            open_p = round(pre_close * (1 + (day_pct * 0.4) / 100), 2)
+            high_p = round(max(curr_price, open_p, pre_close) * 1.01, 2)
+            low_p = round(min(curr_price, open_p, pre_close) * 0.99, 2)
+            vol = 50000 + (code_int * 137 % 200000)
+            amount = round(curr_price * vol * 100 / 10000, 2)
+
+            quotes[s] = {
+                "code": s,
+                "name": f"仿真标的_{s[-4:]}",
+                "price": curr_price,
+                "open": open_p,
+                "high": high_p,
+                "low": low_p,
+                "pre_close": pre_close,
+                "change": round(curr_price - pre_close, 2),
+                "change_pct": round(day_pct, 2),
+                "volume": vol,
+                "amount": amount,
+                "turnover": round(vol * 100 / 50000000 * 100, 2),
+                "pe": 22.5,
+                "is_mock": True
+            }
+        return quotes
+
+    @staticmethod
+    def generate_mock_kline(symbol: str, days: int = 60) -> list:
+        """生成 30-60 日的连续仿真 K 线"""
+        try:
+            from ai_scheduler import ai_scheduler
+            now_dt = ai_scheduler.now()
+        except Exception:
+            now_dt = datetime.now()
+
+        code_int = sum(ord(c) for c in symbol)
+        p = 15.0 + (code_int % 40)
+        kline = []
+        for d in range(days, 0, -1):
+            dt = now_dt - timedelta(days=d)
+            if dt.weekday() >= 5:
+                continue
+            delta = ((code_int + d * 17) % 9 - 4) * 0.3
+            p = max(5.0, round(p + delta, 2))
+            kline.append({
+                "date": dt.strftime("%Y-%m-%d"),
+                "open": round(p * 0.995, 2),
+                "close": p,
+                "high": round(p * 1.02, 2),
+                "low": round(p * 0.98, 2),
+                "volume": 20000 + (code_int * d % 30000),
+                "amount": round(p * 20000 * 100, 2),
+                "change_pct": round(delta / p * 100, 2),
+            })
+        return kline
+
+
 # ==================== 腾讯行情 API ====================
 
 def fetch_tencent_realtime(symbols: List[str]) -> Dict[str, Dict]:
@@ -64,6 +149,10 @@ def fetch_tencent_realtime(symbols: List[str]) -> Dict[str, Dict]:
     """
     if not symbols:
         return {}
+
+    # 若处于虚拟时钟演练状态，自动由 Mock 提供器生成高仿真行情
+    if MockMarketDataProvider.is_mock_active():
+        return MockMarketDataProvider.generate_mock_realtime(symbols)
 
     # 构建腾讯格式代码
     tc_symbols = [symbol_to_tencent(s) for s in symbols]
@@ -224,6 +313,9 @@ def fetch_eastmoney_kline(symbol: str, period: str = "daily", days: int = 60,
     is_index: 指数代码（如000300沪深300）需要传True
     返回: [{date, open, close, high, low, volume, change_pct}, ...]
     """
+    if MockMarketDataProvider.is_mock_active():
+        return MockMarketDataProvider.generate_mock_kline(symbol, days)
+
     secid = symbol_to_eastmoney(symbol, is_index=is_index)
 
     # K线周期映射

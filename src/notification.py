@@ -280,17 +280,19 @@ class DailySummaryScheduler:
             sell_count = sum(1 for t in today_trades if t.get("action") == "sell")
             trade_count = len(today_trades)
 
-            # 计算当日盈亏（通过持仓对比昨日快照）
-            balance = account.get("balance", 1000000)
-            initial = account.get("initial_balance", 1000000)
+            # 计算当日盈亏（优先取数据库真实 total_assets，防止已含市值的 balance 重复累加）
+            balance = float(account.get("ky_fund") or account.get("balance") or 200000.0)
+            initial = float(account.get("initial_balance") or 200000.0)
+            if initial < 150000:
+                initial = 200000.0
 
             # 获取持仓总市值
             positions = data_store.get_positions()
             market_value = sum(
                 p.get("current_price", p.get("avg_price", 0)) * p.get("amount", 0)
                 for p in positions
-            )
-            total_assets = balance + market_value
+            ) or float(account.get("market_value") or 0)
+            total_assets = float(account.get("total_assets") or 0) or (balance + market_value)
             total_profit = total_assets - initial
             return_rate = (total_profit / initial * 100) if initial > 0 else 0
 

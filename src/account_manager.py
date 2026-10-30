@@ -121,19 +121,62 @@ class THSAccountTrader:
             from db_store import db_store
             db_store.update_account_sync(self.account_id, total_assets, ky_fund, market_value, total_assets)
 
-            # 同步持仓到本地（账户隔离）
+            # 同步持仓到本地（账户隔离，兼容 avg_price / cost_price 与真实 current_price）
             from db_store import db_store as dbs
-            dbs.save_positions({p["symbol"]: {
-                "symbol": p["symbol"],
-                "name": p.get("name", p["symbol"]),
-                "amount": p.get("amount", 0),
-                "avg_price": p.get("avg_price", 0),
-                "current_price": p.get("current_price", 0),
-                "total_cost": p.get("avg_price", 0) * p.get("amount", 0),
-            } for p in positions}, self.account_id)
+            pos_to_save = {}
+            for p in positions:
+                sym = p.get("symbol", "")
+                if not sym:
+                    continue
+                amt = int(p.get("amount") or 0)
+                avg_p = float(p.get("avg_price") or p.get("cost_price") or 0)
+                cur_p = float(p.get("current_price") or avg_p or 0)
+                pos_to_save[sym] = {
+                    "symbol": sym,
+                    "name": p.get("name", sym),
+                    "amount": amt,
+                    "avg_price": avg_p,
+                    "current_price": cur_p,
+                    "total_cost": round(avg_p * amt, 2),
+                }
+            dbs.save_positions(pos_to_save, self.account_id)
+
+            # 为当前同步账户补充资产快照（距上次快照超过30分钟或当日尚无快照时写入，确保所有账户具备独立曲线与昨收基线）
+            try:
+                if total_assets > 0:
+                    acc_row = dbs.get_account(self.account_id) or {}
+                    init_b = float(acc_row.get("initial_balance") or 200000.0)
+                    if init_b < 150000:
+                        init_b = 200000.0
+                    c = dbs.conn.cursor()
+                    c.execute(
+                        "SELECT timestamp FROM account_snapshots WHERE account_id = ? ORDER BY timestamp DESC LIMIT 1",
+                        (self.account_id,)
+                    )
+                    last_row = c.fetchone()
+                    should_snap = True
+                    if last_row and last_row["timestamp"]:
+                        try:
+                            last_dt = datetime.strptime(last_row["timestamp"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=ZoneInfo("Asia/Shanghai"))
+                            now_dt = datetime.now(ZoneInfo("Asia/Shanghai"))
+                            if (now_dt - last_dt).total_seconds() < 1800 and last_dt.date() == now_dt.date():
+                                should_snap = False
+                        except Exception:
+                            pass
+                    if should_snap:
+                        dbs.save_snapshot(
+                            balance=ky_fund,
+                            market_value=market_value,
+                            total_assets=total_assets,
+                            total_profit=round(total_assets - init_b, 2),
+                            position_count=len(pos_to_save),
+                            account_id=self.account_id
+                        )
+            except Exception as snap_err:
+                logger.debug(f"账户 {self.account_id} 快照写入忽略: {snap_err}")
 
             self._positions = {p["symbol"]: p for p in positions}
-            logger.info(f"账户 {self.account_id} 同步完成: 余额={ky_fund}, 持仓={len(positions)}只")
+            logger.info(f"账户 {self.account_id} 同步完成: 余额={ky_fund}, 市值={market_value}, 总资产={total_assets}, 持仓={len(positions)}只")
 
             return {
                 "success": True,
@@ -199,14 +242,21 @@ class AccountManager:
                     "message": f"该Cookie已绑定过（{acc['name']}），请勿重复绑定"
                 }
 
-        # 3. 创建账户
+        # 3. 创建账户 (初始开户本金硬约束标准 200,000 元，名称按存入Cookie顺序自动为 1, 2, 3...)
+        seq_name = str(len(existing) + 1)
         acc = db_store.create_account(
-            name=name, balance=ky_fund, cookie=cookie,
-            ths_gdzh=gdzh, ths_competition_id=""
+            name=seq_name, balance=ky_fund, cookie=cookie,
+            ths_gdzh=gdzh, ths_competition_id="", initial_balance=200000.0
         )
+        name = acc.get("name", seq_name)
 
         # 3.5 设为活跃账户
         db_store.set_active_account_id(acc["id"])
+
+        # 同步更新全局 web_connector
+        from ths_connector import web_connector
+        web_connector.cookie = cookie
+        web_connector.connected = True
 
         # 4. 创建trader并同步
         trader = THSAccountTrader(acc["id"])
@@ -214,8 +264,21 @@ class AccountManager:
         trader.connected = True
         self.traders[acc["id"]] = trader
 
-        # 5. 首次同步
+        # 5. 首次同步并立即记录日初基线快照
         sync_result = trader.sync_from_ths()
+        try:
+            if sync_result.get("success"):
+                mv = float(sync_result.get("market_value", 0) or 0)
+                tot_assets = float(sync_result.get("total_assets", 0) or 0) or (ky_fund + mv)
+                db_store.save_snapshot(
+                    balance=ky_fund, market_value=mv,
+                    total_assets=tot_assets,
+                    total_profit=round(tot_assets - acc.get("initial_balance", 200000.0), 2),
+                    position_count=int(sync_result.get("position_count", 0) or 0),
+                    account_id=acc["id"]
+                )
+        except Exception as e:
+            logger.warning(f"新账户基线快照写入失败: {e}")
 
         logger.info(f"绑定同花顺账号: {name} (ID={acc['id']}, 资金={ky_fund})")
         return {
@@ -252,13 +315,17 @@ class AccountManager:
     def sync_all(self) -> Dict:
         """同步所有账户"""
         results = {}
-        for acc_id, trader in self.traders.items():
-            results[acc_id] = trader.sync_from_ths()
+        from db_store import db_store
+        for acc in db_store.list_accounts():
+            acc_id = acc["id"]
+            trader = self.get_trader(acc_id)
+            if trader and trader.connected:
+                results[acc_id] = trader.sync_from_ths()
         return results
 
     def sync_one(self, account_id: int) -> Dict:
         """同步单个账户"""
-        trader = self.traders.get(account_id)
+        trader = self.get_trader(account_id)
         if not trader:
             return {"success": False, "message": "账户未连接"}
         return trader.sync_from_ths()

@@ -195,6 +195,21 @@ class TradingDaemon:
         if self.services_running:
             return
 
+        # 0. 检测 5000 端口是否已由后台服务占用 (防止多实例冲突)
+        import socket
+        port_busy = False
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(0.5)
+                port_busy = (s.connect_ex(('127.0.0.1', 5000)) == 0)
+        except Exception:
+            port_busy = False
+
+        if port_busy:
+            logger.info("本地 5000 端口服务已就绪，复用后台服务...")
+            self.services_running = True
+            return
+
         # 0. 配置防火墙
         setup_firewall()
 
@@ -202,7 +217,7 @@ class TradingDaemon:
         self.flask_thread = threading.Thread(target=self._run_flask, daemon=True)
         self.flask_thread.start()
         logger.info("Flask API starting on http://127.0.0.1:5000")
-        time.sleep(1.5)
+        time.sleep(1.0)
 
         # 2. AutoTrader
         try:
@@ -246,6 +261,16 @@ class TradingDaemon:
 
         # 5. 市场状态监控
         self._start_market_monitor()
+
+        # 6. THS 会话保活守护 (Keep-Alive)
+        try:
+            from auto_login_service import auto_login_service
+            auto_login_service.start_keep_alive(600)
+            logger.info("THS Session Keep-Alive daemon started (interval=10min)")
+
+
+        except Exception as e:
+            logger.error(f"THS Keep-Alive failed to start: {e}")
 
         self.services_running = True
         self._update_icon("green")
@@ -379,42 +404,106 @@ def _create_icon(color="green"):
 
 
 # ================================================================
-#  Menu callbacks
+#  Desktop Bridge & Native Window
 # ================================================================
+
+_main_window = None
+_tray_icon = None
+
+class DesktopBridge:
+    """提供给原生桌面端 Web 界面的双向通信桥梁 (window.pywebview.api)"""
+    def __init__(self, daemon_instance, window_getter):
+        self.daemon = daemon_instance
+        self.window_getter = window_getter
+
+    def minimize_to_tray(self):
+        w = self.window_getter()
+        if w:
+            w.hide()
+            show_notification("THS 量化终端已转入托盘", "后台自动交易与容灾调度持续盯盘中")
+        return {"success": True}
+
+    def toggle_services(self):
+        if self.daemon.services_running:
+            self.daemon.stop_all()
+        else:
+            self.daemon.start_all()
+        return {"running": self.daemon.services_running}
+
+    def run_diagnostics(self):
+        from tools.auto_debugger import QuantAutoDebugger
+        return QuantAutoDebugger().run_all_checks()
+
+    def exit_app(self):
+        threading.Thread(target=self.daemon.request_exit, daemon=True).start()
+        return {"success": True}
+
+    def ping(self):
+        return {"status": "ok", "app": "THS-Trading-AI Native Workstation"}
+
 
 daemon = TradingDaemon()
 
 
-def _on_open(icon, item):
-    webbrowser.open("http://localhost:5000")
+def _on_open(icon=None, item=None):
+    global _main_window
+    if _main_window:
+        try:
+            _main_window.show()
+            _main_window.restore()
+            _main_window.focus()
+            return
+        except Exception as e:
+            logger.warning(f"恢复桌面窗口异常: {e}")
+    logger.info("未检测到活跃的原生桌面窗口实例")
 
 
-def _on_toggle(icon, item):
+def _on_toggle(icon=None, item=None):
     if daemon.services_running:
         daemon.stop_all()
     else:
         daemon.start_all()
 
 
-def _on_autostart(icon, item):
+def _on_autostart(icon=None, item=None):
     current = is_autostart()
     set_autostart(not current)
     show_notification("自启动设置", f"开机自启动已{'开启' if not current else '关闭'}")
 
 
-def _on_exit(icon, item):
+def _on_diagnose(icon=None, item=None):
+    try:
+        from tools.auto_debugger import QuantAutoDebugger
+        report = QuantAutoDebugger().run_all_checks()
+        show_notification(
+            f"系统体检: {report['health_score']}分 ({report['status']})",
+            f"通过: {report['summary']['passed']} | 警告: {report['summary']['warnings']} | 致命: {report['summary']['critical']}"
+        )
+    except Exception as e:
+        logger.error(f"托盘体检失败: {e}")
+
+
+def _on_exit(icon=None, item=None):
+    global _main_window
+    logger.info("用户从托盘选择彻底退出...")
+    if _main_window:
+        try:
+            _main_window.destroy()
+        except Exception:
+            pass
     threading.Thread(target=daemon.request_exit, daemon=True).start()
 
 
 # ================================================================
-#  Main
+#  Main Entry
 # ================================================================
 
 def main():
+    global _main_window, _tray_icon
     _import_gui()
     _import_toast()
 
-    # 解析命令行参数
+    # 命令行快速开关
     if "--autostart" in sys.argv:
         set_autostart(True)
         logger.info("Auto-start enabled via command line")
@@ -424,39 +513,89 @@ def main():
         logger.info("Auto-start disabled via command line")
         return
 
-    if not pystray:
-        logger.warning("pystray not available, running headless")
-        daemon.start_all()
-        def _sig(sig, frame):
-            daemon.request_exit()
-            sys.exit(0)
-        signal.signal(signal.SIGTERM, _sig)
-        signal.signal(signal.SIGINT, _sig)
+    # 启动后台服务 (Flask + 调度器 + 盯盘守护)
+    daemon.start_all()
+
+    # 创建托盘图标 (若支持)
+    if pystray and Image:
+        menu = pystray.Menu(
+            pystray.MenuItem("打开量化工作台", _on_open, default=True),
+            pystray.MenuItem("服务开关 (交易/盯盘)", _on_toggle),
+            pystray.MenuItem("系统健康体检", _on_diagnose),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem(f"开机自启动: {'开启' if is_autostart() else '关闭'}", _on_autostart),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem("彻底退出应用", _on_exit),
+        )
+
+        icon_img = _create_icon("green")
+        _tray_icon = pystray.Icon(
+            "THS Trading AI",
+            icon_img,
+            "同花顺 AI 量化交易终端 (2026团队赛版)",
+            menu,
+        )
+        daemon.set_icon(_tray_icon)
+
+        # 在独立守护线程启动托盘图标，让主线程交给 GUI 窗口
+        try:
+            _tray_icon.run_detached()
+            logger.info("✅ 系统托盘已在后台启动 (detached)")
+        except Exception as e:
+            logger.warning(f"托盘后台启动异常: {e}")
+
+    # 浏览器模式强制开关 (如用户通过 --browser 参数启动)
+    if "--browser" in sys.argv:
+        logger.info("🌐 运行于普通浏览器模式")
+        threading.Timer(1.5, lambda: webbrowser.open("http://localhost:5000")).start()
         daemon._shutdown_event.wait()
         return
 
-    menu = pystray.Menu(
-        pystray.MenuItem("Open Panel", _on_open, default=True),
-        pystray.MenuItem("Toggle Services", _on_toggle),
-        pystray.Menu.SEPARATOR,
-        pystray.MenuItem(f"Auto-Start: {'ON' if is_autostart() else 'OFF'}", _on_autostart),
-        pystray.Menu.SEPARATOR,
-        pystray.MenuItem("Exit", _on_exit),
-    )
+    # 默认模式：启动 PyWebView 原生 Edge Chromium WebView2 桌面窗口
+    try:
+        import webview
+        logger.info("🚀 启动 Edge WebView2 原生桌面应用客户端...")
 
-    icon = pystray.Icon(
-        "THS Trading AI",
-        _create_icon("green"),
-        "THS Trading AI",
-        menu,
-    )
+        bridge = DesktopBridge(daemon, lambda: _main_window)
 
-    daemon.set_icon(icon)
-    daemon.start_all()
+        _main_window = webview.create_window(
+            title="同花顺 AI 量化交易终端 - 2026 团队赛专用版",
+            url="http://127.0.0.1:5000",
+            width=1480,
+            height=920,
+            min_size=(1100, 700),
+            text_select=True,
+            zoomable=True,
+            js_api=bridge
+        )
 
-    threading.Timer(2.0, lambda: webbrowser.open("http://localhost:5000")).start()
+        # 拦截点击右上角 X 的关闭事件，自动隐藏至托盘防手滑误关
+        def on_closing():
+            if _tray_icon and daemon.services_running:
+                _main_window.hide()
+                show_notification("已最小化至系统托盘", "THS 量化终端在后台持续盯盘。右键托盘图标可彻底退出。")
+                return False  # 阻止直接销毁进程
+            return True
 
-    icon.run()
+        _main_window.events.closing += on_closing
+
+        def _on_gui_ready():
+            if "--debug" not in sys.argv:
+                try:
+                    import ctypes
+                    hwnd = ctypes.windll.kernel32.GetConsoleWindow()
+                    if hwnd:
+                        ctypes.windll.user32.ShowWindow(hwnd, 0)  # SW_HIDE
+                except Exception:
+                    pass
+
+        # 启动 WebView2 事件循环（阻塞主线程）
+        webview.start(_on_gui_ready, gui="edgechromium", debug=False)
+
+    except Exception as e:
+        logger.warning(f"启动 PyWebView 原生窗口失败({e})，自动降级为浏览器模式...")
+        threading.Timer(1.5, lambda: webbrowser.open("http://localhost:5000")).start()
+        daemon._shutdown_event.wait()
 
 
 if __name__ == "__main__":

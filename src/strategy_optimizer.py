@@ -16,8 +16,11 @@ from zoneinfo import ZoneInfo
 logger = logging.getLogger(__name__)
 
 # 静默 Optuna 日志（只显示警告以上）
-import optuna
-optuna.logging.set_verbosity(optuna.logging.WARNING)
+try:
+    import optuna
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+except ImportError:
+    optuna = None
 
 from paths import CONFIG_DIR
 OPTIMIZED_PARAMS_FILE = CONFIG_DIR / "optimized_params.json"

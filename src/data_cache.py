@@ -218,7 +218,17 @@ def get_index_kline(symbol: str, period: str = "daily", days: int = 60) -> list:
     if cached is not None:
         return cached
 
-    # 方案1: 东方财富直连API（指数需要 is_index=True）
+    # 方案1: 腾讯K线API（极速稳定，毫秒级响应）
+    try:
+        from fast_data import fetch_tencent_kline
+        data = fetch_tencent_kline(symbol, period=period, days=days, is_index=True)
+        if data:
+            cache.set(cache_key, data, TTL_KLINE)
+            return data
+    except Exception as e:
+        logger.warning(f"腾讯指数K线请求失败 {symbol}: {e}")
+
+    # 方案2: 东方财富直连API（备用）
     try:
         from fast_data import fetch_eastmoney_kline
         data = fetch_eastmoney_kline(symbol, period=period, days=days, is_index=True)

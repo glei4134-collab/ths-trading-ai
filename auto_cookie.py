@@ -35,8 +35,8 @@ def get_cookie_auto():
         context = browser.new_context()
         page = context.new_page()
 
-        # 打开同花顺模拟炒股
-        page.goto("https://moni.10jqka.com.cn/")
+        # 打开同花顺模拟炒股 (新版官方交易主页)
+        page.goto("https://mncg.10jqka.com.cn/cgiwt/index/index")
         print("\n浏览器已打开，请登录同花顺账户...")
 
         # 等待用户登录

@@ -461,18 +461,18 @@ class RiskManager:
         try:
             rules_file = Path(__file__).parent.parent / "config" / "competition_rules.json"
             rules = json.loads(rules_file.read_text(encoding="utf-8"))
-            return rules.get("period", {}).get("start", "2026-05-06")
+            return rules.get("period", {}).get("start", "2026-10-19")
         except Exception:
-            return "2026-05-06"
+            return "2026-10-19"
 
     @staticmethod
     def _get_competition_end() -> str:
         try:
             rules_file = Path(__file__).parent.parent / "config" / "competition_rules.json"
             rules = json.loads(rules_file.read_text(encoding="utf-8"))
-            return rules.get("period", {}).get("end", "2026-06-30")
+            return rules.get("period", {}).get("end", "2026-11-29")
         except Exception:
-            return "2026-06-30"
+            return "2026-11-29"
 
 
 # 全局风控实例

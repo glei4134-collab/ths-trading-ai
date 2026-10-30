@@ -380,16 +380,39 @@ class THSWebConnector:
             return {"success": False, "message": f"保存失败: {str(e)}"}
 
     def load_cookie(self) -> Dict:
-        """加载已保存的Cookie"""
+        """加载已保存的Cookie（优先从活跃账户加载）"""
         try:
+            # 1. 优先从活跃账户获取Cookie
+            try:
+                from db_store import db_store
+                active_id = db_store.get_active_account_id()
+                if active_id:
+                    db_cookie = db_store.get_account_cookie(active_id)
+                    if db_cookie and not db_cookie.startswith("sandbox_"):
+                        self.cookie = db_cookie
+                        result = self.get_fund()
+                        if result["success"]:
+                            self.connected = True
+                            return {
+                                "success": True,
+                                "message": "Cookie从活跃账户加载成功",
+                                "account_id": active_id
+                            }
+            except Exception:
+                pass
+
+            # 2. 从本地文件加载
             if not COOKIE_FILE.exists():
                 return {"success": False, "message": "未找到保存的Cookie"}
 
             with open(COOKIE_FILE, 'r', encoding='utf-8') as f:
                 data = json.load(f)
 
-            self.cookie = decrypt_cookie(data.get("cookie", ""))
+            plain = decrypt_cookie(data.get("cookie", ""))
+            if plain.startswith("sandbox_"):
+                return {"success": False, "message": "仿真沙盒凭据，跳过网络请求"}
 
+            self.cookie = plain
             result = self.get_fund()
             if result["success"]:
                 self.connected = True
@@ -486,30 +509,43 @@ class THSWebConnector:
                     "withdrawable": 0, "total_assets": 0, "market_value": 0
                 }
                 qryzijin = (api_data.get("result") or {}).get("qryzijin") or {}
-                if qryzijin.get("errorcode") == 0:
-                    fd = (qryzijin.get("result") or {}).get("data") or {}
-                    fund_info["available"] = float(fd.get("kyje", 0))      # 可用余额
-                    fund_info["balance"] = float(fd.get("zjye", 0))        # 资金余额
-                    fund_info["frozen"] = float(fd.get("djje", 0))         # 冻结余额
-                    fund_info["withdrawable"] = float(fd.get("kqje", 0))   # 可取金额
-                    fund_info["total_assets"] = float(fd.get("zzc", 0))    # 总资产
-                    fund_info["market_value"] = float(fd.get("sqsz", 0))   # 证券市值
-                    self.ky_fund = fund_info["available"]
+                if qryzijin.get("errorcode") != 0:
+                    return {
+                        "success": False,
+                        "message": f"资金查询接口异常: {qryzijin.get('errormsg', '未授权或Cookie失效')}"
+                    }
+                fd = (qryzijin.get("result") or {}).get("data") or {}
+                fund_info["available"] = float(fd.get("kyje", 0))      # 可用余额
+                fund_info["balance"] = float(fd.get("zjye", 0))        # 资金余额
+                fund_info["frozen"] = float(fd.get("djje", 0))         # 冻结余额
+                fund_info["withdrawable"] = float(fd.get("kqje", 0))   # 可取金额
+                fund_info["total_assets"] = float(fd.get("zzc", 0))    # 总资产
+                ext = (qryzijin.get("result") or {}).get("extend") or {}
+                gpsz = ext.get("gpsz")
+                fund_info["market_value"] = float(gpsz if gpsz else fd.get("sqsz", 0))   # 证券市值
+                fund_info["total_profit"] = float(ext.get("zyk", 0))
+                self.ky_fund = fund_info["available"]
 
-                # 解析持仓
+                # 解析持仓 (d_2164/d_2117=总股数, d_2121=可卖股数, d_2122=成本价, d_2124=最新价, d_2125=最新市值)
                 qryChicang = (api_data.get("result") or {}).get("qryChicang") or {}
                 chicang_list = ((qryChicang.get("result") or {}).get("list")) or []
                 positions = []
                 for p in chicang_list:
+                    cost_p = float(p.get("d_2122") or 0)
+                    cur_p = float(p.get("d_2124") or cost_p or 0)
+                    amt = int(float(p.get("d_2164") or p.get("d_2117") or 0))
+                    mv = float(p.get("d_2125") or (cur_p * amt) or 0)
                     positions.append({
                         "symbol": p.get("d_2102", ""),
                         "name": p.get("d_2103", ""),
-                        "amount": int(p.get("d_2164", 0)),
-                        "available": int(p.get("d_2121", 0)),
-                        "cost_price": float(p.get("d_2122", 0)),
-                        "market_value": float(p.get("d_2117", 0)),
-                        "profit": float(p.get("d_2147", 0)),
-                        "profit_rate": float(p.get("d_3616", 0)),
+                        "amount": amt,
+                        "available": int(float(p.get("d_2121") or 0)),
+                        "cost_price": cost_p,
+                        "avg_price": cost_p,
+                        "current_price": cur_p,
+                        "market_value": mv,
+                        "profit": float(p.get("d_2147") or 0),
+                        "profit_rate": float(p.get("d_2148") or p.get("d_3616") or 0),
                         "market": p.get("d_2108", ""),
                         "gdzh": p.get("d_2106", ""),
                         "mkcode": p.get("d_2167", "")

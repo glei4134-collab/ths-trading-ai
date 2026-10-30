@@ -43,8 +43,10 @@ class SectorAnalyzer:
             if self._cache and now - self._cache_time < 600:
                 return self._cache
 
-            # 从东方财富获取板块数据
-            sectors = self._fetch_eastmoney_sectors()
+            # 优先从新浪极速行业网关获取，东方财富作为备用
+            sectors = self._fetch_sina_sectors()
+            if not sectors:
+                sectors = self._fetch_eastmoney_sectors()
 
             if sectors:
                 # 按涨幅排序
@@ -55,11 +57,46 @@ class SectorAnalyzer:
 
             return []
         except Exception as e:
-            logger.error(f"获取热点板块失败: {e}")
+            logger.warning(f"获取热点板块失败: {e}")
+            return []
+
+    def _fetch_sina_sectors(self) -> List[Dict]:
+        """从新浪财经获取行业板块数据（毫秒级极速响应，免鉴权不被拦截）"""
+        try:
+            import requests
+            import json
+            import re
+
+            url = "http://vip.stock.finance.sina.com.cn/q/view/newSinaHy.php"
+            headers = {
+                "Referer": "https://finance.sina.com.cn",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            }
+            resp = requests.get(url, headers=headers, timeout=5)
+            resp.encoding = "gbk"
+            m = re.search(r"var\s+\w+\s*=\s*(\{.*\})", resp.text)
+            if not m:
+                return []
+            data = json.loads(m.group(1))
+            sectors = []
+            for k, v in data.items():
+                parts = v.split(",")
+                if len(parts) >= 6:
+                    sectors.append({
+                        "code": parts[0],
+                        "name": parts[1],
+                        "count": int(parts[2]),
+                        "price": float(parts[3] or 0),
+                        "change": float(parts[4] or 0),
+                        "change_pct": float(parts[5] or 0),
+                    })
+            return sectors
+        except Exception as e:
+            logger.debug(f"新浪板块API暂不可用: {e}")
             return []
 
     def _fetch_eastmoney_sectors(self) -> List[Dict]:
-        """从东方财富获取板块数据"""
+        """从东方财富获取板块数据（备用通道）"""
         try:
             import requests
 
@@ -71,8 +108,12 @@ class SectorAnalyzer:
                 "fs": "m:90+t:2",  # 板块指数
                 "fields": "f2,f3,f4,f12,f14",
             }
+            headers = {
+                "Referer": "https://quote.eastmoney.com/",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            }
 
-            resp = requests.get(url, params=params, timeout=10)
+            resp = requests.get(url, params=params, headers=headers, timeout=5)
             data = resp.json()
 
             if not data or "data" not in data:
@@ -94,7 +135,7 @@ class SectorAnalyzer:
 
             return sectors
         except Exception as e:
-            logger.error(f"东方财富板块请求失败: {e}")
+            logger.debug(f"东方财富板块备用通道跳过: {e}")
             return []
 
     def get_sector_for_stock(self, symbol: str) -> str:

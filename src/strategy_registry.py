@@ -172,7 +172,7 @@ def _auto_register():
         from strategies import trend_strategies, momentum_strategies, reversal_strategies
         from strategies import volatility_strategies, volume_strategies, pattern_strategies
         from strategies import composite_strategies, shortterm_strategies
-        from strategies import competition_strategies
+        from strategies import competition_strategies, team_ensemble
     except ImportError:
         # 如果导入失败，添加路径后重试
         src_dir = str(Path(__file__).parent)
@@ -182,12 +182,13 @@ def _auto_register():
         from strategies import trend_strategies, momentum_strategies, reversal_strategies
         from strategies import volatility_strategies, volume_strategies, pattern_strategies
         from strategies import composite_strategies, shortterm_strategies
-        from strategies import competition_strategies
+        from strategies import competition_strategies, team_ensemble
 
     # 扫描所有策略模块中的 BaseStrategy 子类
     modules = [trend_strategies, momentum_strategies, reversal_strategies,
                volatility_strategies, volume_strategies, pattern_strategies,
-               composite_strategies, shortterm_strategies, competition_strategies]
+               composite_strategies, shortterm_strategies, competition_strategies,
+               team_ensemble]
 
     for mod in modules:
         for attr_name in dir(mod):

@@ -175,6 +175,84 @@ class CompetitionManager:
             "countdown": countdown
         }
 
+    def get_detailed_time_window(self, now: datetime = None) -> Dict:
+        """
+        获取当前所处的精准时序窗口
+        包含窗口ID、名称、建议补偿策略、时间起止、是否处于活动窗口
+        """
+        if now is None:
+            now = datetime.now(ZoneInfo('Asia/Shanghai'))
+
+        is_trading_day = self.is_trading_day(now.date())
+        current_time = now.time()
+
+        if not is_trading_day:
+            return {
+                "window_id": "W9_OFF_MARKET_IDLE",
+                "name": "非交易日/休市待机",
+                "is_trading_day": False,
+                "is_active": False,
+                "catchup_policy": "POLICY_MUST_CATCHUP",
+                "description": "周末或法定节假日，系统处于低功耗待机，支持策略离线优化和回测",
+                "current_time": current_time.strftime("%H:%M:%S"),
+            }
+
+        windows = [
+            ("W1_PRE_MARKET_NEWS", "盘前新闻舆情与全网情绪抓取", time(9, 15), time(9, 25), "POLICY_MUST_CATCHUP", "抓取早间宏观、行业新闻与持仓股票情绪，生成多空基调"),
+            ("W2_CALL_AUCTION", "集合竞价决断与冲击池筛选", time(9, 25), time(9, 30), "POLICY_TIME_CRITICAL_DISCARD", "集合竞价定盘，筛选高开量比强势异动股，超9:30严禁追买"),
+            ("W3_MORNING_OPEN", "早盘开盘突击与委托挂单清算", time(9, 30), time(9, 35), "POLICY_TIME_CRITICAL_DISCARD", "开盘冲击波执行，清理昨夜遗留未成交单，超9:40弃用"),
+            ("W4_INTRADAY_MORNING", "早盘连续竞价（高频止盈止损+策略轮询）", time(9, 35), time(11, 30), "POLICY_DEGRADE_ADAPT", "盘中连续交易时段，动态监控止盈止损，按设定间隔执行策略扫描"),
+            ("W5_MIDDAY_RECESS", "午间休市复盘与未成交单撤单清理", time(11, 30), time(13, 0), "POLICY_MUST_CATCHUP", "午间撤销早盘未成交废单防下午被动套牢，重爬午间舆情与复盘"),
+            ("W6_INTRADAY_AFTERNOON", "午盘连续竞价（趋势跟踪与换手）", time(13, 0), time(14, 50), "POLICY_DEGRADE_ADAPT", "午后趋势追踪，逢高止盈或破位止损"),
+            ("W7_CLOSING_REBALANCE", "尾盘防隔夜回撤与尾盘调仓", time(14, 50), time(15, 0), "POLICY_MUST_CATCHUP", "A股实行T+1，尾盘买入隔夜风险最低，撤销不可隔夜限价单，锁定当日胜率"),
+            ("W8_AFTER_HOURS_SETTLE", "盘后结算对账与次日策略预选", time(15, 0), time(16, 0), "POLICY_MUST_CATCHUP", "核对券商真实持仓资金，评估策略衰减权重，计算明日备选池与生成复盘报告"),
+        ]
+
+        matched = None
+        for wid, name, wstart, wend, policy, desc in windows:
+            if wstart <= current_time < wend:
+                matched = {
+                    "window_id": wid,
+                    "name": name,
+                    "is_trading_day": True,
+                    "is_active": True,
+                    "catchup_policy": policy,
+                    "start": wstart.strftime("%H:%M"),
+                    "end": wend.strftime("%H:%M"),
+                    "description": desc,
+                    "current_time": current_time.strftime("%H:%M:%S"),
+                }
+                break
+
+        if not matched:
+            matched = {
+                "window_id": "W9_OFF_MARKET_IDLE",
+                "name": "盘外待机时段",
+                "is_trading_day": True,
+                "is_active": False,
+                "catchup_policy": "POLICY_MUST_CATCHUP",
+                "start": "16:00",
+                "end": "09:15",
+                "description": "非竞价时段，系统静默运行，支持离线调试演练",
+                "current_time": current_time.strftime("%H:%M:%S"),
+            }
+
+        return matched
+
+    def is_in_competition_period(self, check_date: date = None) -> bool:
+        """检查指定日期是否处于比赛实际开赛阶段 (2026-10-19 ~ 2026-11-29)"""
+        if check_date is None:
+            check_date = date.today()
+        period = self.rules.get("period", {})
+        start_str = period.get("start", "2026-10-19")
+        end_str = period.get("end", "2026-11-29")
+        try:
+            start_date = date.fromisoformat(start_str)
+            end_date = date.fromisoformat(end_str)
+            return start_date <= check_date <= end_date
+        except Exception:
+            return True
+
     def _next_trading_open(self, from_time: datetime) -> str:
         """计算下一个交易日的开盘时间"""
         hours = self.rules.get("trading_rules", {}).get("trading_hours", [])
