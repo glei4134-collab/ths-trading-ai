@@ -741,17 +741,7 @@ def get_positions():
                 web_connector.cookie = c
                 web_connector.connected = True
 
-        # 优先级1：全局web_connector
-        if web_connector.connected and web_connector.cookie:
-            result = web_connector.get_positions()
-            if result["success"]:
-                return jsonify({
-                    "success": True,
-                    "data": result["data"]
-                })
-            logger.warning(f"网页API获取持仓失败: {result.get('message')}")
-
-        # 优先级2：通过 account_manager 的 trader 实时查询
+        # 优先级1：通过 account_manager 的专属 trader 实时查询（独立维护 cookie 与 gdzh）
         from account_manager import account_manager
         accounts = db_store.list_accounts()
         if accounts:
@@ -764,6 +754,16 @@ def get_positions():
                         "success": True,
                         "data": result["data"]
                     })
+
+        # 优先级2：全局web_connector兜底
+        if web_connector.connected and web_connector.cookie:
+            result = web_connector.get_positions()
+            if result["success"]:
+                return jsonify({
+                    "success": True,
+                    "data": result["data"]
+                })
+            logger.warning(f"网页API获取持仓失败: {result.get('message')}")
 
         # 最终回退：本地模拟数据
         if not accounts:
@@ -844,21 +844,8 @@ def get_balance():
         market_val = 0.0
         connected = False
 
-        # 优先级1：全局web_connector
-        if web_connector.connected and web_connector.cookie and not web_connector.cookie.startswith("sandbox_"):
-            result = web_connector.get_positions()
-            if result.get("success") and result.get("data"):
-                fund = result["data"].get("fund", {})
-                balance = float(fund.get("available", 0))
-                total = float(fund.get("total_assets", 0))
-                market_val = float(fund.get("market_value", 0))
-                if total <= 0:
-                    total = balance + market_val
-                if total > 0 or balance > 0:
-                    connected = True
-
-        # 优先级2：通过 account_manager 的 trader 实时查询
-        if not connected and accounts and active:
+        # 优先级1：通过 account_manager 的专属 trader 实时查询
+        if accounts and active:
             from account_manager import account_manager
             trader = account_manager.get_trader(active["id"])
             if trader and trader.connected:
@@ -872,6 +859,19 @@ def get_balance():
                         total = balance + market_val
                     if total > 0 or balance > 0:
                         connected = True
+
+        # 优先级2：全局web_connector兜底
+        if not connected and web_connector.connected and web_connector.cookie and not web_connector.cookie.startswith("sandbox_"):
+            result = web_connector.get_positions()
+            if result.get("success") and result.get("data"):
+                fund = result["data"].get("fund", {})
+                balance = float(fund.get("available", 0))
+                total = float(fund.get("total_assets", 0))
+                market_val = float(fund.get("market_value", 0))
+                if total <= 0:
+                    total = balance + market_val
+                if total > 0 or balance > 0:
+                    connected = True
 
         # 优先级3：最终回退 DB 缓存数据
         if not connected:
