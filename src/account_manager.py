@@ -211,8 +211,23 @@ class AccountManager:
         from db_store import db_store
 
         # 1. 验证Cookie
+        if "userid=ths_gu_" in cookie:
+            return {
+                "success": False,
+                "message": "检测到当前同花顺处于未登录访客状态 (ths_gu_)！请先在同花顺网页登录您的正式账号，并点击【同花顺交易区】进入交易台后再提取。"
+            }
+
         test_trader = THSAccountTrader(0)
         conn_result = test_trader.connect(cookie)
+        if not conn_result["success"] and ("资金账号不存在" in str(conn_result.get("message")) or "未登录" in str(conn_result.get("message"))):
+            from ths_connector import activate_mncg_trade_session
+            act_res = activate_mncg_trade_session(cookie)
+            if act_res.get("success"):
+                cookie = act_res["cookie"]
+                conn_result = test_trader.connect(cookie)
+            elif "访客" in act_res.get("message", "") or "未登录" in act_res.get("message", ""):
+                return {"success": False, "message": act_res["message"]}
+
         if not conn_result["success"]:
             return {"success": False, "message": conn_result["message"]}
 

@@ -145,6 +145,22 @@ class DBStore:
         c.execute("CREATE INDEX IF NOT EXISTS idx_ledger_date ON scheduler_execution_ledger(date)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_ledger_status ON scheduler_execution_ledger(status)")
 
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS api_performance_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                account_id INTEGER DEFAULT 0,
+                action TEXT NOT NULL,
+                url TEXT NOT NULL,
+                duration_ms REAL NOT NULL,
+                status_code INTEGER DEFAULT 0,
+                success INTEGER DEFAULT 1,
+                error_message TEXT DEFAULT ''
+            )
+        """)
+        c.execute("CREATE INDEX IF NOT EXISTS idx_perf_time ON api_performance_logs(timestamp)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_perf_action ON api_performance_logs(action)")
+
         self.conn.commit()
 
     def _ensure_account_id_columns(self):
@@ -825,6 +841,73 @@ class DBStore:
             "total_profit": round(sum(s["total_profit"] for s in summaries), 2),
             "accounts": summaries
         }
+
+
+    def record_api_metric(self, action: str, url: str, duration_ms: float,
+                          account_id: int = 0, status_code: int = 200,
+                          success: bool = True, error_message: str = ""):
+        """记录网络与API性能指标"""
+        with self._lock:
+            try:
+                now_str = datetime.now(ZoneInfo('Asia/Shanghai')).strftime("%Y-%m-%d %H:%M:%S")
+                self.conn.execute("""
+                    INSERT INTO api_performance_logs 
+                    (timestamp, account_id, action, url, duration_ms, status_code, success, error_message)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, (now_str, account_id, action, url, round(duration_ms, 2),
+                         status_code, 1 if success else 0, str(error_message)[:200]))
+                self.conn.commit()
+            except Exception as e:
+                logger.error(f"记录API性能指标失败: {e}")
+
+    def get_api_performance_stats(self, limit: int = 100) -> Dict:
+        """获取API网络性能统计分析"""
+        with self._lock:
+            try:
+                c = self.conn.cursor()
+                c.execute("""
+                    SELECT action, COUNT(*) as count, 
+                           AVG(duration_ms) as avg_duration, 
+                           MIN(duration_ms) as min_duration, 
+                           MAX(duration_ms) as max_duration,
+                           SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) as fail_count
+                    FROM api_performance_logs
+                    GROUP BY action
+                """)
+                summary = [dict(r) for r in c.fetchall()]
+                
+                c.execute("""
+                    SELECT * FROM api_performance_logs 
+                    ORDER BY id DESC LIMIT ?
+                """, (limit,))
+                recent = [dict(r) for r in c.fetchall()]
+                return {"summary": summary, "recent": recent}
+            except Exception as e:
+                logger.error(f"获取API性能分析失败: {e}")
+                return {"summary": [], "recent": []}
+
+    def checkpoint_wal(self, mode: str = "TRUNCATE") -> Dict:
+        """执行 WAL 检查点，将 WAL 事务日志压缩截断合并至主库"""
+        with self._lock:
+            try:
+                res = self.conn.execute(f"PRAGMA wal_checkpoint({mode})").fetchone()
+                logger.info(f"✅ WAL Checkpoint({mode}) 执行完成: busy={res[0]}, log={res[1]}, checkpointed={res[2]}")
+                return {"success": True, "busy": res[0], "log": res[1], "checkpointed": res[2]}
+            except Exception as e:
+                logger.error(f"WAL Checkpoint 失败: {e}")
+                return {"success": False, "error": str(e)}
+
+    def vacuum_and_optimize(self) -> Dict:
+        """执行 SQLite 数据库碎片整理与查询优化"""
+        with self._lock:
+            try:
+                self.conn.execute("PRAGMA optimize")
+                self.conn.execute("VACUUM")
+                logger.info("✅ SQLite VACUUM 与 PRAGMA optimize 完成")
+                return {"success": True}
+            except Exception as e:
+                logger.error(f"SQLite VACUUM 失败: {e}")
+                return {"success": False, "error": str(e)}
 
     def export_all(self, account_id: int = None) -> Dict:
         """导出数据"""

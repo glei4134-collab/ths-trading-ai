@@ -4406,6 +4406,14 @@ def quick_bind_ths_account():
             resp.headers["Access-Control-Allow-Origin"] = "*"
             return resp
 
+        if "userid=ths_gu_" in cookie:
+            msg = "❌ 检测到当前处于未登录访客状态 (ths_gu_)！<br><br>请在同花顺网页先登录您的正式账号，并<b>点击【同花顺交易区】</b>进入交易台，然后再点击此同步按钮。"
+            if request.method == 'GET':
+                return Response(_render_quick_bind_html(False, msg), mimetype='text/html')
+            resp = jsonify({"success": False, "message": msg})
+            resp.headers["Access-Control-Allow-Origin"] = "*"
+            return resp
+
         result = account_manager.add_account("", cookie)
         if request.method == 'GET' and request.args.get("format") != "json":
             return Response(

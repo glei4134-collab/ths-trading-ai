@@ -329,6 +329,65 @@ class THSDesktopConnector:
             return {"success": False, "message": f"获取余额失败: {str(e)}"}
 
 
+def activate_mncg_trade_session(cookie: str, session: Optional[requests.Session] = None) -> Dict:
+    """
+    模拟盘席位自动激活握手：
+    如果 cookie 仅包含 UPass 通行证登录态或停留在门户弹窗未点击交易区（缺少/未绑定 zjzh），
+    自动请求 http://moni.10jqka.com.cn/mncg/index/getcjdbs/?perPage=10 获取比赛席位 jyUrlOl，
+    自动访问 trade.php?usrid=... 激活真实的模拟盘席位，补齐 PHPSESSID 和资金账号上下文。
+    """
+    if not cookie:
+        return {"success": False, "message": "Cookie 为空"}
+
+    # 检测是否为未登录访客临时身份
+    if "userid=ths_gu_" in cookie:
+        return {
+            "success": False,
+            "message": "检测到当前同花顺处于未登录访客状态 (ths_gu_)！请先在网页上登录您的正式同花顺账号，并点击【同花顺交易区】进入交易台后再提取。"
+        }
+
+    s = session or requests.Session()
+    s.trust_env = False
+    cookie_dict = {}
+    for part in cookie.split(";"):
+        if "=" in part:
+            k, v = part.split("=", 1)
+            cookie_dict[k.strip()] = v.strip()
+    s.cookies.update(cookie_dict)
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
+        "Referer": "http://moni.10jqka.com.cn/",
+        "Accept": "application/json, text/javascript, */*; q=0.01"
+    }
+
+    try:
+        r = s.get("http://moni.10jqka.com.cn/mncg/index/getcjdbs/?perPage=10", headers=headers, timeout=8, proxies={"http": None, "https": None})
+        if r.status_code == 200:
+            res_json = r.json()
+            data_list = (res_json.get("result") or {}).get("data") or []
+            if data_list:
+                jy_url = data_list[0].get("jyUrlOl") or ""
+                if "usrid=&" in jy_url:
+                    return {
+                        "success": False,
+                        "message": "同花顺账号未登录：比赛接口返回资金账号为空 (usrid=&)。请先登录同花顺正式账号并点击【同花顺交易区】。"
+                    }
+                if jy_url:
+                    logger.info(f"⚡ [Auto-Activate] 发现模拟盘入场地址: {jy_url}，正在自动完成握手...")
+                    s.get(jy_url, headers=headers, allow_redirects=True, timeout=10, proxies={"http": None, "https": None})
+                    # 激活后重新组装 Cookie
+                    new_dict = dict(cookie_dict)
+                    for c in s.cookies:
+                        new_dict[c.name] = c.value
+                    new_cookie = "; ".join(f"{k}={v}" for k, v in new_dict.items())
+                    return {"success": True, "cookie": new_cookie, "message": "模拟盘交易席位自动激活成功"}
+    except Exception as e:
+        logger.warning(f"自动激活模拟盘席位失败: {e}")
+
+    return {"success": False, "cookie": cookie, "message": "无需激活或无法自动激活"}
+
+
 class THSWebConnector:
     """
     同花顺网页版连接器
@@ -378,8 +437,20 @@ class THSWebConnector:
 
             # 验证Cookie是否有效
             result = self.get_fund()
+            if not result["success"] and ("资金账号不存在" in str(result.get("message")) or "未登录" in str(result.get("message"))):
+                act_res = activate_mncg_trade_session(cookie, session=self.session)
+                if act_res.get("success"):
+                    cookie = act_res["cookie"]
+                    self.cookie = cookie
+                    result = self.get_fund()
+                elif "访客" in act_res.get("message", "") or "未登录" in act_res.get("message", ""):
+                    return {"success": False, "message": act_res["message"]}
+
             if result["success"]:
                 self.connected = True
+                data["cookie"] = encrypt_cookie(self.cookie)
+                with open(COOKIE_FILE, 'w', encoding='utf-8') as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2)
                 return {
                     "success": True,
                     "message": f"Cookie验证成功，可用资金: {result['data']}"
@@ -1240,17 +1311,22 @@ class QRLoginManager:
                 self._qr_state = 2
                 return {"success": True, "status": "scanned", "message": "📱 已扫码！请在手机同花顺App上点击【确认登录】"}
             elif qr_status == 3:
-                # 手机已确认，访问一次模拟交易主页激活 PHPSESSID
-                try:
-                    self._session.get(
-                        "https://mncg.10jqka.com.cn/cgiwt/index/index",
-                        headers={"Referer": "https://upass.10jqka.com.cn/"},
-                        timeout=10
-                    )
-                except Exception as e:
-                    logger.debug(f"激活 mncg 主页会话提示: {e}")
+                # 手机已确认，自动执行模拟盘交易席位激活握手
+                raw_cookie = self._extract_full_cookie_str()
+                act_res = activate_mncg_trade_session(raw_cookie, session=self._session)
+                final_cookie = act_res.get("cookie") if act_res.get("success") else raw_cookie
+                if not act_res.get("success"):
+                    try:
+                        self._session.get(
+                            "https://mncg.10jqka.com.cn/cgiwt/index/index",
+                            headers={"Referer": "https://upass.10jqka.com.cn/"},
+                            timeout=10
+                        )
+                        final_cookie = self._extract_full_cookie_str()
+                    except Exception as e:
+                        logger.debug(f"激活 mncg 主页会话提示: {e}")
 
-                cookie_str = self._extract_full_cookie_str()
+                cookie_str = final_cookie
                 if cookie_str:
                     return {
                         "success": True,
