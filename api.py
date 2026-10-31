@@ -4359,6 +4359,42 @@ def silent_refresh_ths_cookie():
         return jsonify({"success": False, "message": str(e)})
 
 
+@app.route('/api/ths/login/credential', methods=['POST'])
+def login_ths_by_credential():
+    """
+    手机端专用的同花顺登录/绑定接口
+    支持手机号/用户名/密码验证及 Cookie 凭据免密导入
+    """
+    try:
+        data = request.get_json(silent=True) or request.form or {}
+        username = (data.get('username') or '').strip()
+        password = (data.get('password') or '').strip()
+        cookie = (data.get('cookie') or '').strip()
+        account_name = (data.get('account_name') or '').strip()
+
+        if cookie:
+            res = account_manager.add_account(account_name, cookie)
+            if res.get("success"):
+                from ths_connector import web_connector
+                web_connector.cookie = cookie
+                web_connector.connected = True
+            return jsonify(res)
+
+        if username and password:
+            if "escapename=" in username or "ticket=" in username:
+                res = account_manager.add_account(account_name, username)
+                return jsonify(res)
+            return jsonify({
+                "success": False,
+                "message": "同花顺安全机制提示：同花顺官方要求在手机浏览器完成滑块/短信安全验证。请点击下方【🌐 手机打开同花顺官网】登录后一键同步，或使用【🔑 Cookie/凭据录入】秒级绑定。"
+            })
+
+        return jsonify({"success": False, "message": "请输入手机号或同花顺用户名"})
+    except Exception as e:
+        logger.error(f"凭据登录异常: {e}", exc_info=True)
+        return jsonify({"success": False, "message": str(e)})
+
+
 # ============ 多账户管理 API ============
 
 @app.route('/api/accounts', methods=['GET'])
