@@ -366,6 +366,8 @@
         let totalCombinedInitial = 0;
         let totalCombinedProfit = 0;
 
+        const currentActiveId = window.activeAccountId || _activeAccountId || (accounts[0] && accounts[0].id);
+
         const grid = document.getElementById('accountCardsGrid');
         if (grid) {
             grid.innerHTML = accounts.slice(0, 3).map((acc, idx) => {
@@ -383,11 +385,19 @@
 
                 const profitColor = profit >= 0 ? '#ff1824' : '#00f59b';
                 const sign = profit > 0 ? '+' : '';
+                const isActive = (acc.id === currentActiveId);
+
+                const activeStyle = isActive
+                    ? `border: 1px solid ${cfg.themeColor}; border-top: 3px solid ${cfg.themeColor}; background: linear-gradient(180deg, rgba(35,20,30,0.98) 0%, rgba(18,14,20,0.95) 100%); box-shadow: 0 0 16px ${cfg.themeColor}55;`
+                    : `border: 1px solid rgba(255,255,255,0.08); border-top: 2px solid ${cfg.themeColor}; background: rgba(18, 14, 20, 0.85);`;
 
                 return `
-                    <div onclick="switchAccount(${acc.id})" style="border: 1px solid rgba(255,255,255,0.1); border-top: 2px solid ${cfg.themeColor}; background: rgba(18, 14, 20, 0.85); border-radius: 6px; padding: 8px 10px; cursor: pointer; transition: all 0.2s;" onmouseover="this.style.background='rgba(30,20,28,0.95)'" onmouseout="this.style.background='rgba(18, 14, 20, 0.85)'">
+                    <div onclick="switchAccount(${acc.id})" style="${activeStyle} border-radius: 6px; padding: 8px 10px; cursor: pointer; transition: all 0.2s;" onmouseover="this.style.transform='translateY(-2px)'" onmouseout="this.style.transform='none'">
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-                            <span style="font-size: 11px; font-weight: 800; color: #f8fafc;">${acc.name || `账户${acc.id}`}</span>
+                            <div style="display: flex; align-items: center; gap: 4px;">
+                                <span style="font-size: 11px; font-weight: 800; color: #f8fafc;">${acc.name || `账户${acc.id}`}</span>
+                                ${isActive ? '<span style="font-size: 9px; color: #00f59b; font-weight: 800;">●当前</span>' : ''}
+                            </div>
                             <span style="font-size: 9px; font-weight: 800; font-family: var(--font-mono); padding: 1px 5px; border-radius: 3px; color: ${cfg.themeColor}; background: ${cfg.bgGrad};">${cfg.badge}</span>
                         </div>
                         <div style="font-size: 13px; font-weight: 800; color: #f8fafc; font-family: var(--font-mono); margin-bottom: 2px;">
@@ -422,8 +432,9 @@
             consTr.style.color = rate >= 0 ? '#ff1824' : '#00f59b';
         }
 
-        // 单账户面板数据 (侧边栏)
-        const primary = accounts[0] || {};
+        // 单账户面板数据 (呈现当前选中的活动账户)
+        const selectedAcc = accounts.find(a => a.id === currentActiveId) || accounts[0] || {};
+        const primary = selectedAcc;
         const pInitial = Number(primary.initial_balance) || 200000;
         const pAssets = Number(primary.total_assets || primary.balance) || pInitial;
         const pAvailable = Number(primary.ky_fund || primary.balance) || 0;

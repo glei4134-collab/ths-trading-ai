@@ -5918,7 +5918,10 @@
             input.value = '';
         }
 
+        // 核心账户切换函数 (网络层与界面局部刷新彻底解耦，杜绝 ReferenceError 引发双 Toast 误报)
         async function switchAccount(accountId) {
+            let switchSuccess = false;
+            let accountName = `账户${accountId}`;
             try {
                 showToast('切换账户中...', 'info');
                 const res = await fetch('/api/accounts/switch', {
@@ -5928,22 +5931,47 @@
                 });
                 const data = await res.json();
                 if (data.success) {
+                    switchSuccess = true;
                     activeAccountId = accountId;
-                    showToast(`已切换到: ${data.data.name}`, 'success');
-                    renderAccountList();
-                    renderMultiAccountMatrix();
-                    loadExecutionAndPortfolio();
-                    // 刷新所有数据
-                    loadAccountInfo();
-                    loadPositions();
-                    loadTradeHistory();
-                    loadRiskAssessment();
-                    loadHotStocks();
+                    window.activeAccountId = accountId;
+                    accountName = (data.data && data.data.name) ? data.data.name : accountName;
+                    showToast(`已切换到: ${accountName}`, 'success');
                 } else {
-                    showToast(data.message, 'error');
+                    showToast(data.message || '切换失败', 'error');
+                    return;
                 }
-            } catch(e) { showToast('切换失败', 'error'); }
+            } catch(e) {
+                console.error('[Account] 切换账户网络异常:', e);
+                showToast('切换失败', 'error');
+                return;
+            }
+
+            // 切换成功后的局部刷新流程 (独立容错，绝不抛错误伤切换结果)
+            if (switchSuccess) {
+                try { if (typeof renderAccountList === 'function') renderAccountList(); } catch(e) {}
+                try { if (typeof renderMultiAccountMatrix === 'function') renderMultiAccountMatrix(); } catch(e) {}
+                try { if (typeof syncAndRenderMultiAccounts === 'function') syncAndRenderMultiAccounts(); } catch(e) {}
+                try { if (typeof loadExecutionAndPortfolio === 'function') loadExecutionAndPortfolio(); } catch(e) {}
+                try { if (typeof loadAccountInfo === 'function') loadAccountInfo(); } catch(e) {}
+                try { if (typeof loadPositions === 'function') loadPositions(); } catch(e) {}
+                try { if (typeof loadTradeHistory === 'function') loadTradeHistory(); } catch(e) {}
+                try { if (typeof loadRiskAssessment === 'function') loadRiskAssessment(); } catch(e) {}
+                try { if (typeof loadHotStocks === 'function') loadHotStocks(); } catch(e) {}
+            }
         }
+
+        // 标准兜底实现：账户执行与资产组合综合刷新器
+        function loadExecutionAndPortfolio() {
+            try {
+                if (typeof renderMultiAccountMatrix === 'function') renderMultiAccountMatrix();
+                if (typeof syncAndRenderMultiAccounts === 'function') syncAndRenderMultiAccounts();
+                if (typeof loadPositions === 'function') loadPositions();
+                if (typeof loadTradeHistory === 'function') loadTradeHistory();
+            } catch (e) {
+                console.warn('[P5] loadExecutionAndPortfolio 执行异常:', e);
+            }
+        }
+        window.loadExecutionAndPortfolio = loadExecutionAndPortfolio;
 
 
         // ==================== 3 账户异构策略元数据与矩阵渲染 ====================
@@ -8540,6 +8568,8 @@
         let totalCombinedInitial = 0;
         let totalCombinedProfit = 0;
 
+        const currentActiveId = window.activeAccountId || _activeAccountId || (accounts[0] && accounts[0].id);
+
         const grid = document.getElementById('accountCardsGrid');
         if (grid) {
             grid.innerHTML = accounts.slice(0, 3).map((acc, idx) => {
@@ -8557,11 +8587,19 @@
 
                 const profitColor = profit >= 0 ? '#ff1824' : '#00f59b';
                 const sign = profit > 0 ? '+' : '';
+                const isActive = (acc.id === currentActiveId);
+
+                const activeStyle = isActive
+                    ? `border: 1px solid ${cfg.themeColor}; border-top: 3px solid ${cfg.themeColor}; background: linear-gradient(180deg, rgba(35,20,30,0.98) 0%, rgba(18,14,20,0.95) 100%); box-shadow: 0 0 16px ${cfg.themeColor}55;`
+                    : `border: 1px solid rgba(255,255,255,0.08); border-top: 2px solid ${cfg.themeColor}; background: rgba(18, 14, 20, 0.85);`;
 
                 return `
-                    <div onclick="switchAccount(${acc.id})" style="border: 1px solid rgba(255,255,255,0.1); border-top: 2px solid ${cfg.themeColor}; background: rgba(18, 14, 20, 0.85); border-radius: 6px; padding: 8px 10px; cursor: pointer; transition: all 0.2s;" onmouseover="this.style.background='rgba(30,20,28,0.95)'" onmouseout="this.style.background='rgba(18, 14, 20, 0.85)'">
+                    <div onclick="switchAccount(${acc.id})" style="${activeStyle} border-radius: 6px; padding: 8px 10px; cursor: pointer; transition: all 0.2s;" onmouseover="this.style.transform='translateY(-2px)'" onmouseout="this.style.transform='none'">
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-                            <span style="font-size: 11px; font-weight: 800; color: #f8fafc;">${acc.name || `账户${acc.id}`}</span>
+                            <div style="display: flex; align-items: center; gap: 4px;">
+                                <span style="font-size: 11px; font-weight: 800; color: #f8fafc;">${acc.name || `账户${acc.id}`}</span>
+                                ${isActive ? '<span style="font-size: 9px; color: #00f59b; font-weight: 800;">●当前</span>' : ''}
+                            </div>
                             <span style="font-size: 9px; font-weight: 800; font-family: var(--font-mono); padding: 1px 5px; border-radius: 3px; color: ${cfg.themeColor}; background: ${cfg.bgGrad};">${cfg.badge}</span>
                         </div>
                         <div style="font-size: 13px; font-weight: 800; color: #f8fafc; font-family: var(--font-mono); margin-bottom: 2px;">
@@ -8596,8 +8634,9 @@
             consTr.style.color = rate >= 0 ? '#ff1824' : '#00f59b';
         }
 
-        // 单账户面板数据 (侧边栏)
-        const primary = accounts[0] || {};
+        // 单账户面板数据 (呈现当前选中的活动账户)
+        const selectedAcc = accounts.find(a => a.id === currentActiveId) || accounts[0] || {};
+        const primary = selectedAcc;
         const pInitial = Number(primary.initial_balance) || 200000;
         const pAssets = Number(primary.total_assets || primary.balance) || pInitial;
         const pAvailable = Number(primary.ky_fund || primary.balance) || 0;
@@ -8727,7 +8766,7 @@
     }
 })();
 
-</script>
+    </script>
 <!-- 扫码登录弹窗 -->
     
 

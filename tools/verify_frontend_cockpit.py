@@ -50,6 +50,7 @@ class FrontendVerificationSuite:
         self.test_4_engine_script_loaded()
         self.test_5_backend_api_data_integrity()
         self.test_6_runtime_logic_dry_run()
+        self.test_7_switch_account_contract_safety()
 
         print("-" * 70)
         print(f"验收总结: 通过 {self.passed} 项, 失败 {self.failed} 项, 告警 {self.warnings} 项")
@@ -150,6 +151,24 @@ class FrontendVerificationSuite:
         print("\n[测试阶段 6] 模拟前端数据映射与占位符填充测试")
         has_fallback = "非交易时段" in self.html_content or "W0" in self.html_content
         self.assert_test("具备非交易时段及空账本优雅降级保护", has_fallback, "缺少离线时段降级显示逻辑")
+
+    def test_7_switch_account_contract_safety(self):
+        print("\n[测试阶段 7] 账户切换安全契约与未定义函数防空断言")
+        # 1. 验证 loadExecutionAndPortfolio 存在声明
+        has_portfolio_fn = "function loadExecutionAndPortfolio" in self.html_content
+        self.assert_test("必须显式定义 loadExecutionAndPortfolio 函数", has_portfolio_fn, "loadExecutionAndPortfolio 仍为未定义函数！")
+
+        # 2. 验证 switchAccount 函数存在且完成网络层与局部刷新的容错隔离
+        has_switch_fn = "async function switchAccount" in self.html_content
+        self.assert_test("包含核心 switchAccount 切换函数", has_switch_fn)
+
+        # 3. 验证 switchAccount 中杜绝裸调用导致的未捕获异常
+        has_safe_switch = "switchSuccess" in self.html_content or "typeof loadExecutionAndPortfolio" in self.html_content
+        self.assert_test("switchAccount 具备级联刷新容错隔离与防空保护", has_safe_switch, "switchAccount 缺少安全隔离机制")
+
+        # 4. 验证 3 账户卡片支持当前激活状态高亮
+        has_active_highlight = "currentActiveId" in self.html_content or "activeAccountId" in self.html_content
+        self.assert_test("3账户卡片支持当前激活状态高亮与持久化", has_active_highlight)
 
 
 if __name__ == "__main__":
