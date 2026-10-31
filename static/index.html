@@ -2255,6 +2255,15 @@
             .account-value { font-size: 13px; }
             .chart-area { min-height: 200px; }
         }
+    
+        /* 全局彻底隐藏所有断开连接按钮 */
+        button[onclick*="disconnectAccount"],
+        .disconnect-btn,
+        #btnDisconnect,
+        #loginStatusBox button {
+            display: none !important;
+        }
+
     </style>
 
     <style id="premium-quant-hud-styles">
@@ -2622,6 +2631,11 @@
 
         <!-- Right: 系统体检胶囊 & 桌面端标识 -->
         <div style="display:flex;align-items:center;gap:12px;white-space:nowrap;">
+                        <div onclick="openPerformanceModal()" style="cursor:pointer;display:flex;align-items:center;gap:6px;background:var(--bg-card);padding:4px 12px;border-radius:var(--radius-sm);border:1px solid rgba(56,189,248,0.4);transition:all 0.2s;" title="点击打开同花顺API网络延迟与链路健康监控">
+                <span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:#00e676;box-shadow:0 0 8px #00e676;" id="hudRttDot"></span>
+                <span style="color:var(--text-secondary);font-size:11px;">网关 RTT:</span>
+                <span style="color:#00e676;font-weight:700;font-size:12px;font-family:var(--font-mono);" id="hudRttText">-- ms</span>
+            </div>
             <div onclick="openDiagnosticModal()" style="cursor:pointer;display:flex;align-items:center;gap:8px;background:var(--bg-card);padding:4px 12px;border-radius:var(--radius-sm);border:1px solid rgba(63,185,80,0.5);">
                 <span style="font-size:14px;">🩺</span>
                 <span style="color:#3fb950;font-weight:700;font-size:12px;" id="hudHealthScore">体检 100分</span>
@@ -2745,7 +2759,51 @@
             </div>
             <div class="panel-body" style="flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:12px;">
 
-                <!-- 1. 资产与收益率看板 -->
+                                <!-- 3 独立账户并排快速切换矩阵与全局资产看板 -->
+                <div id="multiAccountMatrix" style="background:#0d1117;border:1px solid #30363d;border-radius:10px;padding:12px;margin-bottom:12px;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+                        <div style="display:flex;align-items:center;gap:6px;">
+                            <span style="font-size:12px;font-weight:700;color:#f8fafc;">👥 3账户并排管理</span>
+                            <span id="accMatrixActiveBadge" style="font-size:10px;background:rgba(56,189,248,0.15);color:#38bdf8;padding:1px 6px;border-radius:4px;font-weight:600;">当前主视口</span>
+                        </div>
+                        <button onclick="toggleConsolidatedView()" id="btnConsolidatedView" style="background:rgba(56,189,248,0.12);border:1px solid rgba(56,189,248,0.35);color:#38bdf8;padding:3px 10px;border-radius:5px;font-size:11px;font-weight:700;cursor:pointer;transition:all 0.2s;">
+                            📊 全局合并总览
+                        </button>
+                    </div>
+
+                    <!-- 三卡片网格容器 (自适应3列) -->
+                    <div id="accountCardsGrid" style="display:grid;grid-template-columns:repeat(3, 1fr);gap:8px;">
+                        <div style="text-align:center;color:#8b949e;padding:12px;font-size:11px;grid-column:1/-1;">正在加载多账户状态...</div>
+                    </div>
+
+                    <!-- 全局合并资产透视卡片 (支持展开/折叠) -->
+                    <div id="consolidatedSummaryBox" style="display:none;margin-top:10px;padding:10px 12px;background:linear-gradient(135deg, rgba(16,24,39,0.9) 0%, rgba(15,23,42,0.9) 100%);border:1px solid rgba(56,189,248,0.3);border-radius:8px;">
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;border-bottom:1px solid rgba(255,255,255,0.06);padding-bottom:6px;">
+                            <span style="font-size:11px;font-weight:700;color:#38bdf8;">🌐 3 账户汇总合并总资产</span>
+                            <span id="consSyncTime" style="font-size:10px;color:#94a3b8;">实时计算</span>
+                        </div>
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:6px;">
+                            <div>
+                                <div style="font-size:10px;color:#94a3b8;">合并总资产(元)</div>
+                                <div style="font-size:16px;font-weight:800;color:#f8fafc;font-family:var(--font-mono);" id="consTotalAssets">¥0.00</div>
+                            </div>
+                            <div>
+                                <div style="font-size:10px;color:#94a3b8;">合并可用现金(元)</div>
+                                <div style="font-size:16px;font-weight:800;color:#38bdf8;font-family:var(--font-mono);" id="consAvailable">¥0.00</div>
+                            </div>
+                            <div>
+                                <div style="font-size:10px;color:#94a3b8;">合并累计盈亏</div>
+                                <div style="font-size:15px;font-weight:800;font-family:var(--font-mono);" id="consTotalProfit">--</div>
+                            </div>
+                            <div>
+                                <div style="font-size:10px;color:#94a3b8;">合并收益率</div>
+                                <div style="font-size:15px;font-weight:800;font-family:var(--font-mono);" id="consTotalProfitRate">--</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+<!-- 1. 资产与收益率看板 -->
                 <div style="background:#0d1117;border:1px solid #30363d;border-radius:10px;padding:12px;">
                     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
                         <span style="font-size:11px;color:#8b949e;">账户资产总览</span>
@@ -3102,6 +3160,8 @@
                     setTimeout(() => {
                         closeConnectModal();
                         loadAccountList();
+        fetchNetworkPerformance();
+        setInterval(fetchNetworkPerformance, 12000);
                         loadExecutionAndPortfolio();
                     }, 1200);
                 } else {
@@ -4950,6 +5010,7 @@
                 const acEl = document.getElementById('accountCount');
                 if (acEl) acEl.textContent = `${allAccounts.length} 个账号`;
                 renderAccountList();
+                renderMultiAccountMatrix();
             } catch(e) { console.error('加载账户失败:', e); }
         }
 
@@ -8108,7 +8169,288 @@
         bootCockpitApplication();
     }
 
-    </script>
+    
+    // ==========================================
+    // 🌐 网关性能监控 (RTT) 与 3 独立账户大屏增强
+    // ==========================================
+    let isConsolidatedViewOpen = false;
+
+    function toggleConsolidatedView() {
+        isConsolidatedViewOpen = !isConsolidatedViewOpen;
+        const box = document.getElementById('consolidatedSummaryBox');
+        const btn = document.getElementById('btnConsolidatedView');
+        if (box) box.style.display = isConsolidatedViewOpen ? 'block' : 'none';
+        if (btn) {
+            btn.style.background = isConsolidatedViewOpen ? 'rgba(56,189,248,0.3)' : 'rgba(56,189,248,0.12)';
+            btn.textContent = isConsolidatedViewOpen ? '收起合并总览' : '📊 全局合并总览';
+        }
+        if (isConsolidatedViewOpen) updateConsolidatedAssets();
+    }
+
+    function updateConsolidatedAssets() {
+        if (!allAccounts || !allAccounts.length) return;
+        let totalA = 0;
+        let totalAvail = 0;
+        let totalProfit = 0;
+        let totalInitial = 0;
+
+        allAccounts.forEach(acc => {
+            const initBal = Number(acc.initial_balance) || 200000;
+            const ast = Number(acc.total_assets || acc.balance) || initBal;
+            const avail = Number(acc.ky_fund || acc.balance) || 0;
+            const p = (acc.total_profit !== undefined && Number(acc.total_profit) !== 0) ? Number(acc.total_profit) : (ast - initBal);
+            totalA += ast;
+            totalAvail += avail;
+            totalProfit += p;
+            totalInitial += initBal;
+        });
+
+        const rate = totalInitial > 0 ? (totalProfit / totalInitial) * 100 : 0;
+        const color = totalProfit >= 0 ? '#ff4d4f' : '#00e676';
+        const sign = totalProfit > 0 ? '+' : (totalProfit < 0 ? '-' : '');
+        const rateSign = rate > 0 ? '+' : (rate < 0 ? '-' : '');
+
+        const elA = document.getElementById('consTotalAssets');
+        const elAvail = document.getElementById('consAvailable');
+        const elP = document.getElementById('consTotalProfit');
+        const elR = document.getElementById('consTotalProfitRate');
+        const elT = document.getElementById('consSyncTime');
+
+        if (elA) elA.textContent = '¥' + formatNumber(totalA);
+        if (elAvail) elAvail.textContent = '¥' + formatNumber(totalAvail);
+        if (elP) {
+            elP.style.color = color;
+            elP.textContent = `${sign}¥${formatNumber(Math.abs(totalProfit))}`;
+        }
+        if (elR) {
+            elR.style.color = color;
+            elR.textContent = `${rateSign}${Math.abs(rate).toFixed(2)}%`;
+        }
+        if (elT) elT.textContent = new Date().toLocaleTimeString();
+    }
+
+    function renderMultiAccountMatrix() {
+        const grid = document.getElementById('accountCardsGrid');
+        if (!grid) return;
+        if (!allAccounts || !allAccounts.length) {
+            grid.innerHTML = '<div style="text-align:center;color:#8b949e;padding:10px;font-size:11px;grid-column:1/-1;">暂未录入独立账户</div>';
+            return;
+        }
+
+        // 渲染最多3个卡片 (如果多于3个也按自适应排布)
+        grid.innerHTML = allAccounts.map((acc, idx) => {
+            const initBal = Number(acc.initial_balance) || 200000;
+            const totalAssets = Number(acc.total_assets || acc.balance) || initBal;
+            const profit = (acc.total_profit !== undefined && Number(acc.total_profit) !== 0) 
+                ? Number(acc.total_profit) 
+                : (totalAssets - initBal);
+            const profitRate = (acc.total_profit_rate !== undefined && acc.total_profit_rate !== null && Number(acc.total_profit_rate) !== 0)
+                ? Number(acc.total_profit_rate)
+                : ((profit / initBal) * 100);
+
+            const isActive = (activeAccountId === acc.id) || (allAccounts.length === 1 && idx === 0);
+            const profitColor = profit >= 0 ? '#ff4d4f' : '#00e676';
+            const profitSign = profit > 0 ? '+' : (profit < 0 ? '-' : '');
+            const rateSign = profitRate > 0 ? '+' : (profitRate < 0 ? '-' : '');
+
+            const borderStyle = isActive 
+                ? 'border:1px solid #38bdf8;background:linear-gradient(180deg, rgba(56,189,248,0.18) 0%, rgba(15,23,42,0.9) 100%);box-shadow:0 0 14px rgba(56,189,248,0.25);'
+                : 'border:1px solid rgba(255,255,255,0.08);background:rgba(22,27,34,0.6);';
+
+            return `
+                <div onclick="switchAccount(${acc.id})" style="${borderStyle};border-radius:8px;padding:8px 10px;cursor:pointer;transition:all 0.2s;display:flex;flex-direction:column;justify-content:space-between;min-height:76px;" title="点击切换至该账户">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+                        <span style="font-size:11px;font-weight:700;color:#f8fafc;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:65px;">${acc.name || ('账户' + (idx+1))}</span>
+                        ${isActive ? '<span style="font-size:9px;background:#38bdf8;color:#090d15;font-weight:800;padding:1px 4px;border-radius:3px;">活动</span>' : '<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#00e676;"></span>'}
+                    </div>
+                    <div>
+                        <div style="font-size:13px;font-weight:800;color:#f8fafc;font-family:var(--font-mono);">¥${formatNumber(totalAssets)}</div>
+                        <div style="font-size:10px;color:${profitColor};font-family:var(--font-mono);font-weight:700;margin-top:2px;">
+                            ${profitSign}¥${formatNumber(Math.abs(profit))} (${rateSign}${Math.abs(profitRate).toFixed(1)}%)
+                        </div>
+                    </div>
+                </div>
+            `;
+        }).join('');
+
+        if (isConsolidatedViewOpen) updateConsolidatedAssets();
+    }
+
+    // ⚡ 网关网络往返延迟 (RTT) 轮询与监控组件
+    let latestPerfStats = null;
+
+    async function fetchNetworkPerformance() {
+        try {
+            const res = await fetch('/api/system/performance?limit=60');
+            const result = await res.json();
+            if (!result.success || !result.data) return;
+
+            latestPerfStats = result.data;
+            const recent = latestPerfStats.recent || [];
+            if (!recent.length) return;
+
+            // 计算最近 10 次调用的平均 RTT
+            const sample = recent.slice(0, 10);
+            const avgRtt = Math.round(sample.reduce((sum, item) => sum + (item.duration_ms || 0), 0) / sample.length);
+
+            const dot = document.getElementById('hudRttDot');
+            const text = document.getElementById('hudRttText');
+
+            if (text) text.textContent = `${avgRtt} ms`;
+            if (dot) {
+                if (avgRtt < 200) {
+                    dot.style.background = '#00e676';
+                    dot.style.boxShadow = '0 0 8px #00e676';
+                    if (text) text.style.color = '#00e676';
+                } else if (avgRtt < 500) {
+                    dot.style.background = '#e3b341';
+                    dot.style.boxShadow = '0 0 8px #e3b341';
+                    if (text) text.style.color = '#e3b341';
+                } else {
+                    dot.style.background = '#ff4d4f';
+                    dot.style.boxShadow = '0 0 8px #ff4d4f';
+                    if (text) text.style.color = '#ff4d4f';
+                }
+            }
+        } catch(e) {
+            console.error('获取API网络性能失败:', e);
+        }
+    }
+
+    async function triggerDbMaintenance() {
+        try {
+            showToast('正在触发SQLite WAL截断与碎片整理...', 'info');
+            const res = await fetch('/api/system/db-maintenance', { method: 'POST' });
+            const data = await res.json();
+            if (data.success) {
+                showToast('✅ SQLite维护执行成功！', 'success');
+            } else {
+                showToast('维护失败: ' + (data.message || data.error), 'error');
+            }
+        } catch(e) {
+            showToast('请求异常: ' + e.message, 'error');
+        }
+    }
+
+    function openPerformanceModal() {
+        const oldModal = document.getElementById('performanceModal');
+        if (oldModal) oldModal.remove();
+
+        const modal = document.createElement('div');
+        modal.id = 'performanceModal';
+        modal.style.cssText = 'position:fixed;top:0;left:0;width:100vw;height:100vh;background:rgba(0,0,0,0.85);backdrop-filter:blur(10px);z-index:999999;display:flex;align-items:center;justify-content:center;';
+
+        const summary = latestPerfStats?.summary || [];
+        const recent = latestPerfStats?.recent || [];
+
+        let summaryRows = summary.map(s => {
+            const avg = Math.round(s.avg_duration || 0);
+            const fail = s.fail_count || 0;
+            const color = avg < 200 ? '#00e676' : (avg < 500 ? '#e3b341' : '#ff4d4f');
+            return `
+                <tr style="border-bottom:1px solid rgba(255,255,255,0.05);text-align:left;">
+                    <td style="padding:8px 12px;font-weight:700;color:#f8fafc;font-family:var(--font-mono);">${s.action}</td>
+                    <td style="padding:8px 12px;color:#94a3b8;font-family:var(--font-mono);">${s.count} 次</td>
+                    <td style="padding:8px 12px;color:${color};font-weight:700;font-family:var(--font-mono);">${avg} ms</td>
+                    <td style="padding:8px 12px;color:#cbd5e1;font-family:var(--font-mono);">${Math.round(s.min_duration || 0)} / ${Math.round(s.max_duration || 0)} ms</td>
+                    <td style="padding:8px 12px;color:${fail > 0 ? '#ff4d4f' : '#00e676'};font-weight:700;font-family:var(--font-mono);">${fail}</td>
+                </tr>
+            `;
+        }).join('');
+
+        if (!summaryRows) {
+            summaryRows = '<tr><td colspan="5" style="text-align:center;padding:20px;color:#94a3b8;">暂无足够性能汇总数据</td></tr>';
+        }
+
+        let recentRows = recent.slice(0, 15).map(r => {
+            const ms = Math.round(r.duration_ms || 0);
+            const color = r.success ? (ms < 200 ? '#00e676' : '#e3b341') : '#ff4d4f';
+            return `
+                <tr style="border-bottom:1px solid rgba(255,255,255,0.03);font-size:11px;">
+                    <td style="padding:6px 10px;color:#94a3b8;font-family:var(--font-mono);">${r.timestamp || '--'}</td>
+                    <td style="padding:6px 10px;font-weight:600;color:#cbd5e1;font-family:var(--font-mono);">${r.action}</td>
+                    <td style="padding:6px 10px;color:${color};font-weight:700;font-family:var(--font-mono);">${ms} ms</td>
+                    <td style="padding:6px 10px;color:${r.success ? '#00e676' : '#ff4d4f'};font-weight:700;">${r.success ? '成功' : '失败'}</td>
+                    <td style="padding:6px 10px;color:#64748b;font-family:var(--font-mono);max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${r.error_message || '--'}</td>
+                </tr>
+            `;
+        }).join('');
+
+        if (!recentRows) {
+            recentRows = '<tr><td colspan="5" style="text-align:center;padding:15px;color:#94a3b8;">暂无网络调用明细</td></tr>';
+        }
+
+        modal.innerHTML = `
+            <div style="background:#0d1117;border:1px solid rgba(56,189,248,0.4);border-radius:14px;width:820px;max-width:92vw;max-height:88vh;display:flex;flex-direction:column;box-shadow:0 24px 64px rgba(0,0,0,0.85);overflow:hidden;">
+                <!-- 弹窗顶栏 -->
+                <div style="padding:14px 20px;background:linear-gradient(90deg, #161f30 0%, #0f1624 100%);border-bottom:1px solid #30363d;display:flex;justify-content:space-between;align-items:center;">
+                    <div style="display:flex;align-items:center;gap:10px;">
+                        <span style="font-size:18px;">⚡</span>
+                        <span style="font-size:15px;font-weight:800;color:#f8fafc;letter-spacing:0.4px;">同花顺 API 性能与往返延迟 (RTT) 监控大屏</span>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:8px;">
+                        <button onclick="fetchNetworkPerformance().then(() => openPerformanceModal())" style="background:rgba(56,189,248,0.15);border:1px solid rgba(56,189,248,0.35);color:#38bdf8;padding:4px 10px;border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;">🔄 刷新数据</button>
+                        <button onclick="triggerDbMaintenance()" style="background:rgba(35,134,54,0.2);border:1px solid #238636;color:#3fb950;padding:4px 10px;border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;">🧹 SQLite维护优化</button>
+                        <button onclick="document.getElementById('performanceModal').remove()" style="background:transparent;border:none;color:#8b949e;font-size:20px;cursor:pointer;padding:0 4px;">&times;</button>
+                    </div>
+                </div>
+
+                <!-- 弹窗主体内容 -->
+                <div style="padding:16px 20px;overflow-y:auto;display:flex;flex-direction:column;gap:16px;">
+                    <!-- 接口延迟统计表格 -->
+                    <div style="background:#161b22;border:1px solid #30363d;border-radius:10px;padding:12px;">
+                        <div style="font-size:12px;font-weight:700;color:#38bdf8;margin-bottom:8px;display:flex;justify-content:space-between;">
+                            <span>📊 各关键交易动作延迟汇总 (Summary)</span>
+                            <span style="font-size:11px;color:#8b949e;">绿色 &lt;200ms | 黄色 200-500ms | 红色 &gt;500ms</span>
+                        </div>
+                        <table style="width:100%;border-collapse:collapse;font-size:12px;">
+                            <thead>
+                                <tr style="border-bottom:1px solid #30363d;color:#8b949e;text-align:left;">
+                                    <th style="padding:6px 12px;">网关 Action</th>
+                                    <th style="padding:6px 12px;">调用总量</th>
+                                    <th style="padding:6px 12px;">平均 RTT 延迟</th>
+                                    <th style="padding:6px 12px;">波动极值 (Min/Max)</th>
+                                    <th style="padding:6px 12px;">异常失败数</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${summaryRows}
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <!-- 最近网络调用明细流 -->
+                    <div style="background:#161b22;border:1px solid #30363d;border-radius:10px;padding:12px;">
+                        <div style="font-size:12px;font-weight:700;color:#f8fafc;margin-bottom:8px;display:flex;justify-content:space-between;">
+                            <span>⏱️ 最近高精度调用延迟流水 (Recent Top 15)</span>
+                            <span style="font-size:11px;color:#8b949e;">毫秒级追踪</span>
+                        </div>
+                        <table style="width:100%;border-collapse:collapse;font-size:11px;">
+                            <thead>
+                                <tr style="border-bottom:1px solid #30363d;color:#8b949e;text-align:left;">
+                                    <th style="padding:6px 10px;">时间戳</th>
+                                    <th style="padding:6px 10px;">动作</th>
+                                    <th style="padding:6px 10px;">往返耗时</th>
+                                    <th style="padding:6px 10px;">状态</th>
+                                    <th style="padding:6px 10px;">错误摘要</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${recentRows}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        modal.onclick = function(e) {
+            if (e.target === modal) modal.remove();
+        };
+        document.body.appendChild(modal);
+    }
+
+</script>
 <!-- 扫码登录弹窗 -->
 </body>
 </html>
