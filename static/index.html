@@ -7609,8 +7609,7 @@
         // 0. 初始化工作台主视口与移动端响应式自适应
         setWorkstationView('cockpit');
         handleResize();
-        initBookmarkletHref();
-
+        
         // 1. 启动全局 HUD 态势顶栏与时钟
         try {
             if (typeof initGlobalStatusHud === 'function') initGlobalStatusHud();
