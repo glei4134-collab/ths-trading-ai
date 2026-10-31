@@ -190,12 +190,21 @@ def add_no_cache_headers(response):
 
 @app.route('/')
 def index():
-    return send_from_directory('static', 'index.html')
+    resp = send_from_directory('static', 'index.html')
+    resp.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate, max-age=0'
+    resp.headers['Pragma'] = 'no-cache'
+    resp.headers['Expires'] = '0'
+    return resp
 
 
 @app.route('/<path:path>')
 def static_files(path):
-    return send_from_directory('static', path)
+    resp = send_from_directory('static', path)
+    if path.endswith('.html') or path.endswith('.js'):
+        resp.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate, max-age=0'
+        resp.headers['Pragma'] = 'no-cache'
+        resp.headers['Expires'] = '0'
+    return resp
 
 
 @app.route('/api/health', methods=['GET'])
