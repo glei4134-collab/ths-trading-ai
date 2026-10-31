@@ -584,8 +584,7 @@ class AIScheduler:
             from db_store import db_store
             from account_manager import account_manager
 
-            # 1. 验证 SQLite 数据库连通性
-            db_stats = db_store.get_stats()
+            # 1. 验证 SQLite 数据库连通性并获取账户列表
             accounts = db_store.list_accounts()
 
             # 2. 检查账户与资金基线
