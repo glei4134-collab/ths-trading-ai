@@ -24,7 +24,7 @@ from api.context import (
     data_store, competition_manager, strategy_scanner,
     cache, get_realtime_quote, get_realtime_quotes_batch,
     get_kline, get_intraday, compute_indicators, get_kline_with_indicators,
-    notification_manager, db_store, account_manager, auto_login_service
+    notification_manager, cockpit_hub, db_store, account_manager, auto_login_service
 )
 
 logger = logging.getLogger(__name__)
@@ -184,6 +184,19 @@ def trade_buy():
                               details={"price": price, "amount": amount, "total": (price or 0) * amount})
                 except Exception:
                     pass
+                try:
+                    active_id = db_store.get_active_account_id() or 1
+                    acc_obj = db_store.get_account(active_id) or {}
+                    acc_name = acc_obj.get("name") or f"账户-{active_id}"
+                    cockpit_hub.broadcast_trade(
+                        action="buy", symbol=symbol, name=name,
+                        price=float(price or 0), amount=int(amount),
+                        total=float((price or 0) * amount),
+                        account_id=active_id, account_name=acc_name,
+                        order_id=str(result.get("data", {}).get("order_id", result.get("order_id", "")))
+                    )
+                except Exception:
+                    pass
             return jsonify(result)
 
         # 本地模拟交易
@@ -311,6 +324,19 @@ def trade_sell():
                     from activity_log import activity_log as _alog
                     _alog.log(action="sell", actor="user", symbol=symbol, name=name,
                               details={"price": price, "amount": amount, "total": (price or 0) * amount})
+                except Exception:
+                    pass
+                try:
+                    active_id = db_store.get_active_account_id() or 1
+                    acc_obj = db_store.get_account(active_id) or {}
+                    acc_name = acc_obj.get("name") or f"账户-{active_id}"
+                    cockpit_hub.broadcast_trade(
+                        action="sell", symbol=symbol, name=name,
+                        price=float(price or 0), amount=int(amount),
+                        total=float((price or 0) * amount),
+                        account_id=active_id, account_name=acc_name,
+                        order_id=str(result.get("data", {}).get("order_id", result.get("order_id", "")))
+                    )
                 except Exception:
                     pass
             return jsonify(result)
@@ -1187,11 +1213,24 @@ def trade_batch_order():
             except Exception:
                 pass
 
+            order_id_str = str(order_res.get("data", {}).get("order_id", order_res.get("order_id", "")))
+            if order_res.get("success"):
+                try:
+                    cockpit_hub.broadcast_trade(
+                        action=action, symbol=symbol, name=symbol,
+                        price=float(price or 0), amount=int(amount),
+                        total=float((price or 0) * amount),
+                        account_id=acc_id, account_name=acc_name,
+                        duration_ms=duration_ms, order_id=order_id_str
+                    )
+                except Exception:
+                    pass
+
             results.append({
                 "account_id": acc_id,
                 "account_name": acc_name,
                 "success": bool(order_res.get("success")),
-                "order_id": str(order_res.get("data", {}).get("order_id", order_res.get("order_id", ""))),
+                "order_id": order_id_str,
                 "message": order_res.get("message", "委托已提交" if order_res.get("success") else "失败"),
                 "duration_ms": duration_ms
             })

@@ -441,6 +441,20 @@ class AutoTrader:
             order = self.create_order(symbol, action, int(amount or 0), float(price or 0.0))
             if notes:
                 order.notes = notes
+        # ★ 订单执行优化: 五档盘口深度 (OBI) 解析与涨停跨档抢筹
+        depth = None
+        if order.action == "buy":
+            try:
+                from execution_optimizer import fetch_orderbook_depth, evaluate_aggressive_pegging
+                depth = fetch_orderbook_depth(order.symbol)
+                opt_price, is_pegged, peg_notes = evaluate_aggressive_pegging(order.symbol, order.action, order.price, depth)
+                if is_pegged:
+                    order.price = opt_price
+                    order.notes = f"{order.notes} [{peg_notes}]".strip()
+                    logger.info(f"AutoTrader 订单 {order.order_id} 触发抢筹优化: {peg_notes}")
+            except Exception as opt_err:
+                logger.debug(f"AutoTrader 盘口优化跳过: {opt_err}")
+
         # 风控检查
         risk_check = self.check_risk(order.symbol, order.action, order.price, order.amount)
         if not risk_check["allowed"]:
@@ -451,20 +465,44 @@ class AutoTrader:
                 "message": order.notes
             }
 
-        # ★ 尝试通过真实THS连接器执行交易
+        # ★ 尝试通过真实THS连接器执行交易 (支持TWAP微批次)
         real_executed = False
         try:
             from ths_connector import get_active_connector
             conn, conn_type = get_active_connector()
             if conn and getattr(conn, 'connected', False):
                 if order.action == "buy":
-                    real_result = conn.buy(order.symbol, order.price, order.amount)
+                    # TWAP 微批次拆单
+                    from execution_optimizer import plan_twap_micro_batches
+                    is_twap, twap_batches, twap_notes = plan_twap_micro_batches(
+                        {0: order.amount},
+                        depth.ask1_vol if depth else 0,
+                        batch_interval=1.5
+                    )
+                    if is_twap and len(twap_batches) > 1:
+                        logger.info(f"AutoTrader {twap_notes}")
+                        batch_res_list = []
+                        for b_idx, b in enumerate(twap_batches):
+                            sub_qty = b.get(0, 0)
+                            if sub_qty > 0:
+                                b_res = conn.buy(order.symbol, order.price, sub_qty)
+                                batch_res_list.append(b_res)
+                                if b_idx < len(twap_batches) - 1:
+                                    _time.sleep(1.5)
+                        if any(r.get("success") for r in batch_res_list):
+                            real_executed = True
+                            order.notes = f"{order.notes} TWAP拆解{len(batch_res_list)}批次".strip()
+                            real_result = {"success": True, "batches": batch_res_list}
+                        else:
+                            real_result = batch_res_list[-1] if batch_res_list else {"success": False, "message": "TWAP执行失败"}
+                    else:
+                        real_result = conn.buy(order.symbol, order.price, order.amount)
                 else:
                     real_result = conn.sell(order.symbol, order.price, order.amount)
 
                 if real_result.get("success"):
                     real_executed = True
-                    order.notes = f"通过{conn_type}连接器执行"
+                    order.notes = f"{order.notes} 通过{conn_type}连接器执行".strip()
                     logger.info(f"✅ 真实交易执行成功: {order.action} {order.symbol} {order.amount}股 via {conn_type}")
                 else:
                     order.status = OrderStatus.FAILED
@@ -622,9 +660,19 @@ class AutoTrader:
             "data": trade_record
         }
 
-    def check_stop_loss_take_profit(self, stock_prices: Dict[str, float]) -> List[Dict]:
-        """检查止损止盈（含移动止损）"""
+    def check_stop_loss_take_profit(
+        self,
+        stock_prices: Dict[str, float],
+        stock_stats: Dict[str, Dict] = None
+    ) -> List[Dict]:
+        """
+        检查止损止盈（ATR差异化动态止损 + 阶梯移动锁利棘轮）
+        - 浮盈超 +5%: 自动锁定成本价 +2% 保底利润
+        - 浮盈超 +8.5%: 检测放量滞涨，分批减半锁定利润
+        - 跌破移动止损位: 果断清仓
+        """
         signals = []
+        stock_stats = stock_stats or {}
 
         for symbol, pos in list(self.positions.items()):
             if symbol in stock_prices:
@@ -634,33 +682,60 @@ class AutoTrader:
                 # 计算盈亏比例
                 profit_pct = (current_price / pos.avg_price - 1) * 100 if pos.avg_price > 0 else 0
 
-                # 移动止损：盈利超过5%时启动
-                if profit_pct > 5:
-                    # 盈利5%后，止损上移到成本价+2%
-                    new_stop = pos.avg_price * 1.02
-                    if new_stop > pos.stop_loss:
-                        pos.stop_loss = new_stop
-                        logger.info(f"{symbol} 移动止损更新: {pos.stop_loss:.2f} (盈利{profit_pct:.1f}%)")
+                # 阶梯 1: 浮盈超 +5% 自动锁定成本价 +2% 保底利
+                if profit_pct >= 5.0:
+                    lock_stop = pos.avg_price * 1.02
+                    if lock_stop > getattr(pos, "stop_loss", 0):
+                        pos.stop_loss = lock_stop
+                        logger.info(f"🛡️ [{symbol}] 启动阶梯移动锁利棘轮: 浮盈达 {profit_pct:.1f}%，止损上移锁定至 +2% 保底价 ¥{lock_stop:.2f}")
 
-                # 检查止损
-                if self.config["auto_stop_loss"] and pos.stop_loss > 0:
+                # 阶梯 2: 浮盈超 +8.5% 放量滞涨分批减半锁定利润
+                if profit_pct >= 8.5:
+                    stats = stock_stats.get(symbol, {})
+                    vol = stats.get("volume", 0)
+                    avg_vol = stats.get("avg_vol_5d", 0)
+                    day_change = stats.get("change_pct", 0)
+                    high_price = stats.get("high", current_price)
+
+                    # 放量滞涨特征判定：成交量放大超5日均量1.8倍，但涨幅缩窄(<1.8%)或最高点回撤超过2.5%
+                    is_volume_spike = (vol > 0 and avg_vol > 0 and vol >= avg_vol * 1.8)
+                    is_stagnation = (day_change < 1.8 or (high_price > 0 and (high_price - current_price) / high_price >= 0.025))
+
+                    already_halved = getattr(pos, "half_taken", False)
+                    if (is_volume_spike and is_stagnation) and not already_halved:
+                        half_amount = (pos.amount // 200) * 100
+                        if half_amount >= 100:
+                            pos.half_taken = True
+                            signals.append({
+                                "symbol": symbol,
+                                "action": "sell",
+                                "reason": f"🎯 阶梯移动锁利棘轮: 浮盈已达 +{profit_pct:.1f}% 且出现放量滞涨，分批减半卖出锁定战果",
+                                "amount": half_amount,
+                                "price": current_price,
+                                "is_partial": True
+                            })
+                            continue
+
+                # 检查止损（全仓）
+                if self.config.get("auto_stop_loss", True) and getattr(pos, "stop_loss", 0) > 0:
                     if current_price <= pos.stop_loss:
-                        reason = "触发移动止损" if profit_pct > 0 else "触发止损"
+                        reason = "触发移动锁利保底线" if profit_pct > 0 else "触发硬止损"
                         signals.append({
                             "symbol": symbol,
                             "action": "sell",
-                            "reason": f"{reason}: 当前价 {current_price} <= 止损价 {pos.stop_loss:.2f}",
+                            "reason": f"{reason}: 当前价 ¥{current_price} <= 止损价 ¥{pos.stop_loss:.2f} (盈亏率: {profit_pct:+.1f}%)",
                             "amount": pos.amount,
                             "price": current_price
                         })
+                        continue
 
-                # 检查止盈
-                if self.config["auto_take_profit"] and pos.take_profit > 0:
+                # 检查止盈（常规全仓到达目标位）
+                if self.config.get("auto_take_profit", True) and getattr(pos, "take_profit", 0) > 0:
                     if current_price >= pos.take_profit:
                         signals.append({
                             "symbol": symbol,
                             "action": "sell",
-                            "reason": f"触发止盈: 当前价 {current_price} >= 止盈价 {pos.take_profit}",
+                            "reason": f"触发全量目标止盈: 当前价 ¥{current_price} >= 止盈价 ¥{pos.take_profit:.2f}",
                             "amount": pos.amount,
                             "price": current_price
                         })

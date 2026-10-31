@@ -1,5 +1,5 @@
 [Unit]
-Description=THS Quant Trading AI Engine (7x24 High Availability)
+Description=THS Quant Trading AI Engine (7x24 Production WSGI High Availability)
 After=network.target network-online.target
 Wants=network-online.target
 
@@ -10,7 +10,10 @@ WorkingDirectory=/opt/ths-trading-ai
 Environment="PYTHONUNBUFFERED=1"
 Environment="TZ=Asia/Shanghai"
 Environment="PATH=/opt/ths-trading-ai/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin"
-ExecStart=/opt/ths-trading-ai/venv/bin/python api.py --port 5000
+# 生产级 Gunicorn WSGI 高并发服务器
+ExecStart=/opt/ths-trading-ai/venv/bin/gunicorn -c deploy/gunicorn_conf.py api:app
+# 支持 kill -HUP 零闪断热重载
+ExecReload=/bin/kill -HUP $MAINPID
 Restart=always
 RestartSec=5s
 KillMode=process

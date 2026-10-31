@@ -179,23 +179,30 @@ class RiskManager:
         }
 
     def calculate_stop_loss(self, entry_price: float, volatility: float,
-                           support_level: float = None) -> Dict:
+                           support_level: float = None, symbol: str = "") -> Dict:
         """
-        计算止损价（动态ATR止损）
+        计算止损价（主板/双创差异化动态 ATR 止损）
 
         Args:
             entry_price: 入场价格
             volatility: 波动率 (ATR/价格)
             support_level: 支撑位
+            symbol: 标的代码，用于识别主板 vs 双创(创业板300/科创板688)
 
         Returns:
             止损建议
         """
-        # 方法1: ATR止损（2倍波动率）
-        atr_stop = entry_price * (1 - 2 * volatility)
+        # 判断板位：双创标的 (300 创业板, 688 科创板) 日涨跌幅限制 20%，ATR 乘数与容忍度放大
+        is_gem_or_star = bool(symbol and (str(symbol).startswith("300") or str(symbol).startswith("688")))
+        atr_multiplier = 2.5 if is_gem_or_star else 1.8
+        min_fixed_pct = 0.065 if is_gem_or_star else 0.045
+        max_fixed_pct = 0.085 if is_gem_or_star else 0.065
 
-        # 方法2: 固定比例止损（最低5%，最高8%）
-        fixed_pct = 0.05 + min(volatility * 2, 0.03)  # 根据波动率调整
+        # 方法1: 板位差异化 ATR 止损
+        atr_stop = entry_price * (1 - atr_multiplier * volatility)
+
+        # 方法2: 固定比例止损（根据波动率调整）
+        fixed_pct = min_fixed_pct + min(volatility * 2, max_fixed_pct - min_fixed_pct)
         fixed_stop = entry_price * (1 - fixed_pct)
 
         # 方法3: 支撑位止损
@@ -207,6 +214,8 @@ class RiskManager:
         return {
             "stop_loss": round(optimal_stop, 2),
             "stop_loss_pct": round((entry_price - optimal_stop) / entry_price * 100, 2),
+            "is_gem_or_star": is_gem_or_star,
+            "atr_multiplier": atr_multiplier,
             "methods": {
                 "atr": round(atr_stop, 2),
                 "fixed": round(fixed_stop, 2),

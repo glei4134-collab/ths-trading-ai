@@ -24,7 +24,7 @@ from api.context import (
     data_store, competition_manager, strategy_scanner,
     cache, get_realtime_quote, get_realtime_quotes_batch,
     get_kline, get_intraday, compute_indicators, get_kline_with_indicators,
-    notification_manager, db_store, account_manager, auto_login_service
+    notification_manager, cockpit_hub, db_store, account_manager, auto_login_service
 )
 
 logger = logging.getLogger(__name__)
@@ -680,6 +680,63 @@ def notifications_stream():
 
     return Response(generate(), mimetype='text/event-stream',
                     headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
+
+
+
+@system_bp.route('/api/stream/cockpit', methods=['GET'])
+def cockpit_stream():
+    """驾驶舱毫秒级 SSE 流式推送通道 (成交事件、时序流转、风控预警)"""
+    from flask import Response
+    import queue as _queue
+
+    q = cockpit_hub.register()
+
+    def generate():
+        # 初始握手事件
+        initial_msg = {
+            "event": "connected",
+            "data": {
+                "status": "online",
+                "server_time": datetime.now(ZoneInfo('Asia/Shanghai')).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],
+                "message": "量化座舱高频流式通信通道已就绪"
+            },
+            "timestamp": datetime.now(ZoneInfo('Asia/Shanghai')).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        }
+        yield f"event: connected\ndata: {json.dumps(initial_msg, ensure_ascii=False)}\n\n"
+
+        try:
+            while True:
+                try:
+                    msg = q.get(timeout=15)
+                    event_name = msg.get("event", "message")
+                    yield f"event: {event_name}\ndata: {json.dumps(msg, ensure_ascii=False)}\n\n"
+                except _queue.Empty:
+                    # 保活心跳 ping
+                    now_str = datetime.now(ZoneInfo('Asia/Shanghai')).strftime("%Y-%m-%d %H:%M:%S")
+                    yield f"event: ping\ndata: {json.dumps({'time': now_str})}\n\n"
+        except GeneratorExit:
+            cockpit_hub.unregister(q)
+        except Exception as e:
+            cockpit_hub.unregister(q)
+            logger.debug(f"SSE stream closed: {e}")
+
+    return Response(generate(), mimetype='text/event-stream',
+                    headers={
+                        'Cache-Control': 'no-cache',
+                        'X-Accel-Buffering': 'no',
+                        'Connection': 'keep-alive',
+                        'Access-Control-Allow-Origin': '*'
+                    })
+
+
+@system_bp.route('/api/stream/cockpit/test-broadcast', methods=['POST'])
+def cockpit_test_broadcast():
+    """测试 SSE 广播通道（模拟成交、时序与风控事件）"""
+    data = request.json or {}
+    event_type = data.get("event", "trade_executed")
+    payload = data.get("data", {})
+    cockpit_hub.publish(event_type, payload)
+    return jsonify({"success": True, "message": f"已广播 {event_type} 事件", "data": payload})
 
 
 @system_bp.route('/api/server-chan/config', methods=['GET'])

@@ -1,6 +1,8 @@
-# Web framework
+# Web framework & WSGI production server
 flask>=2.3.0
 flask-cors>=4.0.0
+gunicorn>=21.0.0
+gevent>=23.0.0
 
 # Financial data
 akshare>=1.10.0

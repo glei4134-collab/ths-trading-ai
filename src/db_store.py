@@ -496,6 +496,14 @@ class DBStore:
                           pos.get("current_price", 0)))
 
             self.conn.commit()
+            # 瞬间触发多通道 Webhook 成交通知推送
+            try:
+                from notification import notification_manager
+                notify_payload = dict(trade)
+                notify_payload["account_id"] = account_id
+                notification_manager.add_trade_fill_notification(notify_payload)
+            except Exception as notify_err:
+                logger.debug(f"成交通知推送非阻塞忽略: {notify_err}")
             logger.info("JSON 数据迁移完成")
         except Exception as e:
             logger.error(f"JSON 迁移失败: {e}")
@@ -659,6 +667,13 @@ class DBStore:
                   trade.get("mode", "simulation"),
                   datetime.now(ZoneInfo('Asia/Shanghai')).strftime("%Y-%m-%d %H:%M:%S")))
             self.conn.commit()
+            try:
+                from notification import notification_manager
+                trade_notify = dict(trade)
+                trade_notify["account_id"] = account_id
+                notification_manager.add_trade_fill_notification(trade_notify)
+            except Exception as notify_err:
+                logger.debug(f"成交通知推送非阻塞忽略: {notify_err}")
 
     def get_trades(self, limit: int = 50, symbol: str = None,
                    start_date: str = None, end_date: str = None,

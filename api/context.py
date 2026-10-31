@@ -38,7 +38,7 @@ from data_cache import (
     cache, get_realtime_quote, get_realtime_quotes_batch,
     get_kline, get_intraday, compute_indicators, get_kline_with_indicators
 )
-from notification import notification_manager
+from notification import notification_manager, cockpit_hub
 from db_store import db_store
 from account_manager import account_manager
 from device_manager import init_device_manager
@@ -73,7 +73,9 @@ _PUBLIC_PATHS = {
     '/api/accounts/quick-bind',
     '/api/ths/auth/send-sms',
     '/api/ths/auth/login-sms',
-    '/api/ths/auth/login-pwd'
+    '/api/ths/auth/login-pwd',
+    '/api/stream/cockpit',
+    '/api/stream/cockpit/test-broadcast'
 }
 
 def require_auth():

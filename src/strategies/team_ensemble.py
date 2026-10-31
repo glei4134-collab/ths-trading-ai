@@ -173,6 +173,43 @@ class TeamEnsembleStrategy(BaseStrategy):
             if votes_buy >= min_votes and final_conf >= min_conf and final_score > 0.25:
                 vote_passed = True
 
+        # 核心风控校验1: 三级共振（大盘 × 板块 × 个股），早盘集合竞价仅允许前 5 主线板块或主力净流入为正
+        if is_auction:
+            try:
+                from sector_analysis import sector_analyzer
+                res_sec = sector_analyzer.check_stock_sector_resonance(
+                    symbol=stock_data.get("code") or stock_data.get("symbol", ""),
+                    stock_data=stock_data,
+                    top_n=5
+                )
+                if not res_sec.get("passed", True):
+                    vote_passed = False
+                    reasons.append(f"❌ {res_sec.get('reason')}")
+                else:
+                    reasons.append(f"🔥 {res_sec.get('reason')}")
+            except Exception as se:
+                logger.debug(f"三级共振校验异常: {se}")
+
+        # 核心风控校验2: 主力资金背离校验（舆情分 >= 75 但主力大单净流出超过流通市值 0.8%，一票否决防诱多）
+        sentiment_score = 50
+        if market_data and market_data.get("sentiment_score") is not None:
+            sentiment_score = float(market_data["sentiment_score"])
+        elif "sentiment" in kwargs and isinstance(kwargs["sentiment"], dict):
+            sentiment_score = float(kwargs["sentiment"].get("score", 50))
+        elif stock_data.get("sentiment_score") is not None:
+            sentiment_score = float(stock_data["sentiment_score"])
+
+        net_outflow_ratio = float(stock_data.get("main_net_outflow_ratio", 0) or stock_data.get("large_order_net_outflow_pct", 0) or 0)
+        if net_outflow_ratio <= 0 and stock_data.get("main_net_outflow") and stock_data.get("float_market_cap"):
+            try:
+                net_outflow_ratio = float(stock_data["main_net_outflow"]) / float(stock_data["float_market_cap"])
+            except Exception:
+                pass
+
+        if sentiment_score >= 75 and net_outflow_ratio >= 0.008:
+            vote_passed = False
+            reasons.append(f"🚨 主力资金背离一票否决: 舆情分高达{sentiment_score:.0f}分，但主力大单净流出占流通市值{net_outflow_ratio*100:.2f}% (>=0.80%)，判定为高位诱多出货！")
+
         if vote_passed:
             sig = Signal.STRONG_BUY if (votes_buy >= 3 or (is_auction and final_conf >= 0.70)) else Signal.BUY
             reasons.append("✅ 达到团队集成买入标准，建议仓位 25%~28% (严防单票35%红线)")

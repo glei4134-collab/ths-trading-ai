@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # THS-Trading-AI 云端自动化部署与热更新脚本 (针对 81.70.51.173)
-# 支持交易时段发布拦截熔断门禁：工作日 09:15-11:30, 13:00-15:05 自动挂起至 15:05
+# 支持生产级 Gunicorn 零闪断热重载 (kill -HUP) 与交易时段发布防护门禁
 # ==============================================================================
 set -euo pipefail
 
@@ -43,15 +43,20 @@ fi
 echo "🩺 正在运行上线前量化全链路自检探针..."
 python tools/auto_debugger.py --check-all --auto-fix
 
-# 6. 重启服务
-echo "🔄 重启量化交易 systemd 服务: ${SERVICE_NAME}..."
-systemctl restart ${SERVICE_NAME}
-systemctl enable ${SERVICE_NAME}
+# 6. 平滑热重载或拉起服务 (基于 Gunicorn kill -HUP 的零闪断热重载)
+if systemctl is-active --quiet ${SERVICE_NAME}; then
+    echo "🔄 服务运行中，执行 Gunicorn 零闪断平滑热更 (kill -HUP)..."
+    systemctl reload ${SERVICE_NAME} || systemctl restart ${SERVICE_NAME}
+else
+    echo "🚀 首次拉起量化交易 systemd 服务: ${SERVICE_NAME}..."
+    systemctl restart ${SERVICE_NAME}
+    systemctl enable ${SERVICE_NAME}
+fi
 
 # 7. 等待并验证健康检查
 sleep 3
 if systemctl is-active --quiet ${SERVICE_NAME}; then
-    echo "✅ 服务已成功启动并在后台运行！"
+    echo "✅ 服务已成功运行！"
     echo "🌐 API 监听状态:"
     ss -tulpn | grep 5000 || true
     echo "📋 最近日志:"
@@ -63,5 +68,5 @@ else
 fi
 
 echo "=========================================================="
-echo "🎉 云端部署与自检全部顺利完成！"
+echo "🎉 云端部署与平滑热更全部顺利完成！"
 echo "=========================================================="

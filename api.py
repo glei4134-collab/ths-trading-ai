@@ -5501,6 +5501,68 @@ def mobile_notifications():
         return jsonify({"success": False, "message": str(e)})
 
 
+# ==================== 毫秒级 SSE 座舱实时通信 ====================
+@app.route('/api/stream/cockpit', methods=['GET'])
+def cockpit_stream():
+    """驾驶舱毫秒级 SSE 流式推送通道 (成交事件、时序流转、风控预警)"""
+    from flask import Response
+    import queue as _queue
+    from notification import cockpit_hub
+
+    q = cockpit_hub.register()
+
+    def generate():
+        initial_msg = {
+            "event": "connected",
+            "data": {
+                "status": "online",
+                "server_time": datetime.now(ZoneInfo('Asia/Shanghai')).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],
+                "message": "量化座舱高频流式通信通道已就绪"
+            },
+            "timestamp": datetime.now(ZoneInfo('Asia/Shanghai')).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        }
+        yield f"event: connected\ndata: {json.dumps(initial_msg, ensure_ascii=False)}\n\n"
+
+        while True:
+            try:
+                event_type, payload = q.get(timeout=15.0)
+                msg_body = {
+                    "event": event_type,
+                    "data": payload,
+                    "timestamp": datetime.now(ZoneInfo('Asia/Shanghai')).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+                }
+                yield f"event: {event_type}\ndata: {json.dumps(msg_body, ensure_ascii=False)}\n\n"
+            except _queue.Empty:
+                ping_payload = {
+                    "event": "ping",
+                    "data": {"time": datetime.now(ZoneInfo('Asia/Shanghai')).strftime("%H:%M:%S")},
+                    "timestamp": datetime.now(ZoneInfo('Asia/Shanghai')).strftime("%Y-%m-%d %H:%M:%S")
+                }
+                yield f"event: ping\ndata: {json.dumps(ping_payload, ensure_ascii=False)}\n\n"
+            except GeneratorExit:
+                cockpit_hub.unregister(q)
+                break
+            except Exception as e:
+                logger.error(f"SSE stream error: {e}")
+                cockpit_hub.unregister(q)
+                break
+
+    resp = Response(generate(), mimetype='text/event-stream')
+    resp.headers['Cache-Control'] = 'no-cache'
+    resp.headers['X-Accel-Buffering'] = 'no'
+    resp.headers['Connection'] = 'keep-alive'
+    return resp
+
+@app.route('/api/stream/cockpit/test-broadcast', methods=['POST'])
+def cockpit_test_broadcast():
+    """测试 SSE 广播通道"""
+    from notification import cockpit_hub
+    data = request.json or {}
+    event_type = data.get("event", "trade_executed")
+    payload = data.get("data", {})
+    cockpit_hub.publish(event_type, payload)
+    return jsonify({"success": True, "message": f"已广播 {event_type} 事件", "data": payload})
+
 @app.route('/api/mobile/notifications/stream', methods=['GET'])
 def mobile_notifications_stream():
     """SSE实时推送通知（移动端）"""

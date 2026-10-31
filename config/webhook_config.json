@@ -1,0 +1,16 @@
+{
+  "enabled": true,
+  "feishu": {
+    "enabled": true,
+    "webhook_url": ""
+  },
+  "wechat": {
+    "enabled": true,
+    "webhook_url": ""
+  },
+  "bark": {
+    "enabled": true,
+    "server_url": "https://api.day.app",
+    "device_key": ""
+  }
+}

@@ -30,9 +30,33 @@ def set_stock_data_func(func):
 
 
 ACCOUNT_STYLE_CONFIG = {
-    "aggressive": {"max_single_position": 0.33, "min_confidence": 0.55, "stop_loss_pct": 0.05, "desc": "进攻型"},
-    "balanced": {"max_single_position": 0.28, "min_confidence": 0.60, "stop_loss_pct": 0.045, "desc": "均衡型"},
-    "defensive": {"max_single_position": 0.20, "min_confidence": 0.65, "stop_loss_pct": 0.035, "desc": "高股息防御型"},
+    # 账户 1: 先锋进攻型 (09:25 竞价量比与连板突破)
+    "aggressive": {
+        "max_single_position": 0.33,
+        "min_confidence": 0.52,
+        "stop_loss_pct": 0.05,
+        "desc": "先锋进攻型",
+        "tactic": "pioneer_breakout",
+        "prefer_strategies": ["competition_breakout", "limit_up_continue", "volume_breakout"],
+    },
+    # 账户 2: 趋势中军型 (主线板块核心标的缩量回调买点 StrongPullback)
+    "balanced": {
+        "max_single_position": 0.28,
+        "min_confidence": 0.58,
+        "stop_loss_pct": 0.045,
+        "desc": "趋势中军型",
+        "tactic": "trend_mainforce_pullback",
+        "prefer_strategies": ["strong_pullback", "volume_shrink_reversal", "trend_acceleration"],
+    },
+    # 账户 3: 防守套利型 (14:50 尾盘低吸博取次日早盘溢价)
+    "defensive": {
+        "max_single_position": 0.20,
+        "min_confidence": 0.62,
+        "stop_loss_pct": 0.035,
+        "desc": "防守套利型",
+        "tactic": "closing_low_absorption",
+        "prefer_strategies": ["closing_arbitrage", "volume_shrink_reversal", "reversal"],
+    },
 }
 
 
@@ -170,9 +194,16 @@ class AIBrain:
         except Exception:
             news_sentiment = {"score": 50}
 
-        # 1. 选择要使用的策略
+        # 0.7 提取账户风格与战术矩阵
+        acc_style = account_info.get("style", "balanced") if account_info else "balanced"
+        style_cfg = ACCOUNT_STYLE_CONFIG.get(acc_style, ACCOUNT_STYLE_CONFIG["balanced"])
+
+        # 1. 选择要使用的策略（优先匹配账户专属战术矩阵）
         if not strategy_names:
-            strategy_names = self._auto_select_strategies(stock_data, indicators, regime_info)
+            if style_cfg.get("prefer_strategies"):
+                strategy_names = [s for s in style_cfg["prefer_strategies"] if registry.get(s)]
+            if not strategy_names:
+                strategy_names = self._auto_select_strategies(stock_data, indicators, regime_info)
 
         # 2. 执行每个策略分析（传入市场环境 + 优化参数）
         market_data = {"regime": regime_info} if regime_info else None
@@ -278,7 +309,22 @@ class AIBrain:
         max_single_pos = account_info.get("max_single_position", style_cfg["max_single_position"]) if account_info else 0.30
         min_conf_req = account_info.get("min_confidence", style_cfg["min_confidence"]) if account_info else 0.50
 
-        if action == "buy" and account_info and price > 0:
+        # 规则0: 主力资金背离一票否决校验 (舆情分 >= 75 但主力大单净流出超过流通市值 0.8% 防诱多)
+        sentiment_score = news_sentiment.get("score", 50) if news_sentiment else 50
+        net_outflow_ratio = float(stock_data.get("main_net_outflow_ratio", 0) or stock_data.get("large_order_net_outflow_pct", 0) or 0)
+        if net_outflow_ratio <= 0 and stock_data.get("main_net_outflow") and stock_data.get("float_market_cap"):
+            try:
+                net_outflow_ratio = float(stock_data["main_net_outflow"]) / float(stock_data["float_market_cap"])
+            except Exception:
+                pass
+
+        if sentiment_score >= 75 and net_outflow_ratio >= 0.008:
+            action, signal = "hold", "HOLD"
+            status = "REJECTED_CAPITAL_DIVERGENCE"
+            reasons.append(f"风控一票否决: 标的{symbol}舆情得分高涨({sentiment_score})，但主力大单净流出达流通市值{net_outflow_ratio*100:.2f}% (>=0.80%)，判定为机构诱多出货，禁止买入")
+            position_size = 0
+
+        elif action == "buy" and account_info and price > 0:
             balance = float(account_info.get("balance", 0))
             total_assets = float(account_info.get("total_assets", balance))
             if total_assets <= 0:
@@ -288,8 +334,32 @@ class AIBrain:
             existing_amount = existing_pos.get("amount", 0)
             existing_mv = existing_amount * price
 
+            # 战术矩阵校验: 3账户异构战术分流与风控过滤
+            if style_cfg.get("tactic") == "pioneer_breakout" and not (
+                account_info.get("is_call_auction")
+                or (market_data and market_data.get("is_call_auction"))
+                or any(s.strategy_name in ("competition_breakout", "limit_up_continue", "volume_breakout") and s.signal in (Signal.BUY, Signal.STRONG_BUY) for s in sub_signals)
+                or stock_data.get("change_pct", 0) >= 3.0
+            ):
+                action, signal = "hold", "HOLD"
+                status = "FILTERED_TACTIC_MISMATCH"
+                reasons.append(f"战术矩阵过滤: 账户[{acc_name}]专职先锋进攻(09:25竞价量比与连板突破)，标的{symbol}非突破态势")
+                position_size = 0
+
+            elif style_cfg.get("tactic") == "trend_mainforce_pullback" and stock_data.get("change_pct", 0) > 7.0:
+                action, signal = "hold", "HOLD"
+                status = "FILTERED_TACTIC_CHASING_HIGH"
+                reasons.append(f"战术矩阵过滤: 账户[{acc_name}]专职趋势中军缩量回调(StrongPullback)，拒绝追高(+{stock_data.get('change_pct',0):.1f}%)")
+                position_size = 0
+
+            elif style_cfg.get("tactic") == "closing_low_absorption" and not account_info.get("is_closing_session", False) and stock_data.get("change_pct", 0) > 3.0:
+                action, signal = "hold", "HOLD"
+                status = "FILTERED_TACTIC_NOT_CLOSING"
+                reasons.append(f"战术矩阵过滤: 账户[{acc_name}]专职14:50尾盘低吸套利，早盘盘中冲高(+{stock_data.get('change_pct',0):.1f}%)不予建仓，锁定尾盘博弈")
+                position_size = 0
+
             # 规则1: 账户风格置信度门槛一票否决
-            if avg_confidence < min_conf_req:
+            elif avg_confidence < min_conf_req:
                 action, signal = "hold", "HOLD"
                 status = "REJECTED_CONFIDENCE"
                 reasons.append(f"风控一票否决: 信号置信度({avg_confidence:.2f})未达账户[{acc_name}]门槛({min_conf_req:.2f})")
@@ -326,9 +396,12 @@ class AIBrain:
                     status = "APPROVED"
                     reasons.append(f"风控通过: 账户[{acc_name}]建议定制委托买入 {custom_shares}股 (预计占用{custom_shares*price:.2f}元, 占总资产{(existing_mv+custom_shares*price)/total_assets*100:.1f}%)")
 
-            # 动态止损止盈
+            # 动态差异化 ATR 止损止盈
             volatility = indicators.get("atr", price * 0.02) / price if price else 0.02
-            sl_info = risk_manager.calculate_stop_loss(price, volatility)
+            sl_info = risk_manager.calculate_stop_loss(price, volatility, symbol=symbol)
+            tp_info = risk_manager.calculate_take_profit(price, volatility)
+            stop_loss = sl_info["stop_loss"]
+            target_price = tp_info["take_profit"]
             tp_info = risk_manager.calculate_take_profit(price, volatility)
             stop_loss = sl_info["stop_loss"]
             target_price = tp_info["take_profit"]

@@ -89,6 +89,14 @@ class MockMarketDataProvider:
             vol = 50000 + (code_int * 137 % 200000)
             amount = round(curr_price * vol * 100 / 10000, 2)
 
+            l_up = round(pre_close * 1.10, 2)
+            l_down = round(pre_close * 0.90, 2)
+            b_vol1 = 5000 + (code_int * 17 % 10000)
+            a_vol1 = 3000 + (code_int * 23 % 8000)
+            tot_b = b_vol1 * 3
+            tot_a = a_vol1 * 3
+            mock_obi = round((tot_b - tot_a) / (tot_b + tot_a), 4)
+
             quotes[s] = {
                 "code": s,
                 "name": f"仿真标的_{s[-4:]}",
@@ -103,7 +111,16 @@ class MockMarketDataProvider:
                 "amount": amount,
                 "turnover": round(vol * 100 / 50000000 * 100, 2),
                 "pe": 22.5,
-                "is_mock": True
+                "is_mock": True,
+                "limit_up": l_up,
+                "limit_down": l_down,
+                "obi": mock_obi,
+                "total_bid_vol": tot_b,
+                "total_ask_vol": tot_a,
+                "ask1_price": round(curr_price + 0.01, 2),
+                "ask1_vol": a_vol1,
+                "bid1_price": round(curr_price - 0.01, 2),
+                "bid1_vol": b_vol1,
             }
         return quotes
 
@@ -197,6 +214,17 @@ def fetch_tencent_realtime(symbols: List[str]) -> Dict[str, Dict]:
             turnover = float(fields[38]) if fields[38] else 0  # 换手率
             pe = float(fields[39]) if fields[39] else 0
 
+            # 解析买卖五档挂单与OBI
+            b_vols = [int(fields[10 + i * 2]) * 100 if fields[10 + i * 2] else 0 for i in range(5)]
+            a_vols = [int(fields[20 + i * 2]) * 100 if fields[20 + i * 2] else 0 for i in range(5)]
+            tot_b = sum(b_vols)
+            tot_a = sum(a_vols)
+            obi = round((tot_b - tot_a) / (tot_b + tot_a), 4) if (tot_b + tot_a) > 0 else 0.0
+            l_up = float(fields[47]) if len(fields) > 47 and fields[47] else round(pre_close * 1.10, 2)
+            l_down = float(fields[48]) if len(fields) > 48 and fields[48] else round(pre_close * 0.90, 2)
+            ask1_p = float(fields[19]) if fields[19] else 0.0
+            bid1_p = float(fields[9]) if fields[9] else 0.0
+
             result[code] = {
                 "code": code,
                 "name": fields[1],
@@ -211,6 +239,15 @@ def fetch_tencent_realtime(symbols: List[str]) -> Dict[str, Dict]:
                 "amount": amount * 10000,  # 万元 → 元
                 "turnover": turnover,
                 "pe": pe,
+                "limit_up": l_up,
+                "limit_down": l_down,
+                "obi": obi,
+                "total_bid_vol": tot_b,
+                "total_ask_vol": tot_a,
+                "ask1_price": ask1_p,
+                "ask1_vol": a_vols[0],
+                "bid1_price": bid1_p,
+                "bid1_vol": b_vols[0],
             }
         except (ValueError, IndexError) as e:
             logger.warning(f"解析腾讯行情数据失败 {fields[2] if len(fields) > 2 else '?'}: {e}")

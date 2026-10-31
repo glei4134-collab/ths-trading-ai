@@ -9,7 +9,10 @@ import logging
 import queue
 import threading
 import time as _time
-from typing import Dict, List, Optional, Callable
+import os
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from typing import Dict, List, Optional, Callable, Any
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from datetime import date, time, timedelta
@@ -100,6 +103,35 @@ class NotificationManager:
     def clear(self):
         """清除所有通知"""
         self._notifications.clear()
+
+    def add_trade_fill_notification(self, trade: Dict):
+        """记录报单成交通知，并瞬间推送到手机端 Webhook 通道 (飞书 / 企业微信 / Bark)"""
+        action = trade.get("action", "成交")
+        is_buy = ("买" in action or action.upper() == "BUY")
+        symbol = trade.get("symbol", "")
+        name = trade.get("name", symbol)
+        price = float(trade.get("price", 0))
+        amount = int(trade.get("amount", 0))
+        total = float(trade.get("total", price * amount))
+        account_id = trade.get("account_id", 1)
+        account_name = trade.get("account_name", f"账户{account_id}")
+        
+        title = f"{'🟢 【买入成交】' if is_buy else '🔴 【卖出成交】'} {name} ({symbol})"
+        msg = f"{name}({symbol}) {action} 成交: {amount}股 @ ¥{price:.2f} (金额: ¥{total:,.2f}) [{account_name}]"
+        
+        self.add({
+            "type": "trade_fill",
+            "level": "success" if is_buy else "warning",
+            "title": title,
+            "message": msg,
+            "data": trade
+        })
+        
+        # 瞬间触发多通道 Webhook 非阻塞异步推送至手机
+        try:
+            multi_channel_webhook.send_trade_fill(trade)
+        except Exception as e:
+            logger.warning(f"Webhook 推送触发异常: {e}")
 
     def add_signal_notification(self, signal: Dict):
         """添加交易信号通知"""
@@ -200,6 +232,166 @@ class NotificationManager:
 
 
 # 全局实例
+
+class MultiChannelWebhookDispatcher:
+    """成交通知多通道 Webhook 分发器 (飞书 / 企业微信 / Bark)
+    - 异步线程池非阻塞外呼，绝不拖延主量化决策与报单循环
+    - 自动格式化成交明细（方向、标的、价格、数量、金额、账户、策略）
+    - 支持 config/webhook_config.json 配置与系统环境变量双重覆盖
+    """
+
+    def __init__(self):
+        self._executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="webhook_dispatcher")
+        self._config_file = Path(__file__).resolve().parent.parent / "config" / "webhook_config.json"
+        self._config = self._load_config()
+
+    def _load_config(self) -> Dict[str, Any]:
+        cfg = {
+            "enabled": True,
+            "feishu": {
+                "enabled": True,
+                "webhook_url": os.environ.get("FEISHU_WEBHOOK_URL", "")
+            },
+            "wechat": {
+                "enabled": True,
+                "webhook_url": os.environ.get("WECHAT_WEBHOOK_URL", "")
+            },
+            "bark": {
+                "enabled": True,
+                "server_url": os.environ.get("BARK_SERVER_URL", "https://api.day.app"),
+                "device_key": os.environ.get("BARK_DEVICE_KEY", "")
+            }
+        }
+        if self._config_file.exists():
+            try:
+                with open(self._config_file, "r", encoding="utf-8") as f:
+                    user_cfg = json.load(f)
+                if "enabled" in user_cfg:
+                    cfg["enabled"] = user_cfg["enabled"]
+                for ch in ["feishu", "wechat", "bark"]:
+                    if ch in user_cfg:
+                        cfg[ch].update(user_cfg[ch])
+            except Exception as e:
+                logger.warning(f"读取 webhook_config.json 异常: {e}")
+        return cfg
+
+    def reload_config(self):
+        self._config = self._load_config()
+
+    def send_trade_fill(self, trade: Dict[str, Any]):
+        """异步并发分发成交通知至所有已配置通道"""
+        if not self._config.get("enabled", True):
+            return
+
+        self._executor.submit(self._do_send_trade_fill, dict(trade))
+
+    def _do_send_trade_fill(self, trade: Dict[str, Any]):
+        action = trade.get("action", "成交")
+        is_buy = ("买" in action or action.upper() == "BUY")
+        symbol = trade.get("symbol", "")
+        name = trade.get("name", symbol)
+        price = float(trade.get("price", 0))
+        amount = int(trade.get("amount", 0))
+        total = float(trade.get("total", price * amount))
+        account_id = trade.get("account_id", 1)
+        account_name = trade.get("account_name", f"账户{account_id}")
+        strategy = trade.get("strategy", trade.get("mode", "实盘量化"))
+        time_str = trade.get("time", datetime.now(ZoneInfo('Asia/Shanghai')).strftime("%H:%M:%S"))
+
+        # 1. 飞书 Webhook
+        feishu_url = self._config.get("feishu", {}).get("webhook_url") or os.environ.get("FEISHU_WEBHOOK_URL", "")
+        if self._config.get("feishu", {}).get("enabled", True) and feishu_url:
+            self._send_feishu(feishu_url, is_buy, action, name, symbol, price, amount, total, account_name, strategy, time_str)
+
+        # 2. 企业微信 Webhook
+        wechat_url = self._config.get("wechat", {}).get("webhook_url") or os.environ.get("WECHAT_WEBHOOK_URL", "")
+        if self._config.get("wechat", {}).get("enabled", True) and wechat_url:
+            self._send_wechat(wechat_url, is_buy, action, name, symbol, price, amount, total, account_name, strategy, time_str)
+
+        # 3. Bark (iOS)
+        bark_key = self._config.get("bark", {}).get("device_key") or os.environ.get("BARK_DEVICE_KEY", "")
+        bark_srv = self._config.get("bark", {}).get("server_url", "https://api.day.app")
+        if self._config.get("bark", {}).get("enabled", True) and bark_key:
+            self._send_bark(bark_srv, bark_key, is_buy, action, name, symbol, price, amount, total, account_name, strategy, time_str)
+
+    def _send_feishu(self, url, is_buy, action, name, symbol, price, amount, total, account_name, strategy, time_str):
+        try:
+            color = "green" if is_buy else "red"
+            emoji = "🟢" if is_buy else "🔴"
+            payload = {
+                "msg_type": "interactive",
+                "card": {
+                    "header": {
+                        "title": {"tag": "plain_text", "content": f"{emoji} 成交通知: 【{action}】{name} ({symbol})"},
+                        "template": color
+                    },
+                    "elements": [
+                        {
+                            "tag": "div",
+                            "fields": [
+                                {"is_short": True, "text": {"tag": "lark_md", "content": f"**成交价格:**\n¥{price:,.2f}"}},
+                                {"is_short": True, "text": {"tag": "lark_md", "content": f"**成交数量:**\n{amount:,} 股"}},
+                                {"is_short": True, "text": {"tag": "lark_md", "content": f"**成交金额:**\n¥{total:,.2f}"}},
+                                {"is_short": True, "text": {"tag": "lark_md", "content": f"**交易账户:**\n{account_name}"}},
+                                {"is_short": True, "text": {"tag": "lark_md", "content": f"**决策策略:**\n{strategy}"}},
+                                {"is_short": True, "text": {"tag": "lark_md", "content": f"**成交时间:**\n{time_str}"}}
+                            ]
+                        }
+                    ]
+                }
+            }
+            import requests
+            requests.post(url, json=payload, timeout=3)
+            logger.info(f"📲 [Webhook] 飞书成交通知已送达: {name}({symbol}) {action}")
+        except Exception as e:
+            logger.warning(f"飞书 Webhook 发送失败: {e}")
+
+    def _send_wechat(self, url, is_buy, action, name, symbol, price, amount, total, account_name, strategy, time_str):
+        try:
+            color = "info" if is_buy else "warning"
+            emoji = "🟢" if is_buy else "🔴"
+            md_content = (
+                f"### {emoji} 【{action}成交】{name} ({symbol})\n"
+                f"> **成交价格**: <font color=\"{color}\">¥{price:,.2f}</font>\n"
+                f"> **成交数量**: {amount:,} 股\n"
+                f"> **成交金额**: ¥{total:,.2f}\n"
+                f"> **交易账户**: {account_name}\n"
+                f"> **决策策略**: {strategy}\n"
+                f"> **成交时间**: {time_str}"
+            )
+            payload = {
+                "msgtype": "markdown",
+                "markdown": {"content": md_content}
+            }
+            import requests
+            requests.post(url, json=payload, timeout=3)
+            logger.info(f"📲 [Webhook] 企业微信成交通知已送达: {name}({symbol}) {action}")
+        except Exception as e:
+            logger.warning(f"企业微信 Webhook 发送失败: {e}")
+
+    def _send_bark(self, server_url, device_key, is_buy, action, name, symbol, price, amount, total, account_name, strategy, time_str):
+        try:
+            emoji = "🟢" if is_buy else "🔴"
+            title = f"{emoji} 【{action}成交】{name} ({symbol})"
+            body = f"¥{price:,.2f} × {amount}股 (总计¥{total:,.0f}) | 账户:{account_name} | {strategy} | {time_str}"
+            url = f"{server_url.rstrip('/')}/{device_key}"
+            payload = {
+                "title": title,
+                "body": body,
+                "group": "THS量化实盘",
+                "sound": "minuet",
+                "level": "timeSensitive"
+            }
+            import requests
+            requests.post(url, json=payload, timeout=3)
+            logger.info(f"📲 [Webhook] Bark成交通知已送达: {name}({symbol}) {action}")
+        except Exception as e:
+            logger.warning(f"Bark 推送发送失败: {e}")
+
+
+# 全局 Webhook 分发器实例
+multi_channel_webhook = MultiChannelWebhookDispatcher()
+
 notification_manager = NotificationManager()
 
 
@@ -401,3 +593,81 @@ class DailySummaryScheduler:
 
 # 全局调度器实例
 daily_scheduler = DailySummaryScheduler()
+
+
+class CockpitStreamHub:
+    """驾驶舱毫秒级实时流式事件总线 (SSE)"""
+
+    def __init__(self):
+        self._queues: List[queue.Queue] = []
+        self._lock = threading.Lock()
+
+    def register(self) -> queue.Queue:
+        q = queue.Queue(maxsize=100)
+        with self._lock:
+            self._queues.append(q)
+        return q
+
+    def unregister(self, q: queue.Queue):
+        with self._lock:
+            if q in self._queues:
+                try:
+                    self._queues.remove(q)
+                except ValueError:
+                    pass
+
+    def publish(self, event: str, data: Any):
+        """毫秒级广播事件"""
+        now_str = datetime.now(ZoneInfo('Asia/Shanghai')).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        payload = {
+            "event": event,
+            "data": data,
+            "timestamp": now_str
+        }
+        with self._lock:
+            dead = []
+            for q in self._queues:
+                try:
+                    q.put_nowait(payload)
+                except queue.Full:
+                    dead.append(q)
+            for q in dead:
+                try:
+                    self._queues.remove(q)
+                except ValueError:
+                    pass
+
+    def broadcast_trade(self, action: str, symbol: str, name: str, price: float, amount: int, total: float,
+                        account_id: Any = 1, account_name: str = "", duration_ms: float = 0.0, order_id: str = ""):
+        self.publish("trade_executed", {
+            "action": action,
+            "symbol": symbol,
+            "name": name,
+            "price": price,
+            "amount": amount,
+            "total": total,
+            "account_id": account_id,
+            "account_name": account_name or f"账户-{account_id}",
+            "duration_ms": duration_ms,
+            "order_id": order_id
+        })
+
+    def broadcast_phase(self, phase_id: str, phase_name: str, detail: str = "", status: str = "active"):
+        self.publish("phase_changed", {
+            "phase_id": phase_id,
+            "phase_name": phase_name,
+            "detail": detail,
+            "status": status
+        })
+
+    def broadcast_risk(self, level: str, title: str, message: str, symbol: str = "", account_id: Any = None):
+        self.publish("risk_alert", {
+            "level": level,
+            "title": title,
+            "message": message,
+            "symbol": symbol,
+            "account_id": account_id
+        })
+
+
+cockpit_hub = CockpitStreamHub()

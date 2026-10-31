@@ -570,11 +570,43 @@ class AccountManager:
 
     def execute_for_account(self, account_id: int, symbol: str, action: str,
                             price: float, amount: int) -> Dict:
-        """为指定账户执行交易（经过单账户细粒度锁保护）"""
+        """为指定账户执行交易（经过单账户细粒度锁保护 + OBI/涨停跨档抢筹优化 + TWAP微批次）"""
         trader = self.get_trader(account_id)
         if not trader:
             return {"success": False, "message": "账户未连接"}
         if action == "buy":
+            # 盘口深度与 OBI / 涨停抢筹评估
+            try:
+                from execution_optimizer import fetch_orderbook_depth, evaluate_aggressive_pegging, plan_twap_micro_batches
+                depth = fetch_orderbook_depth(symbol)
+                opt_price, is_pegged, peg_notes = evaluate_aggressive_pegging(symbol, action, price, depth)
+                if is_pegged:
+                    price = opt_price
+                    logger.info(f"账户 #{account_id} 买入 {symbol}: {peg_notes}")
+                
+                # 检查单账户 TWAP 拆单 (当单笔委托量 > 1.2 * ask1_vol 且 ask1_vol > 0)
+                is_twap, batches, twap_notes = plan_twap_micro_batches({account_id: amount}, depth.ask1_vol, batch_interval=1.5)
+                if is_twap and len(batches) > 1:
+                    logger.info(f"账户 #{account_id} {twap_notes}")
+                    batch_res_list = []
+                    for idx, b in enumerate(batches):
+                        sub_amt = b.get(account_id, 0)
+                        if sub_amt > 0:
+                            sub_res = trader.buy(symbol, price, sub_amt)
+                            batch_res_list.append(sub_res)
+                            if idx < len(batches) - 1:
+                                time.sleep(1.5)
+                    all_success = any(r.get("success") for r in batch_res_list)
+                    return {
+                        "success": all_success,
+                        "message": f"TWAP微批次完成 ({len(batch_res_list)}批次)",
+                        "batches": batch_res_list,
+                        "pegged": is_pegged,
+                        "notes": peg_notes
+                    }
+            except Exception as opt_err:
+                logger.warning(f"账户 #{account_id} 执行优化器调用忽略: {opt_err}")
+
             return trader.buy(symbol, price, amount)
         elif action == "sell":
             return trader.sell(symbol, price, amount)
@@ -645,7 +677,7 @@ class AccountManager:
                         amount_per_account: Optional[int] = None,
                         position_ratio: float = 0.20) -> Dict:
         """
-        并发为所有账户下发委托订单（毫秒级多路并发派发 + 单账户RLock独立隔离 + 动态头寸计算）
+        并发为所有账户下发委托订单（毫秒级多路并发派发 + 单账户RLock独立隔离 + 动态头寸计算 + OBI涨停抢筹 + TWAP微批次拆单）
         """
         start_t = time.perf_counter()
         results = {}
@@ -653,44 +685,111 @@ class AccountManager:
         if not acc_ids:
             return results
 
-        def _calc_and_exec(acc_id: int):
+        depth = None
+        effective_price = price
+        is_pegged = False
+        peg_notes = ""
+
+        # 1. 深度盘口分析与涨停抢筹判定
+        if action == "buy":
+            try:
+                from execution_optimizer import fetch_orderbook_depth, evaluate_aggressive_pegging
+                depth = fetch_orderbook_depth(symbol)
+                effective_price, is_pegged, peg_notes = evaluate_aggressive_pegging(symbol, action, price, depth)
+                if is_pegged:
+                    logger.info(f"多账户统一买入 {symbol}: {peg_notes}")
+            except Exception as e:
+                logger.warning(f"多账户盘口解析忽略: {e}")
+
+        # 2. 为每个账户计算合规委托股数
+        account_amounts = {}
+        for acc_id in acc_ids:
             trader = self.get_trader(acc_id)
             if not trader or not trader.connected:
-                return {"success": False, "message": "账户未连接或已离线", "shares": 0}
-
-            order_amount = self.calculate_dynamic_amount(
+                results[acc_id] = {"success": False, "message": "账户未连接或已离线", "shares": 0}
+                continue
+            amt = self.calculate_dynamic_amount(
                 account_id=acc_id,
                 symbol=symbol,
                 action=action,
-                price=price,
+                price=effective_price,
                 position_ratio=position_ratio,
                 amount_per_account=amount_per_account
             )
-            if order_amount <= 0:
+            if amt <= 0:
                 if action == "buy":
-                    return {"success": False, "message": f"账户 #{acc_id} 可用资金不足一手，跳过买入", "shares": 0}
+                    results[acc_id] = {"success": False, "message": f"账户 #{acc_id} 可用资金不足一手，跳过买入", "shares": 0}
                 else:
-                    return {"success": False, "message": f"账户 #{acc_id} 无 {symbol} 可卖持仓，跳过卖出", "shares": 0}
+                    results[acc_id] = {"success": False, "message": f"账户 #{acc_id} 无 {symbol} 可卖持仓，跳过卖出", "shares": 0}
+            else:
+                account_amounts[acc_id] = amt
 
-            res = self.execute_for_account(acc_id, symbol, action, price, order_amount)
-            res["shares"] = order_amount
-            return res
+        if not account_amounts:
+            total_cost_ms = round((time.perf_counter() - start_t) * 1000, 2)
+            logger.info(f"多账户 {action} {symbol} 无有效报单生成，耗时: {total_cost_ms}ms")
+            return results
 
-        max_workers = min(len(acc_ids), 10)
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_to_acc = {
-                executor.submit(_calc_and_exec, acc_id): acc_id
-                for acc_id in acc_ids
-            }
-            for future in as_completed(future_to_acc):
-                acc_id = future_to_acc[future]
-                try:
-                    results[acc_id] = future.result()
-                except Exception as e:
-                    results[acc_id] = {"success": False, "message": f"并发下单异常: {e}", "shares": 0}
+        # 3. TWAP 微批次拆单判定
+        batches = [account_amounts]
+        is_twap = False
+        twap_notes = ""
+        if action == "buy" and depth:
+            try:
+                from execution_optimizer import plan_twap_micro_batches
+                is_twap, batches, twap_notes = plan_twap_micro_batches(account_amounts, depth.ask1_vol, batch_interval=1.5)
+            except Exception as twap_err:
+                logger.warning(f"TWAP拆单规划异常: {twap_err}")
+
+        # 4. 执行调度 (单批直接并发，多批按 1.5s 步进派发)
+        max_workers = min(len(account_amounts), 10)
+
+        for b_idx, batch_dict in enumerate(batches):
+            if b_idx > 0:
+                logger.info(f"⏳ [TWAP-INTERVAL] 微批次 #{b_idx+1}/{len(batches)} 间隔等待 1.5s...")
+                time.sleep(1.5)
+
+            def _exec_single(acc_id: int, sub_amt: int):
+                trader = self.get_trader(acc_id)
+                if not trader or not trader.connected:
+                    return {"success": False, "message": "账户已离线", "shares": 0}
+                if action == "buy":
+                    res = trader.buy(symbol, effective_price, sub_amt)
+                elif action == "sell":
+                    res = trader.sell(symbol, effective_price, sub_amt)
+                else:
+                    res = trader.cancel_all_orders()
+                res["shares"] = sub_amt
+                if is_pegged:
+                    res["pegged"] = True
+                    res["peg_notes"] = peg_notes
+                return res
+
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_map = {
+                    executor.submit(_exec_single, acc_id, qty): acc_id
+                    for acc_id, qty in batch_dict.items() if qty > 0
+                }
+                for future in as_completed(future_map):
+                    acc_id = future_map[future]
+                    try:
+                        res = future.result()
+                        if acc_id not in results:
+                            results[acc_id] = res
+                            if is_twap:
+                                results[acc_id]["batches"] = [res]
+                        else:
+                            # 累加多批次结果
+                            prev = results[acc_id]
+                            prev["shares"] = prev.get("shares", 0) + res.get("shares", 0)
+                            if "batches" not in prev:
+                                prev["batches"] = []
+                            prev["batches"].append(res)
+                            prev["success"] = prev.get("success", False) or res.get("success", False)
+                    except Exception as e:
+                        results[acc_id] = {"success": False, "message": f"并发下单异常: {e}", "shares": 0}
 
         total_cost_ms = round((time.perf_counter() - start_t) * 1000, 2)
-        logger.info(f"🚀 [CONCURRENT-ORDER] {action} {symbol} 并发多账户下单完成: {len(results)}个账户, 总耗时: {total_cost_ms}ms")
+        logger.info(f"🚀 [CONCURRENT-ORDER] {action} {symbol} 完成: {len(results)}个账户, 批次数: {len(batches)}, 总耗时: {total_cost_ms}ms")
         return results
 
 

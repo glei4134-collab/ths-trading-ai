@@ -139,7 +139,18 @@ class SectorAnalyzer:
             return []
 
     def get_sector_for_stock(self, symbol: str) -> str:
-        """获取股票所属板块（简化版：按代码前缀判断）"""
+        """获取股票所属板块/行业（优先词库行业，降级为概念，最后降级为板位）"""
+        try:
+            from stock_keyword_db import stock_keyword_db
+            ind = stock_keyword_db.get_stock_industry(symbol)
+            if ind:
+                return ind
+            concepts = stock_keyword_db.get_stock_concepts(symbol)
+            if concepts:
+                return concepts[0]
+        except Exception:
+            pass
+
         if symbol.startswith("600") or symbol.startswith("601"):
             return "上海主板"
         elif symbol.startswith("688"):
@@ -151,6 +162,102 @@ class SectorAnalyzer:
         elif symbol.startswith("002"):
             return "中小板"
         return "其他"
+
+    def check_stock_sector_resonance(self, symbol: str, stock_data: Dict = None, top_n: int = 5) -> Dict:
+        """
+        三级共振校验（大盘 × 板块 × 个股）：
+        早盘集合竞价时段仅允许处于当日涨幅前 top_n 名主线板块（或主力净流入为正）的个股通过表决。
+
+        Returns:
+            {
+                "passed": bool,
+                "sector": str,
+                "rank": Optional[int],
+                "change_pct": float,
+                "net_inflow": float,
+                "reason": str
+            }
+        """
+        stock_data = stock_data or {}
+        # 1. 尝试从多渠道提取股票归属板块/概念
+        sectors_to_check = []
+        if stock_data.get("sector"):
+            sectors_to_check.append(str(stock_data["sector"]))
+        if stock_data.get("industry"):
+            sectors_to_check.append(str(stock_data["industry"]))
+
+        try:
+            from stock_keyword_db import stock_keyword_db
+            ind = stock_keyword_db.get_stock_industry(symbol)
+            if ind and ind not in sectors_to_check:
+                sectors_to_check.append(ind)
+            concepts = stock_keyword_db.get_stock_concepts(symbol)
+            for c in concepts:
+                if c not in sectors_to_check:
+                    sectors_to_check.append(c)
+        except Exception:
+            pass
+
+        if not sectors_to_check:
+            sectors_to_check.append(self.get_sector_for_stock(symbol))
+
+        # 2. 获取当前前 30 名热点板块
+        hot_sectors = self.get_hot_sectors(limit=30)
+        if not hot_sectors:
+            # 数据源离线或不可用时降级放行
+            return {
+                "passed": True,
+                "sector": sectors_to_check[0] if sectors_to_check else "全市场",
+                "rank": None,
+                "change_pct": 0.0,
+                "net_inflow": 0.0,
+                "reason": "板块数据源暂时离线，三级共振降级放行"
+            }
+
+        matched_sector = None
+        matched_rank = None
+        matched_change = 0.0
+        matched_inflow = 0.0
+
+        for sec in sectors_to_check:
+            for idx, s in enumerate(hot_sectors):
+                s_name = s.get("name", "")
+                if sec in s_name or s_name in sec:
+                    matched_sector = s_name
+                    matched_rank = idx + 1
+                    matched_change = float(s.get("change_pct", 0) or 0)
+                    matched_inflow = float(s.get("net_inflow", 0) or s.get("inflow", 0) or 0)
+                    break
+            if matched_sector:
+                break
+
+        if not matched_sector:
+            matched_sector = sectors_to_check[0] if sectors_to_check else "未分类"
+
+        # 判断通过条件：处于涨幅前 top_n 名，或主力净流入为正（或涨幅>1.2%）
+        is_in_top_n = (matched_rank is not None and matched_rank <= top_n)
+        is_net_inflow_pos = (matched_inflow > 0 or (matched_rank is not None and matched_change > 1.2))
+
+        if is_in_top_n or is_net_inflow_pos:
+            reason = f"三级共振成立: 标的所属板块[{matched_sector}]排名第{matched_rank or '>30'}名(涨幅{matched_change:+.2f}%, 净流入{matched_inflow:+.1f}万)"
+            return {
+                "passed": True,
+                "sector": matched_sector,
+                "rank": matched_rank,
+                "change_pct": matched_change,
+                "net_inflow": matched_inflow,
+                "reason": reason
+            }
+        else:
+            reason = f"三级共振否决: 标的所属板块[{matched_sector}]未进入涨幅前{top_n}(排第{matched_rank or '>30'}名, 涨幅{matched_change:+.2f}%)且净流入非正"
+            return {
+                "passed": False,
+                "sector": matched_sector,
+                "rank": matched_rank,
+                "change_pct": matched_change,
+                "net_inflow": matched_inflow,
+                "reason": reason
+            }
 
     def is_sector_hot(self, sector_name: str) -> bool:
         """判断板块是否是热点"""
