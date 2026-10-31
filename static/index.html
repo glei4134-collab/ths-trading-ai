@@ -2213,36 +2213,7 @@
                     </div>
                 </div>
 
-                <!-- 手动粘贴Cookie (兜底选项) -->
-                <div id="manualCookieSection" style="display: block; padding-top: 2px;">
-                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-                        <span style="font-size:12px;font-weight:600;color:var(--text-secondary);">手动粘贴 Cookie 凭据（兜底）：</span>
-                        <button onclick="pasteFromClipboardToInput()" style="background:rgba(56,189,248,0.12);border:1px solid rgba(56,189,248,0.35);color:var(--brand-blue);font-size:11px;font-weight:600;padding:3px 10px;border-radius:4px;cursor:pointer;display:flex;align-items:center;gap:4px;">
-                            📋 一键从剪贴板粘贴
-                        </button>
-                    </div>
-
-                    <div id="cookieInputArea" style="margin-bottom: 10px;">
-                        <textarea id="cookieInput" placeholder="在此粘贴 Cookie 字符串（若已绑定过该股东号将自动更新续签，新账号将自动按 1, 2, 3 顺序命名）" rows="2"
-                            style="width: 100%; background: #070a10; border: 1px solid var(--border-default); color: #f8fafc; padding: 8px 12px; border-radius: 8px; font-size: 12px; font-family: var(--font-mono); resize: vertical; box-sizing: border-box; line-height: 1.5;"></textarea>
-                    </div>
-
-                    <button class="connect-btn" onclick="loginWithCookie()" id="cookieLoginBtn"
-                            style="width: 100%; background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%); border: 1px solid #38bdf8; color: #ffffff; font-weight: 700; padding: 10px; font-size: 13px; border-radius: 8px; cursor: pointer; display:flex; align-items:center; justify-content:center; gap:8px; box-shadow:0 4px 12px rgba(2,132,199,0.3); transition:all 0.2s;">
-                        <span>🔗 验证并绑定/更新输入的 Cookie</span>
-                    </button>
-
-                    <div id="cookieLoginResult" style="margin-top: 10px; display: none; font-size: 12px;"></div>
-                </div>
-
-                <div style="margin-top: 12px; padding: 10px; background: #0d1117; border-radius: 8px; border: 1px solid #1f3a5f; text-align: left;">
-                    <div style="font-size: 12px; font-weight: 600; color: #58a6ff;">☁️ 云端续签（可选）</div>
-                    <div style="font-size: 12px; color: #8b949e; margin-top: 4px; line-height: 1.6;">
-                        Cookie有效期通常约30天，系统已内置后台自动心跳保活；如需无人值守，可配置GitHub Actions云端定时续签。
-                    </div>
-                </div>
-
-                    <!-- 手机绑定 (已隐藏) -->
+                <!-- 手机绑定 (已隐藏) -->
                     <div style="display: none; margin-top: 12px; padding: 12px; background: #0d1117; border-radius: 8px; border: 1px solid #1f6feb; text-align: left;">
                         <div style="font-size: 12px; font-weight: 600; color: #58a6ff;">📲 手机绑定</div>
                         <div style="font-size: 12px; color: #8b949e; margin-top: 4px; line-height: 1.6;">
