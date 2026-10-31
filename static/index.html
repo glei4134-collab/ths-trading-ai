@@ -1791,36 +1791,64 @@
             bottom: 0;
             left: 0;
             right: 0;
-            background: #161b22;
-            border-top: 1px solid #30363d;
-            z-index: 999;
-            padding: 4px 0;
-            padding-bottom: env(safe-area-inset-bottom, 4px);
+            background: rgba(13, 17, 23, 0.94);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border-top: 1px solid rgba(56, 189, 248, 0.2);
+            z-index: 99999;
+            padding: 6px 0;
+            padding-bottom: max(env(safe-area-inset-bottom, 8px), 8px);
+            box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.6);
         }
         .mobile-nav-inner {
             display: flex;
             justify-content: space-around;
             align-items: center;
+            max-width: 520px;
+            margin: 0 auto;
         }
         .mobile-nav-item {
             display: flex;
             flex-direction: column;
             align-items: center;
-            gap: 2px;
-            padding: 6px 0;
-            min-width: 56px;
+            gap: 3px;
+            padding: 4px 14px;
+            min-width: 60px;
             cursor: pointer;
-            color: #8b949e;
-            font-size: 10px;
-            transition: color 0.2s;
+            color: #64748b;
+            font-size: 11px;
+            font-weight: 500;
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
             -webkit-tap-highlight-color: transparent;
+            position: relative;
+            border-radius: 8px;
+        }
+        .mobile-nav-item:active {
+            transform: scale(0.92);
         }
         .mobile-nav-item.active {
-            color: #58a6ff;
+            color: #38bdf8;
+            font-weight: 700;
         }
         .mobile-nav-item svg {
-            width: 22px;
-            height: 22px;
+            width: 20px;
+            height: 20px;
+            transition: all 0.2s ease;
+        }
+        .mobile-nav-item.active svg {
+            stroke: #38bdf8;
+            filter: drop-shadow(0 0 6px rgba(56, 189, 248, 0.6));
+            transform: translateY(-1px);
+        }
+        .mobile-nav-item.active::after {
+            content: '';
+            position: absolute;
+            bottom: -3px;
+            width: 14px;
+            height: 3px;
+            background: #38bdf8;
+            border-radius: 3px;
+            box-shadow: 0 0 8px #38bdf8;
         }
         .mobile-nav-item .nav-badge {
             position: absolute;
@@ -1837,6 +1865,101 @@
             justify-content: center;
         }
 
+        /* 移动端专属金融股票卡片流样式 */
+        .mobile-stock-card {
+            background: linear-gradient(180deg, #131b2e 0%, #0d1424 100%);
+            border: 1px solid rgba(56, 189, 248, 0.16);
+            border-radius: 10px;
+            padding: 12px 14px;
+            box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            transition: transform 0.15s ease, border-color 0.15s ease;
+        }
+        .mobile-stock-card:active {
+            transform: scale(0.985);
+            border-color: rgba(56, 189, 248, 0.4);
+        }
+        .m-card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+        }
+        .m-stock-title {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+        .m-stock-name {
+            font-size: 15px;
+            font-weight: 800;
+            color: #f8fafc;
+            letter-spacing: 0.3px;
+        }
+        .m-stock-sub {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .m-stock-code {
+            font-family: var(--font-mono);
+            font-size: 11px;
+            color: #38bdf8;
+            font-weight: 600;
+        }
+        .m-stock-sector {
+            font-size: 10px;
+            color: #94a3b8;
+            background: rgba(148, 163, 184, 0.12);
+            padding: 1px 6px;
+            border-radius: 4px;
+        }
+        .m-stock-quote {
+            text-align: right;
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 2px;
+        }
+        .m-stock-price {
+            font-family: var(--font-mono);
+            font-size: 16px;
+            font-weight: 800;
+            color: #f8fafc;
+        }
+        .m-stock-badge {
+            font-family: var(--font-mono);
+            font-size: 11px;
+            font-weight: 800;
+            padding: 2px 7px;
+            border-radius: 4px;
+        }
+        .m-card-body {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: rgba(0, 0, 0, 0.25);
+            padding: 6px 10px;
+            border-radius: 6px;
+            border: 1px solid rgba(255, 255, 255, 0.04);
+        }
+        .m-card-tag {
+            font-size: 11px;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .m-card-footer {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 11px;
+            color: #64748b;
+            padding-top: 2px;
+            border-top: 1px dashed rgba(255, 255, 255, 0.06);
+        }
+
         /* ==================== Responsive: Tablet (≤1024px) ==================== */
         @media (max-width: 1024px) {
             .container {
@@ -1849,62 +1972,103 @@
 
         /* ==================== Responsive: Mobile (≤768px) ==================== */
         @media (max-width: 768px) {
+            /* 1. Header 极简化：不换行、去冗余按钮、紧凑高级 */
             .header {
-                padding: 8px 12px;
-                flex-wrap: wrap;
-                gap: 6px;
+                height: 48px !important;
+                padding: 0 12px !important;
+                flex-wrap: nowrap !important;
+                gap: 8px !important;
+                background: rgba(10, 14, 23, 0.94) !important;
+                backdrop-filter: blur(14px) !important;
+                -webkit-backdrop-filter: blur(14px) !important;
+                border-bottom: 1px solid rgba(37, 51, 74, 0.8) !important;
+                position: relative;
+                z-index: 1000;
             }
             .logo {
-                font-size: 14px;
-            }
-            .account-info {
-                gap: 12px;
-                overflow-x: auto;
-                flex-wrap: nowrap;
-                -webkit-overflow-scrolling: touch;
-                order: 3;
-                width: 100%;
-                padding: 4px 0;
-            }
-            .account-info::-webkit-scrollbar { display: none; }
-            .account-value {
-                font-size: 14px;
-            }
-            .competition-info {
-                display: none !important;
-            }
-            .account-detail { display: none !important; }
-            .ai-btn { font-size: 11px !important; padding: 5px 8px !important; }
-
-            /* Header & HUD mobile compaction */
-            .header {
-                padding: 8px 10px !important;
-                flex-wrap: wrap !important;
-                gap: 6px !important;
+                font-size: 14px !important;
+                font-weight: 800 !important;
+                letter-spacing: 0.5px;
+                background: linear-gradient(135deg, #38bdf8 0%, #818cf8 100%);
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+                white-space: nowrap;
             }
             #viewSwitcherContainer {
                 display: none !important;
             }
-            #globalStatusHud {
-                padding: 6px 10px !important;
-                gap: 8px !important;
-                overflow-x: auto !important;
-                -webkit-overflow-scrolling: touch;
+            /* 移动端去除 Header 上的高风险/占空间操作按钮（面板内部均已具备） */
+            #aiSchedToggle,
+            .header button[onclick="runAISchedulerNow()"] {
+                display: none !important;
+            }
+            #connStatusHeader,
+            #autoTradeHeader {
+                font-size: 10px !important;
+                padding: 2px 7px !important;
+                background: rgba(255, 255, 255, 0.04) !important;
+                border-radius: 12px !important;
+                border: 1px solid rgba(255, 255, 255, 0.08) !important;
+                white-space: nowrap !important;
+            }
+            .account-info {
+                display: none !important;
+            }
+            .competition-info,
+            .account-detail {
+                display: none !important;
             }
 
-            /* Main workstation & cockpit container on mobile: single active panel + bottom nav */
+            /* 2. HUD 态势条纯净化：去除横向滚动条与重复风控胶囊，保持一行清爽状态 */
+            #globalStatusHud {
+                padding: 6px 12px !important;
+                height: 36px !important;
+                gap: 0 !important;
+                overflow: hidden !important;
+                background: rgba(9, 13, 21, 0.95) !important;
+                border-bottom: 1px solid rgba(37, 51, 74, 0.7) !important;
+                box-sizing: border-box !important;
+                display: flex !important;
+                align-items: center !important;
+                justify-content: space-between !important;
+            }
+            /* 隐藏在手机顶栏纯属干扰的 Center 团队风控与 Right 体检/桌面指示器（资产 Tab 内有专门大屏仪表盘） */
+            #globalStatusHud > div:nth-child(2),
+            #globalStatusHud > div:nth-child(3) {
+                display: none !important;
+            }
+            #globalStatusHud > div:first-child {
+                width: 100% !important;
+                display: flex !important;
+                align-items: center !important;
+                justify-content: space-between !important;
+                gap: 6px !important;
+            }
+            #hudClockTime {
+                font-size: 12px !important;
+            }
+            #hudCurrentWindow {
+                font-size: 11px !important;
+                padding: 2px 8px !important;
+            }
+            #hudNextCountdown {
+                font-size: 11px !important;
+            }
+
+            /* 3. 主工作区视口与面板高度适配（精准计算 100dvh） */
             #workstationLayout {
-                height: calc(100vh - 92px - 56px) !important;
+                height: calc(100dvh - 84px - 58px) !important;
                 overflow-y: auto !important;
                 overflow-x: hidden !important;
                 display: block !important;
+                -webkit-overflow-scrolling: touch;
             }
             .container,
             #cockpitContainer {
                 display: block !important;
                 grid-template-columns: 1fr !important;
                 gap: 0 !important;
-                padding: 0 0 68px 0 !important;
+                padding: 0 0 24px 0 !important;
                 height: auto !important;
                 min-height: 100% !important;
                 overflow-y: visible !important;
@@ -1914,7 +2078,6 @@
             .container > .chart-container {
                 border-radius: 0 !important;
                 border: none !important;
-                border-bottom: 1px solid #30363d !important;
                 display: none !important;
                 width: 100% !important;
                 height: auto !important;
@@ -1926,48 +2089,85 @@
                 display: flex !important;
                 flex-direction: column !important;
                 height: auto !important;
-                min-height: calc(100vh - 155px) !important;
+                min-height: calc(100dvh - 142px) !important;
                 overflow: visible !important;
             }
             #aiCenterPanel > .panel-body {
                 height: auto !important;
                 overflow: visible !important;
                 padding: 10px !important;
+                gap: 10px !important;
             }
+
+            /* 4. 策略集成矩阵在移动端转为横向极速滑块 (极大释放垂直视口) */
             #ensembleCardsGrid {
-                grid-template-columns: repeat(2, 1fr) !important;
-                gap: 8px !important;
+                display: flex !important;
+                flex-direction: row !important;
+                flex-wrap: nowrap !important;
+                overflow-x: auto !important;
+                overflow-y: hidden !important;
+                gap: 10px !important;
+                padding: 4px 2px 8px 2px !important;
+                margin-bottom: 8px !important;
+                -webkit-overflow-scrolling: touch;
+                scroll-snap-type: x mandatory;
+            }
+            #ensembleCardsGrid::-webkit-scrollbar {
+                height: 3px;
+            }
+            #ensembleCardsGrid::-webkit-scrollbar-thumb {
+                background: rgba(56, 189, 248, 0.3);
+                border-radius: 3px;
+            }
+            #ensembleCardsGrid > div {
+                flex: 0 0 165px !important;
+                min-width: 165px !important;
+                max-width: 165px !important;
+                scroll-snap-align: start;
+                padding: 10px 12px !important;
+                box-sizing: border-box !important;
             }
             #ensembleConsensusBar {
                 flex-direction: column !important;
                 align-items: flex-start !important;
                 gap: 6px !important;
-            }
-            #candidateTableScrollWrapper {
-                max-height: 58vh !important;
-                overflow-y: auto !important;
-                overflow-x: auto !important;
-                -webkit-overflow-scrolling: touch;
+                padding: 8px 10px !important;
             }
 
-            /* Bottom nav */
+            /* 5. 冲击候选池在移动端切换为专用金融卡片流，隐藏宽表格 */
+            #candidateTableScrollWrapper {
+                display: none !important;
+            }
+            #candidateMobileList {
+                display: flex !important;
+            }
+
+            /* 6. 执行面板在移动端收纳日志，突出资产与持仓 */
+            #sideExecutionLog {
+                max-height: 60px !important;
+                font-size: 10px !important;
+                transition: max-height 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            }
+            #sideExecutionLog.expanded {
+                max-height: 220px !important;
+            }
+
+            /* 7. Bottom nav 开启显示 */
             .mobile-nav {
                 display: block !important;
-                z-index: 99990 !important;
             }
 
-            /* Notification & Account selector panel full width on mobile */
+            /* 弹窗与抽屉全宽适配 */
             .notification-panel {
                 width: calc(100vw - 20px) !important;
                 right: 10px !important;
-                top: 48px !important;
+                top: 52px !important;
             }
             .account-selector-panel {
                 width: calc(100vw - 20px) !important;
                 right: -8px !important;
+                top: 48px !important;
             }
-
-            /* Modals */
             .modal {
                 max-width: calc(100vw - 16px) !important;
                 max-height: 90vh !important;
@@ -1978,21 +2178,14 @@
         /* ==================== Responsive: Small Phone (≤480px) ==================== */
         @media (max-width: 480px) {
             .header {
-                padding: 6px 8px !important;
+                padding: 0 8px !important;
             }
             #connStatusHeader, #autoTradeHeader {
-                font-size: 11px !important;
-            }
-            #ensembleCardsGrid {
-                grid-template-columns: 1fr !important;
-            }
-            .account-item {
-                min-width: 70px;
+                font-size: 9px !important;
+                padding: 1px 5px !important;
             }
             .account-value { font-size: 13px; }
-            .chart-area { min-height: 240px; }
-            .stock-sort-bar { flex-wrap: wrap; }
-            .sort-btn { padding: 4px 6px; font-size: 10px; }
+            .chart-area { min-height: 200px; }
         }
     </style>
 
@@ -2348,7 +2541,7 @@
     <div id="workstationLayout" style="display:flex;flex-direction:row;width:100%;height:calc(100vh - 85px);overflow:hidden;">
         <div class="container" id="cockpitContainer" style="display:grid;flex:1;height:100%;overflow-y:auto;width:100%;">
         <!-- Panel 1 (Left 320px): 8 大时序自动化流水线 -->
-        <div class="panel mobile-active" id="pipelinePanel" style="display:flex;flex-direction:column;">
+        <div class="panel" id="pipelinePanel" style="display:flex;flex-direction:column;">
             <div class="panel-header" style="display:flex;justify-content:space-between;align-items:center;">
                 <span style="font-weight:600;color:#58a6ff;">🕒 8大时序自动化流水线</span>
                 <button onclick="openLedgerModal()" style="background:#21262d;border:1px solid #388bfd;color:#58a6ff;padding:3px 8px;border-radius:4px;font-size:11px;cursor:pointer;">审计账本</button>
@@ -2368,7 +2561,7 @@
         </div>
 
         <!-- Panel 2 (Center 1fr): 多策略量化集成表决与候选冲击池 (无外层溢出滚动条) -->
-        <div class="panel" id="aiCenterPanel" style="display:flex;flex-direction:column;height:100%;overflow:hidden;border:1px solid var(--border-default);box-shadow:0 8px 32px rgba(0,0,0,0.3);">
+        <div class="panel mobile-active" id="aiCenterPanel" style="display:flex;flex-direction:column;height:100%;overflow:hidden;border:1px solid var(--border-default);box-shadow:0 8px 32px rgba(0,0,0,0.3);">
             <div class="panel-header" style="flex-shrink:0;display:flex;justify-content:space-between;align-items:center;background:linear-gradient(180deg, #161f33 0%, #101726 100%);border-bottom:1px solid var(--border-default);padding:10px 16px;">
                 <div style="display:flex;align-items:center;gap:10px;">
                     <span style="font-weight:700;font-size:14px;color:#f8fafc;letter-spacing:0.4px;">📐 多策略量化集成表决与候选冲击池</span>
@@ -2440,6 +2633,10 @@
                             </tbody>
                         </table>
                     </div>
+                    <!-- 移动端专属优雅卡片流列表 (小屏下显示，替代宽表格) -->
+                    <div id="candidateMobileList" class="candidate-mobile-list" style="display:none;flex:1;min-height:0;overflow-y:auto;flex-direction:column;gap:10px;padding:2px 0;">
+                        <div style="text-align:center;color:var(--text-muted);padding:30px;font-size:12px;">正在加载候选标的卡片...</div>
+                    </div>
                 </div>
 
             </div>
@@ -2502,7 +2699,10 @@
                 <!-- 3. 全自动实时交易执行流水流 -->
                 <div style="background:#0d1117;border:1px solid #30363d;border-radius:10px;padding:12px;flex:1;display:flex;flex-direction:column;">
                     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-                        <span style="font-size:12px;font-weight:600;color:#c9d1d9;">⚡ 全自动执行日志流水</span>
+                        <div style="display:flex;align-items:center;gap:6px;">
+                            <span style="font-size:12px;font-weight:600;color:#c9d1d9;">⚡ 全自动执行日志流水</span>
+                            <span id="execLogFoldBtn" onclick="toggleExecutionLogFold()" style="cursor:pointer;color:var(--brand-blue);font-size:11px;font-weight:600;background:rgba(56,189,248,0.1);padding:1px 6px;border-radius:4px;border:1px solid rgba(56,189,248,0.25);">展开</span>
+                        </div>
                         <span style="font-size:10px;color:#8b949e;" id="sideExecCount">0 笔动作</span>
                     </div>
                     <div id="sideExecutionLog" style="flex:1;background:#010409;border:1px solid #21262d;border-radius:6px;padding:8px;font-family:Consolas,monospace;font-size:11px;color:#8b949e;overflow-y:auto;max-height:220px;">
@@ -2524,13 +2724,13 @@
     <!-- Mobile Bottom Navigation -->
     <nav class="mobile-nav" id="mobileNav">
         <div class="mobile-nav-inner">
-            <div class="mobile-nav-item active" onclick="switchMobileTab('pipeline')" data-tab="pipeline">
+            <div class="mobile-nav-item" onclick="switchMobileTab('pipeline')" data-tab="pipeline">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
                 </svg>
                 <span>时序流水</span>
             </div>
-            <div class="mobile-nav-item" onclick="switchMobileTab('quant')" data-tab="quant">
+            <div class="mobile-nav-item active" onclick="switchMobileTab('quant')" data-tab="quant">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/>
                 </svg>
@@ -2745,6 +2945,7 @@
                 });
                 if (nav) nav.style.display = 'none';
             } else {
+                document.querySelectorAll('#cockpitContainer > .panel, .container > .panel, .container > .chart-container').forEach(el => { el.style.display = ''; });
                 if (nav) nav.style.display = 'block';
                 switchMobileTab(_currentMobileTab || 'quant');
             }
@@ -7252,10 +7453,86 @@
             });
 
             tbody.innerHTML = html;
+
+            // 同步生成移动端高保真专属股票卡片流
+            let mobileHtml = '';
+            list.forEach(c => {
+                const change = Number(c.change_pct) || 0;
+                const isUp = change >= 0;
+                const changeColor = isUp ? '#f85149' : '#3fb950';
+                const changeBg = isUp ? 'rgba(248,81,73,0.14)' : 'rgba(63,185,80,0.14)';
+                const changeBorder = isUp ? 'rgba(248,81,73,0.35)' : 'rgba(63,185,80,0.35)';
+                const changePrefix = change > 0 ? '+' : '';
+                const score = Number(c.ensemble_score !== undefined ? c.ensemble_score : c.ai_score) || 80;
+                const act = (c.decision || c.action || 'BUY').toUpperCase();
+                const actBadgeStyled = act === 'BUY'
+                    ? '<span style="background:rgba(34,197,94,0.18);color:#4ade80;border:1px solid rgba(74,222,128,0.45);padding:2px 8px;border-radius:12px;font-size:11px;font-weight:800;">买入进攻</span>'
+                    : '<span style="background:rgba(245,158,11,0.18);color:#fbbf24;border:1px solid rgba(251,191,36,0.45);padding:2px 8px;border-radius:12px;font-size:11px;font-weight:800;">保持观望</span>';
+                const targetWeight = c.recommended_weight !== undefined
+                    ? `${Number(c.recommended_weight).toFixed(1)}%`
+                    : (c.target_weight || '26.5%');
+                const stopLossVal = c.stop_loss_price !== undefined ? c.stop_loss_price : (c.stop_loss || (c.price * 0.955));
+                const stopLossPrice = Number(stopLossVal).toFixed(2);
+                const sector = c.industry || c.sector || '科技/成长';
+                const votesText = (c.votes_approved !== undefined && c.total_voters !== undefined)
+                    ? `${c.votes_approved}/${c.total_voters} 赞成`
+                    : (c.ensemble_votes || '3/5 赞成');
+
+                mobileHtml += `
+                    <div class="mobile-stock-card">
+                        <div class="m-card-header">
+                            <div class="m-stock-title">
+                                <span class="m-stock-name">${c.name}</span>
+                                <div class="m-stock-sub">
+                                    <span class="m-stock-code">${c.code}</span>
+                                    <span class="m-stock-sector">${sector}</span>
+                                </div>
+                            </div>
+                            <div class="m-stock-quote">
+                                <span class="m-stock-price">&yen;${Number(c.price).toFixed(2)}</span>
+                                <span class="m-stock-badge" style="background:${changeBg};border:1px solid ${changeBorder};color:${changeColor};">
+                                    ${changePrefix}${change.toFixed(2)}%
+                                </span>
+                            </div>
+                        </div>
+                        <div class="m-card-body">
+                            <div class="m-card-tag">${actBadgeStyled}</div>
+                            <div class="m-card-tag" style="color:#cbd5e1;font-size:11px;">
+                                <span>🗳️ ${votesText}</span>
+                            </div>
+                            <div class="m-card-tag" style="color:#38bdf8;font-weight:700;font-family:var(--font-mono);font-size:11px;">
+                                <span>仓位 ${targetWeight}</span>
+                            </div>
+                        </div>
+                        <div class="m-card-footer">
+                            <span>🛡️ 止损线: <b style="color:#ff5252;font-family:var(--font-mono);">&yen;${stopLossPrice}</b> (-4.5%)</span>
+                            <span>因子分: <b style="color:#f59e0b;font-family:var(--font-mono);">${score.toFixed(1)}</b></span>
+                        </div>
+                    </div>
+                `;
+            });
+
+            const mobileListEl = document.getElementById('candidateMobileList');
+            if (mobileListEl) {
+                mobileListEl.innerHTML = mobileHtml;
+            }
         } catch (e) {
             console.error('加载候选标的池失败:', e);
             tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;color:#f85149;padding:24px;">候选池加载异常: ${e.message || e}</td></tr>`;
+            const mobileListEl = document.getElementById('candidateMobileList');
+            if (mobileListEl) {
+                mobileListEl.innerHTML = `<div style="text-align:center;color:#f85149;padding:20px;">候选池加载异常: ${e.message || e}</div>`;
+            }
         }
+    }
+
+    // 移动端执行流水折叠/展开控制
+    function toggleExecutionLogFold() {
+        const logEl = document.getElementById('sideExecutionLog');
+        const btn = document.getElementById('execLogFoldBtn');
+        if (!logEl) return;
+        const isExp = logEl.classList.toggle('expanded');
+        if (btn) btn.textContent = isExp ? '收起' : '展开';
     }
 
     // 4. 右侧面板：实时执行引擎与自动化调度流水监听
