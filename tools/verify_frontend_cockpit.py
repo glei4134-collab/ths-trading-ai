@@ -172,6 +172,7 @@ class FrontendVerificationSuite:
 
 
 if __name__ == "__main__":
-    suite = FrontendVerificationSuite()
+    target = sys.argv[1] if len(sys.argv) > 1 else SERVER_HOST
+    suite = FrontendVerificationSuite(target)
     success = suite.run_all()
     sys.exit(0 if success else 1)

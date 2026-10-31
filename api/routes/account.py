@@ -33,89 +33,93 @@ account_bp = Blueprint('account', __name__)
 
 @account_bp.route('/api/account/positions', methods=['GET'])
 def get_positions():
-    """获取持仓 — 网页API优先"""
+    """获取持仓 — 专属账户穿透优先（绝不串号）"""
     try:
-        active_id = db_store.get_active_account_id()
-        if not web_connector.cookie and active_id:
-            c = db_store.get_account_cookie(active_id)
-            if c:
-                web_connector.cookie = c
-                web_connector.connected = True
+        req_acc_id = request.args.get('account_id', type=int)
+        active_id = req_acc_id or db_store.get_active_account_id()
+        accounts = db_store.list_accounts()
+
+        target_acc_id = None
+        if accounts:
+            if active_id:
+                matched = next((a for a in accounts if a["id"] == active_id), None)
+                target_acc_id = matched["id"] if matched else accounts[0]["id"]
+            else:
+                target_acc_id = accounts[0]["id"]
 
         # 优先级1：通过 account_manager 的专属 trader 实时查询（独立维护 cookie 与 gdzh）
         from account_manager import account_manager
-        accounts = db_store.list_accounts()
-        if accounts:
-            active_acc = next((a for a in accounts if a["id"] == active_id), accounts[0])
-            trader = account_manager.get_trader(active_acc["id"])
-            if trader and trader.connected:
-                result = trader.get_positions()
-                if result["success"]:
-                    return jsonify({
-                        "success": True,
-                        "data": result["data"]
-                    })
+        if target_acc_id is not None:
+            trader = account_manager.get_trader(target_acc_id)
+            if trader:
+                if not trader.cookie:
+                    trader._reload_cookie_if_updated()
+                if trader.cookie:
+                    result = trader.get_positions()
+                    if result.get("success"):
+                        return jsonify({
+                            "success": True,
+                            "account_id": target_acc_id,
+                            "data": result["data"]
+                        })
 
-        # 优先级2：全局web_connector兜底
-        if web_connector.connected and web_connector.cookie:
-            result = web_connector.get_positions()
-            if result["success"]:
-                return jsonify({
-                    "success": True,
-                    "data": result["data"]
+        # 优先级2：从数据库精准获取指定账户的历史同步持仓（100%隔离，绝不串号）
+        if target_acc_id is not None:
+            db_positions = db_store.get_positions(account_id=target_acc_id)
+            acc_info = db_store.get_account(target_acc_id) or {}
+            balance = acc_info.get("balance", 0.0)
+
+            positions = []
+            total_market_value = 0
+            for symbol, pos in db_positions.items():
+                amt = int(pos.get('amount', 0))
+                if amt <= 0:
+                    continue
+                stock = get_stock_data(symbol)
+                if stock and stock.get('price'):
+                    current_price = stock['price']
+                    name = stock.get('name', pos.get('name', symbol))
+                else:
+                    current_price = pos.get('current_price', pos.get('avg_price', 0))
+                    name = pos.get('name', symbol)
+
+                avg_p = float(pos.get('avg_price', 0))
+                market_value = current_price * amt
+                profit = (current_price - avg_p) * amt
+                profit_rate = (current_price / avg_p - 1) * 100 if avg_p > 0 else 0
+
+                total_market_value += market_value
+                positions.append({
+                    "symbol": symbol,
+                    "name": name,
+                    "amount": amt,
+                    "available": amt,
+                    "avg_price": round(avg_p, 2),
+                    "cost_price": round(avg_p, 2),
+                    "current_price": round(current_price, 2),
+                    "market_value": round(market_value, 2),
+                    "profit": round(profit, 2),
+                    "profit_rate": round(profit_rate, 2)
                 })
-            logger.warning(f"网页API获取持仓失败: {result.get('message')}")
 
-        # 最终回退：本地模拟数据
-        if not accounts:
+            total_assets = acc_info.get("total_assets") or (balance + total_market_value)
+            init_bal = acc_info.get("initial_balance", 200000.0)
             return jsonify({
                 "success": True,
-                "data": {"balance": 0, "market_value": 0, "total_assets": 0, "positions": []}
+                "account_id": target_acc_id,
+                "data": {
+                    "balance": round(balance, 2),
+                    "market_value": round(total_market_value, 2),
+                    "total_assets": round(total_assets, 2),
+                    "initial_balance": init_bal,
+                    "positions": positions
+                }
             })
 
-        # 本地模拟持仓
-        positions = []
-        total_market_value = 0
-
-        saved_positions = data_store.positions
-        balance = data_store.account.get("balance", 0)
-
-        for symbol, pos in saved_positions.items():
-            stock = get_stock_data(symbol)
-            if stock:
-                current_price = stock['price']
-                name = stock['name']
-            else:
-                current_price = pos.get('current_price', pos.get('avg_price', 0))
-                name = pos.get('name', symbol)
-
-            market_value = current_price * pos['amount']
-            profit = (current_price - pos['avg_price']) * pos['amount']
-            profit_rate = (current_price / pos['avg_price'] - 1) * 100 if pos['avg_price'] > 0 else 0
-
-            total_market_value += market_value
-
-            positions.append({
-                "symbol": symbol,
-                "name": name,
-                "amount": pos['amount'],
-                "avg_price": round(pos['avg_price'], 2),
-                "current_price": round(current_price, 2),
-                "market_value": round(market_value, 2),
-                "profit": round(profit, 2),
-                "profit_rate": round(profit_rate, 2)
-            })
-
-        total_assets = balance + total_market_value
         return jsonify({
             "success": True,
-            "data": {
-                "balance": round(balance, 2),
-                "market_value": round(total_market_value, 2),
-                "total_assets": round(total_assets, 2),
-                "initial_balance": 1000000,
-                "positions": positions
-            }
+            "account_id": 0,
+            "data": {"balance": 0, "market_value": 0, "total_assets": 0, "positions": []}
         })
     except Exception as e:
         return jsonify({"success": False, "message": str(e)})
@@ -240,31 +244,53 @@ def get_account_offsets():
 
 @account_bp.route('/api/account/trades', methods=['GET'])
 def get_trades():
-    """获取交易记录 — 优先走网页API"""
+    """获取交易记录 — 专属账户穿透优先（绝不串号）"""
     try:
         limit = request.args.get('limit', 50, type=int)
-        from ths_connector import web_connector
+        req_acc_id = request.args.get('account_id', type=int)
+        active_id = req_acc_id or db_store.get_active_account_id()
 
-        # 优先级1：网页API
-        if web_connector.connected and web_connector.cookie:
-            result = web_connector.get_orders()
-            if result["success"]:
-                return jsonify({
-                    "success": True,
-                    "data": {
-                        "trades": result["data"],
-                        "total": len(result["data"])
-                    }
-                })
+        accounts = db_store.list_accounts()
+        target_acc_id = None
+        if accounts:
+            if active_id:
+                matched = next((a for a in accounts if a["id"] == active_id), None)
+                target_acc_id = matched["id"] if matched else accounts[0]["id"]
+            else:
+                target_acc_id = accounts[0]["id"]
 
-        # 本地模拟交易记录
-        all_trades = data_store.get_trades(limit)
+        # 优先级1：通过 account_manager 专属 trader 查询该账户在同花顺的实时当日委托与成交
+        from account_manager import account_manager
+        if target_acc_id is not None:
+            trader = account_manager.get_trader(target_acc_id)
+            if trader:
+                if not trader.cookie:
+                    trader._reload_cookie_if_updated()
+                if trader.cookie:
+                    result = trader.connector.get_orders()
+                    if result.get("success"):
+                        return jsonify({
+                            "success": True,
+                            "account_id": target_acc_id,
+                            "data": {
+                                "trades": result["data"],
+                                "total": len(result["data"])
+                            }
+                        })
+
+        # 优先级2：从数据库精准获取该账户专属的历史交易记录（100%隔离，绝不串号）
+        trades = []
+        if target_acc_id is not None:
+            trades = db_store.get_trades(limit=limit, account_id=target_acc_id)
+        if not trades:
+            trades = data_store.get_trades(limit)
 
         return jsonify({
             "success": True,
+            "account_id": target_acc_id or 0,
             "data": {
-                "trades": all_trades,
-                "total": len(data_store.trades)
+                "trades": trades,
+                "total": len(trades)
             }
         })
     except Exception as e:
@@ -1188,32 +1214,50 @@ def rename_account(account_id):
 
 @account_bp.route('/api/accounts/switch', methods=['POST'])
 def switch_account():
-    """切换当前活跃账户（影响所有交易/持仓/决策模块）"""
+    """切换当前活跃账户（影响所有交易/持仓/决策模块，与底层account_manager和db_store 100%穿透对齐）"""
     try:
-        data = request.json
+        data = request.json or {}
         account_id = data.get("account_id")
         if not account_id:
             return jsonify({"success": False, "message": "请指定 account_id"})
 
+        account_id = int(account_id)
         # 验证账户存在
         account = db_store.get_account(account_id)
         if not account:
             return jsonify({"success": False, "message": f"账户 {account_id} 不存在"})
 
+        # 核心：设置全局 active_account_id 保证 100% 穿透
+        db_store.set_active_account_id(account_id)
+
         # 切换全局 data_store
         data_store.switch_account(account_id)
+
+        # 确保 account_manager 中已载入并关联该 trader
+        from account_manager import account_manager, THSAccountTrader
+        trader = account_manager.get_trader(account_id)
+        cookie = db_store.get_account_cookie(account_id)
+        if not trader and cookie:
+            trader = THSAccountTrader(account_id)
+            trader.cookie = cookie
+            trader.connected = True
+            account_manager.traders[account_id] = trader
+        elif trader and cookie and not trader.cookie:
+            trader.cookie = cookie
+            trader.connected = True
 
         # 同步 auto_trader 的数据存储
         from auto_trader import auto_trader
         auto_trader._ds = data_store
         auto_trader._load_from_data_store()
 
-        # 同步切换全局 web_connector 的 cookie
+        # 同步切换全局 web_connector 的 cookie 与 账户标识
         from ths_connector import web_connector
-        cookie = db_store.get_account_cookie(account_id)
         if cookie:
             web_connector.cookie = cookie
             web_connector.connected = True
+            if trader and getattr(trader, 'connector', None):
+                web_connector.gdzh = trader.connector.gdzh
         else:
             web_connector.connected = False
 

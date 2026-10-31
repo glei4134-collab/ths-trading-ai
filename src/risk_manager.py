@@ -85,6 +85,45 @@ class RiskManager:
 
         return alerts
 
+    def check_team_competition_red_lines(self, positions: Dict, total_assets: float, in_full_operation: bool = True) -> List[RiskAlert]:
+        """
+        团队赛三大硬红线核验基线：
+        1. 单票仓位 <= 35% (硬红线，超标触碰即报警/限制加仓)
+        2. 持仓股票数量 >= 3 只 (全天稳态持仓要求，分散风险)
+        3. 止损底线 -4.5% (主板标准止损基准)
+        """
+        alerts = []
+        if total_assets <= 0:
+            return alerts
+
+        # 硬红线 1: 单票持仓 <= 35%
+        for symbol, pos in positions.items():
+            mv = pos.get("market_value", 0)
+            ratio = mv / total_assets
+            if ratio > 0.35:
+                alerts.append(RiskAlert(
+                    level="critical",
+                    type="team_rule_single_stock",
+                    symbol=symbol,
+                    message=f"🚨 触发团队赛硬红线: {symbol} 仓位占比 {ratio:.1%} > 35.0% 严禁超标",
+                    value=ratio,
+                    threshold=0.35
+                ))
+
+        # 硬红线 2: 稳态持仓标的数 >= 3 只
+        pos_count = len([s for s, p in positions.items() if p.get("amount", 0) > 0])
+        if in_full_operation and pos_count < 3 and total_assets > 100000:
+            alerts.append(RiskAlert(
+                level="high",
+                type="team_rule_min_holdings",
+                symbol="PORTFOLIO",
+                message=f"⚠️ 团队赛分散度预警: 当前有效持仓仅 {pos_count} 只，低于团队赛稳态持仓基线 3 只",
+                value=pos_count,
+                threshold=3
+            ))
+
+        return alerts
+
     def check_drawdown(self, initial_assets: float, current_assets: float) -> List[RiskAlert]:
         """检查回撤"""
         alerts = []
@@ -198,8 +237,10 @@ class RiskManager:
         min_fixed_pct = 0.065 if is_gem_or_star else 0.045
         max_fixed_pct = 0.085 if is_gem_or_star else 0.065
 
-        # 方法1: 板位差异化 ATR 止损
-        atr_stop = entry_price * (1 - atr_multiplier * volatility)
+        # 方法1: 板位差异化 ATR 止损（限制在基线区间内）
+        raw_atr_pct = atr_multiplier * volatility
+        clamped_atr_pct = max(min_fixed_pct, min(max_fixed_pct, raw_atr_pct))
+        atr_stop = entry_price * (1 - clamped_atr_pct)
 
         # 方法2: 固定比例止损（根据波动率调整）
         fixed_pct = min_fixed_pct + min(volatility * 2, max_fixed_pct - min_fixed_pct)
@@ -208,8 +249,10 @@ class RiskManager:
         # 方法3: 支撑位止损
         support_stop = support_level if support_level else atr_stop
 
-        # 取最保守的（最高的）止损价
-        optimal_stop = max(atr_stop, fixed_stop, support_stop)
+        # 取最保守的（最高的）止损价，并严格锚定在 [min_fixed_pct, max_fixed_pct] 差异化止损区间内
+        # 防止日内微小波动被过早震出（不小于 4.5%/6.5%），同时严防深套（不大于 6.5%/8.5%）
+        candidate_stop = max(atr_stop, fixed_stop, support_stop)
+        optimal_stop = min(entry_price * (1 - min_fixed_pct), max(entry_price * (1 - max_fixed_pct), candidate_stop))
 
         return {
             "stop_loss": round(optimal_stop, 2),

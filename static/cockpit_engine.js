@@ -339,10 +339,16 @@
     // 5. 渲染 3 账户矩阵卡片与资产总览
     async function syncAndRenderMultiAccounts() {
         let accounts = [];
+        let activeIdFromBackend = null;
         try {
             const res = await fetch('/api/accounts?_t=' + Date.now());
             const json = await res.json();
             accounts = (json.data && json.data.accounts) || json.accounts || (Array.isArray(json) ? json : []);
+            if (json.data && json.data.active_account_id) {
+                activeIdFromBackend = json.data.active_account_id;
+            } else if (json.active_account_id) {
+                activeIdFromBackend = json.active_account_id;
+            }
             _cachedAccounts = accounts;
         } catch(e) {
             console.warn('[P5] 获取账户列表失败:', e);
@@ -353,6 +359,19 @@
             if (grid) grid.innerHTML = '<div style="text-align:center;color:#94a3b8;padding:12px;font-size:11px;grid-column:1/-1;">暂无绑定账户</div>';
             return;
         }
+
+        // 精准自动同步后端 /api/accounts 返回的 active_account_id，首屏与切换无缝高亮
+        if (activeIdFromBackend) {
+            _activeAccountId = activeIdFromBackend;
+            window.activeAccountId = activeIdFromBackend;
+        } else if (window.activeAccountId) {
+            _activeAccountId = window.activeAccountId;
+        } else if (accounts.length) {
+            _activeAccountId = accounts[0].id;
+            window.activeAccountId = _activeAccountId;
+        }
+
+        const currentActiveId = window.activeAccountId || _activeAccountId || (accounts[0] && accounts[0].id);
 
         // 账户元数据风格配置 (先锋进攻, 稳健中军, 尾盘防守)
         const HETERO_ACCOUNTS_CONFIG = {
@@ -365,8 +384,6 @@
         let totalCombinedAvailable = 0;
         let totalCombinedInitial = 0;
         let totalCombinedProfit = 0;
-
-        const currentActiveId = window.activeAccountId || _activeAccountId || (accounts[0] && accounts[0].id);
 
         const grid = document.getElementById('accountCardsGrid');
         if (grid) {
@@ -549,6 +566,10 @@
     }
 
     // 暴露并绑定到全局
+    window.syncAndRenderMultiAccounts = syncAndRenderMultiAccounts;
+    window.renderPositionsAndRisk = renderPositionsAndRisk;
+    window.renderEnsembleGrid = renderEnsembleGrid;
+    window.renderCandidateTable = renderCandidateTable;
     window.startProCockpitEngine = startProCockpitEngine;
     window.refreshAllCockpitPanels = () => {
         renderPipelineList();

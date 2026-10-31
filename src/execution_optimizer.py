@@ -7,13 +7,14 @@
    当 OBI > 0.45 且股价触及/逼近涨停时，自动跨档挂涨停价，保障优先排队与零滑点拒单。
 3. 微批次 TWAP 拆单:
    当多账户总委托量 > 1.2 * 卖一量 (AskVol1) 时，自动拆解为 2~3 个微批次 (间隔 1.5s) 平滑派发，防盘口打穿与市场冲击。
+   严格确保单笔子单符合 100 股整数倍，总委托量 100% 精确守恒。
 """
 
 import time
 import re
 import logging
 import requests
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, Any
 from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
@@ -70,17 +71,37 @@ class OrderBookDepth:
         }
 
 
-def calculate_obi(bid_vols: List[int], ask_vols: List[int]) -> float:
+def calculate_obi(bid_vols: Optional[List[int]], ask_vols: Optional[List[int]]) -> float:
     """
     计算五档订单簿失衡度 Order Book Imbalance (OBI)
     公式: OBI = (Sum(BidVol_i) - Sum(AskVol_i)) / (Sum(BidVol_i) + Sum(AskVol_i))
     范围: [-1.0, 1.0]。
     > 0.45 表示盘口买压极度强势，买方主导；< -0.45 表示抛压沉重。
+    具备完全的空指针与非数字类型防御机制。
     """
-    total_b = sum(bid_vols)
-    total_a = sum(ask_vols)
+    if not bid_vols and not ask_vols:
+        return 0.0
+
+    b_clean = []
+    for v in (bid_vols or []):
+        if v is not None:
+            try:
+                b_clean.append(max(0, int(v)))
+            except (ValueError, TypeError):
+                pass
+
+    a_clean = []
+    for v in (ask_vols or []):
+        if v is not None:
+            try:
+                a_clean.append(max(0, int(v)))
+            except (ValueError, TypeError):
+                pass
+
+    total_b = sum(b_clean)
+    total_a = sum(a_clean)
     denom = total_b + total_a
-    if denom == 0:
+    if denom <= 0:
         return 0.0
     return round((total_b - total_a) / denom, 4)
 
@@ -88,9 +109,12 @@ def calculate_obi(bid_vols: List[int], ask_vols: List[int]) -> float:
 def fetch_orderbook_depth(symbol: str) -> OrderBookDepth:
     """
     获取单只股票的五档盘口深度与 OBI
-    支持腾讯行情源高速解析 + 仿真虚拟时钟回退
+    支持腾讯行情源高速解析 + 仿真虚拟时钟回退 + 全链路空指针兜底
     """
-    symbol = symbol.strip()
+    symbol = str(symbol or "").strip()
+    if not symbol:
+        return _fallback_orderbook("")
+
     # 1. 检查是否处于虚拟时钟演练状态
     try:
         from fast_data import MockMarketDataProvider
@@ -145,12 +169,12 @@ def fetch_orderbook_depth(symbol: str) -> OrderBookDepth:
     if "=" not in text:
         return _fallback_orderbook(symbol)
 
-    data_part = text.split("=")[1].strip('"\n; ')
-    fields = data_part.split("~")
-    if len(fields) < 30:
-        return _fallback_orderbook(symbol)
-
     try:
+        data_part = text.split("=")[1].strip('"\n; ')
+        fields = data_part.split("~")
+        if len(fields) < 30:
+            return _fallback_orderbook(symbol)
+
         curr_price = float(fields[3]) if fields[3] else 0.0
         pre_close = float(fields[4]) if fields[4] else 0.0
 
@@ -160,8 +184,8 @@ def fetch_orderbook_depth(symbol: str) -> OrderBookDepth:
         for i in range(5):
             p_idx = 9 + i * 2
             v_idx = 10 + i * 2
-            p = float(fields[p_idx]) if fields[p_idx] else 0.0
-            v = int(fields[v_idx]) * 100 if fields[v_idx] else 0  # 手 -> 股
+            p = float(fields[p_idx]) if len(fields) > p_idx and fields[p_idx] else 0.0
+            v = int(fields[v_idx]) * 100 if len(fields) > v_idx and fields[v_idx] else 0  # 手 -> 股
             bids.append((p, v))
             bid_vols.append(v)
 
@@ -171,8 +195,8 @@ def fetch_orderbook_depth(symbol: str) -> OrderBookDepth:
         for i in range(5):
             p_idx = 19 + i * 2
             v_idx = 20 + i * 2
-            p = float(fields[p_idx]) if fields[p_idx] else 0.0
-            v = int(fields[v_idx]) * 100 if fields[v_idx] else 0  # 手 -> 股
+            p = float(fields[p_idx]) if len(fields) > p_idx and fields[p_idx] else 0.0
+            v = int(fields[v_idx]) * 100 if len(fields) > v_idx and fields[v_idx] else 0  # 手 -> 股
             asks.append((p, v))
             ask_vols.append(v)
 
@@ -186,15 +210,12 @@ def fetch_orderbook_depth(symbol: str) -> OrderBookDepth:
         obi = calculate_obi(bid_vols, ask_vols)
 
         # 判定是否触及或逼近涨停
-        # 1. 当前价达到或大于等于涨停价
-        # 2. 卖一价达到涨停价，或卖盘完全被扫空(ask1_vol==0 且当前价>=涨停价*0.995)
-        # 3. 价格在距涨停价0.5%以内 (如主板涨幅>=9.5% 或 创业板>=19.5%)
         is_limit_up = curr_price >= limit_up if limit_up > 0 else False
         is_touching_limit_up = (
             is_limit_up or
             (limit_up > 0 and curr_price >= round(limit_up * 0.995, 2)) or
-            (asks[0][0] >= limit_up if limit_up > 0 and asks[0][0] > 0 else False) or
-            (asks[0][1] == 0 and total_ask == 0 and curr_price >= round(limit_up * 0.99, 2))
+            (len(asks) > 0 and asks[0][0] >= limit_up if limit_up > 0 and asks[0][0] > 0 else False) or
+            (len(asks) > 0 and asks[0][1] == 0 and total_ask == 0 and curr_price >= round(limit_up * 0.99, 2))
         )
         is_limit_down = curr_price <= limit_down if limit_down > 0 else False
 
@@ -209,10 +230,10 @@ def fetch_orderbook_depth(symbol: str) -> OrderBookDepth:
             total_bid_vol=total_bid,
             total_ask_vol=total_ask,
             obi=obi,
-            ask1_price=asks[0][0],
-            ask1_vol=asks[0][1],
-            bid1_price=bids[0][0],
-            bid1_vol=bids[0][1],
+            ask1_price=asks[0][0] if asks else 0.0,
+            ask1_vol=asks[0][1] if asks else 0,
+            bid1_price=bids[0][0] if bids else 0.0,
+            bid1_vol=bids[0][1] if bids else 0,
             is_limit_up=is_limit_up,
             is_limit_down=is_limit_down,
             is_touching_limit_up=is_touching_limit_up
@@ -257,13 +278,18 @@ def evaluate_aggressive_pegging(symbol: str, action: str, requested_price: float
         跨档挂在卖一价保证瞬间吃单。
     返回: (优化后的价格, 是否触发抢筹, 策略说明)
     """
+    try:
+        requested_price = float(requested_price or 0.0)
+    except (ValueError, TypeError):
+        requested_price = 0.0
+
     if action != "buy":
         return requested_price, False, "非买入指令"
 
     if depth is None:
         depth = fetch_orderbook_depth(symbol)
 
-    if depth.limit_up <= 0:
+    if not depth or depth.limit_up <= 0:
         return requested_price, False, "无有效涨跌停价"
 
     # 条件1: OBI > 0.45 且触及/逼近涨停 -> 跨档挂涨停价抢筹
@@ -287,44 +313,63 @@ def evaluate_aggressive_pegging(symbol: str, action: str, requested_price: float
     return requested_price, False, "正常执行价"
 
 
-def plan_twap_micro_batches(account_shares: Dict[int, int], ask1_vol: int,
+def plan_twap_micro_batches(account_shares: Optional[Dict[Any, Any]], ask1_vol: int,
                             batch_interval: float = 1.5) -> Tuple[bool, List[Dict[int, int]], str]:
     """
     微批次 TWAP 拆单规划器:
     当所有账户总买入股数 > 1.2 * 卖一量 (AskVol1) 时，自动拆解为 2~3 个微批次。
-    每批次严格向下/向上规整为 100 股整数倍，总和完全守恒。
+    每批次严格向下/向上规整为 100 股整数倍，总和完全精确守恒。
     
     返回: (是否触发拆单, 微批次列表 [ {acc_id: shares}, ... ], 拆单说明)
     """
-    total_shares = sum(account_shares.values())
+    if not account_shares:
+        return False, [{}], "无委托量"
+
+    try:
+        ask1_vol = max(0, int(ask1_vol or 0))
+    except (ValueError, TypeError):
+        ask1_vol = 0
+
+    # 规范化：确保每个账户的股数均为 100 股整数倍且为非负整数
+    sanitized_shares = {}
+    for acc_id, qty in account_shares.items():
+        if qty is None:
+            continue
+        try:
+            clean_qty = int(qty)
+        except (ValueError, TypeError):
+            continue
+        clean_qty = int(clean_qty // 100) * 100
+        if clean_qty >= 100:
+            sanitized_shares[acc_id] = clean_qty
+
+    total_shares = sum(sanitized_shares.values())
     if total_shares <= 0:
-        return False, [account_shares], "无委托量"
+        return False, [sanitized_shares], "无有效委托量"
 
     # 如果卖一量为0 (如已一字封板)，或总委托量 <= 1.2 * 卖一量，无需拆单
     if ask1_vol <= 0 or total_shares <= int(1.2 * ask1_vol):
-        return False, [account_shares], f"总委托量 {total_shares}股 <= 1.2*卖一量({ask1_vol}股)，直接单批并发执行"
+        return False, [sanitized_shares], f"总委托量 {total_shares}股 <= 1.2*卖一量({ask1_vol}股)，直接单批并发执行"
 
     # 判定微批次数量：超过2.5倍拆3批，否则拆2批
     batch_count = 3 if total_shares > int(2.5 * ask1_vol) else 2
-    ratios = [0.40, 0.30, 0.30] if batch_count == 3 else [0.50, 0.50]
-
     batches = [{} for _ in range(batch_count)]
 
-    for acc_id, qty in account_shares.items():
-        if qty <= 0:
-            continue
+    for acc_id, qty in sanitized_shares.items():
+        # 100 股（仅一手）无法再拆分，直接全量置入第一批
         if qty < 200:
-            # 资金较小仅有一手(100股)，不可再拆，直接并入第一微批次
             batches[0][acc_id] = qty
             continue
 
-        if batch_count == 2:
+        # 200 股若尝试拆 3 批会导致某批为 0，按 2 批均分
+        if batch_count == 2 or qty < 300:
             b0 = int(round(qty * 0.50 / 100)) * 100
             b0 = max(100, min(qty - 100, b0))
             b1 = qty - b0
             batches[0][acc_id] = b0
             batches[1][acc_id] = b1
         else:
+            # 3 批拆分：确保每批 >= 100 且和严格守恒为 qty
             b0 = int(round(qty * 0.40 / 100)) * 100
             b0 = max(100, min(qty - 200, b0))
             rem = qty - b0
@@ -337,6 +382,9 @@ def plan_twap_micro_batches(account_shares: Dict[int, int], ask1_vol: int,
 
     # 过滤掉全为0的空批次
     active_batches = [b for b in batches if sum(b.values()) > 0]
+    if not active_batches:
+        active_batches = [sanitized_shares]
+
     reason = (f"🌊 [TWAP-拆单] 总委托量 {total_shares}股 > 1.2*卖一量({ask1_vol}股)，"
               f"自动拆分为 {len(active_batches)} 个微批次 (间隔 {batch_interval}s) 平滑派发，防盘口打穿")
     logger.info(reason)

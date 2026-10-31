@@ -697,10 +697,19 @@ class SentimentAnalyzer:
             pass
         return 1.0
 
+    @staticmethod
+    def _fnv1a_64(text: str) -> int:
+        """FNV-1a 64-bit 非加密极速哈希指纹算法（新闻去重与极低内存 footprint）"""
+        h = 0xcbf29ce484222325
+        fnv_prime = 0x100000001b3
+        for b in text.encode("utf-8", errors="ignore"):
+            h = ((h ^ b) * fnv_prime) & 0xffffffffffffffff
+        return h
+
     def _filter_noise(self, news_with_source: List[Tuple[str, str]]) -> List[Tuple[str, str]]:
-        """噪音过滤：单次正则快速过滤噪音广告与重复新闻"""
+        """噪音过滤：单次正则快速过滤噪音广告与 FNV-1a 64-bit 指纹去重"""
         filtered = []
-        seen_titles = set()
+        seen_fingerprints = set()
 
         for raw_title, source in news_with_source:
             if not raw_title:
@@ -727,13 +736,17 @@ class SentimentAnalyzer:
             if self._noise_pattern and self._noise_pattern.search(title):
                 continue
 
-            # 归一化去重键（忽略日期前缀和标点差异）
-            dedup_key = re.sub(r'^\[?\d{4}-\d{2}-\d{2}\]?\s*', '', title)
-            dedup_key = re.sub(r'[^\u4e00-\u9fffa-zA-Z0-9]', '', dedup_key)[:35]
-            if not dedup_key or dedup_key in seen_titles:
+            # 归一化清洗并提取 FNV-1a 64-bit 哈希指纹进行严格去重
+            clean_text = re.sub(r'^\[?\d{4}-\d{2}-\d{2}\]?\s*', '', title)
+            clean_text = re.sub(r'[^\u4e00-\u9fffa-zA-Z0-9]', '', clean_text)[:35]
+            if not clean_text:
                 continue
 
-            seen_titles.add(dedup_key)
+            fp = self._fnv1a_64(clean_text)
+            if fp in seen_fingerprints:
+                continue
+
+            seen_fingerprints.add(fp)
             filtered.append((title, source))
 
         return filtered

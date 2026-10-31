@@ -513,19 +513,20 @@ class AccountManager:
         return trader.sync_from_ths()
 
     def get_trader(self, account_id: int) -> Optional[THSAccountTrader]:
-        """获取指定账户的交易器（自动加载未缓存的账户）"""
+        """获取指定账户的交易器（自动加载未缓存的账户，确保100%穿透对齐）"""
         if account_id in self.traders:
             return self.traders[account_id]
-        # 自动加载: 新创建的账户可能没在 _load_traders 中注册
+        # 自动加载: 新创建或未缓存的账户，只要数据库存在即创建专属 Trader
         try:
             from db_store import db_store
-            cookie = db_store.get_account_cookie(account_id)
-            if cookie:
+            account = db_store.get_account(account_id)
+            if account:
+                cookie = db_store.get_account_cookie(account_id) or ""
                 trader = THSAccountTrader(account_id)
                 trader.cookie = cookie
-                trader.connected = True
+                trader.connected = bool(cookie)
                 self.traders[account_id] = trader
-                logger.info(f"自动加载账户 {account_id} 的 trader")
+                logger.info(f"自动加载账户 {account_id} 的 trader (connected={trader.connected})")
                 return trader
         except Exception as e:
             logger.error(f"自动加载 trader 失败: {e}")

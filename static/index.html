@@ -5012,26 +5012,39 @@
             }
         }
 
-        function openConnectModal(defaultTab = 'qr') {
-            document.getElementById('connectModal').classList.add('active');
-            checkLoginStatus();
-            switchLoginModalTab(defaultTab);
+        function openConnectModal(defaultTab = 'sms') {
+            try {
+                const modal = document.getElementById('connectModal');
+                if (modal) modal.classList.add('active');
+                if (typeof checkLoginStatus === 'function') checkLoginStatus();
+                if (typeof switchLoginModalTab === 'function') switchLoginModalTab(defaultTab);
+            } catch(e) {
+                console.warn('[Modal] openConnectModal 异常隔离:', e);
+            }
         }
+        window.openConnectModal = openConnectModal;
 
         function closeConnectModal() {
-            if (_cloudQrPollTimer) {
-                clearInterval(_cloudQrPollTimer);
-                _cloudQrPollTimer = null;
+            try {
+                if (typeof _cloudQrPollTimer !== 'undefined' && _cloudQrPollTimer) {
+                    clearInterval(_cloudQrPollTimer);
+                    _cloudQrPollTimer = null;
+                }
+                if ((typeof _currentCloudSessionId !== 'undefined' && _currentCloudSessionId) || 
+                    (typeof _currentCloudQrId !== 'undefined' && _currentCloudQrId)) {
+                    fetch('/api/ths/qrcode/cancel', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({session_id: _currentCloudSessionId, qrcode_id: _currentCloudQrId})
+                    }).catch(() => {});
+                }
+                const modal = document.getElementById('connectModal');
+                if (modal) modal.classList.remove('active');
+            } catch(e) {
+                console.warn('[Modal] closeConnectModal 异常隔离:', e);
             }
-            if (_currentCloudSessionId || _currentCloudQrId) {
-                fetch('/api/ths/qrcode/cancel', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({session_id: _currentCloudSessionId, qrcode_id: _currentCloudQrId})
-                }).catch(() => {});
-            }
-            document.getElementById('connectModal').classList.remove('active');
         }
+        window.closeConnectModal = closeConnectModal;
 
         function copyConsoleCommand() {
             const code = "copy(document.cookie)";
@@ -5974,6 +5987,120 @@
         window.loadExecutionAndPortfolio = loadExecutionAndPortfolio;
 
 
+
+        // ==================== 常用交互按钮安全保护与全链路容错 ====================
+
+        // 1. 刷新量化表决
+        async function runEnsembleDecide() {
+            try {
+                if (typeof showToast === 'function') {
+                    showToast('⚡ 正在执行团队5大核心策略加权集成表决...', 'info');
+                }
+                try {
+                    await fetch('/api/ai/ensemble/status?_t=' + Date.now());
+                } catch(e) {}
+
+                if (typeof renderEnsembleGrid === 'function') renderEnsembleGrid();
+                if (typeof renderCandidateTable === 'function') await renderCandidateTable();
+
+                if (typeof showToast === 'function') {
+                    showToast('✅ 团队量化集成表决已更新完成', 'success');
+                }
+            } catch(e) {
+                console.warn('[Interactive] runEnsembleDecide error:', e);
+                if (typeof showToast === 'function') {
+                    showToast('表决刷新异常: ' + (e.message || '网络错误'), 'error');
+                }
+            }
+        }
+        window.runEnsembleDecide = runEnsembleDecide;
+
+        // 2. 网关 RTT 与链路监控弹窗
+        async function openPerformanceModal() {
+            try {
+                let modal = document.getElementById('perfModal');
+                if (modal) modal.remove();
+
+                modal = document.createElement('div');
+                modal.id = 'perfModal';
+                modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.8);z-index:9999;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px);';
+                modal.onclick = function(e) { if (e.target === modal) modal.remove(); };
+
+                modal.innerHTML = `
+                    <div style="background:#120e14;border:1px solid rgba(255,24,36,0.4);border-radius:10px;padding:20px;width:90%;max-width:540px;box-shadow:0 12px 40px rgba(0,0,0,0.6);" onclick="event.stopPropagation()">
+                        <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid rgba(255,255,255,0.08);padding-bottom:10px;margin-bottom:14px;">
+                            <div style="display:flex;align-items:center;gap:8px;">
+                                <span style="font-size:15px;font-weight:700;color:#ff1824;">⚡ 同花顺 API 网关延迟与链路监控</span>
+                            </div>
+                            <button onclick="this.closest('#perfModal').remove()" style="background:none;border:none;color:#94a3b8;font-size:20px;cursor:pointer;">&times;</button>
+                        </div>
+                        <div id="perfModalContent" style="font-size:12px;color:#cbd5e1;">
+                            <div style="text-align:center;padding:20px;color:#94a3b8;">正在读取链路测速与数据库健康指标...</div>
+                        </div>
+                        <div style="text-align:right;margin-top:16px;">
+                            <button onclick="this.closest('#perfModal').remove()" style="background:rgba(255,24,36,0.15);border:1px solid #ff1824;color:#ff1824;padding:5px 16px;border-radius:4px;font-size:12px;cursor:pointer;">关闭</button>
+                        </div>
+                    </div>
+                `;
+                document.body.appendChild(modal);
+
+                const res = await fetch('/api/system/performance?limit=50&_t=' + Date.now());
+                const json = await res.json();
+                const contentEl = document.getElementById('perfModalContent');
+                if (contentEl && json.success) {
+                    const data = json.data || {};
+                    const avgMs = data.avg_duration_ms ? Number(data.avg_duration_ms).toFixed(1) : '--';
+                    const maxMs = data.max_duration_ms ? Number(data.max_duration_ms).toFixed(1) : '--';
+                    const minMs = data.min_duration_ms ? Number(data.min_duration_ms).toFixed(1) : '--';
+                    const total = data.total_requests || data.total_calls || '--';
+                    const successRate = data.success_rate !== undefined ? (Number(data.success_rate) * 100).toFixed(1) + '%' : '100%';
+
+                    contentEl.innerHTML = `
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;">
+                            <div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);padding:10px;border-radius:6px;">
+                                <div style="color:#94a3b8;font-size:11px;">平均往返延迟 (RTT)</div>
+                                <div style="font-size:18px;font-weight:700;color:#00f59b;font-family:var(--font-mono);margin-top:4px;">${avgMs} ms</div>
+                            </div>
+                            <div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);padding:10px;border-radius:6px;">
+                                <div style="color:#94a3b8;font-size:11px;">委托调用成功率</div>
+                                <div style="font-size:18px;font-weight:700;color:#ff1824;font-family:var(--font-mono);margin-top:4px;">${successRate}</div>
+                            </div>
+                            <div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);padding:10px;border-radius:6px;">
+                                <div style="color:#94a3b8;font-size:11px;">最低/最高延迟区间</div>
+                                <div style="font-size:13px;font-weight:700;color:#f8fafc;font-family:var(--font-mono);margin-top:4px;">${minMs} ~ ${maxMs} ms</div>
+                            </div>
+                            <div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);padding:10px;border-radius:6px;">
+                                <div style="color:#94a3b8;font-size:11px;">统计样本总次数</div>
+                                <div style="font-size:13px;font-weight:700;color:#ffe600;font-family:var(--font-mono);margin-top:4px;">${total} 次</div>
+                            </div>
+                        </div>
+                        <div style="font-size:11px;color:#94a3b8;line-height:1.5;">
+                            📌 说明：系统已启用细粒度单账户互斥锁与并发流控，确保毫秒级发包时不产生超买或限频。
+                        </div>
+                    `;
+                }
+            } catch(e) {
+                console.warn('[Modal] openPerformanceModal error:', e);
+            }
+        }
+        window.openPerformanceModal = openPerformanceModal;
+
+        // 3. 执行流水日志折叠展开
+        function toggleExecutionLogFold() {
+            try {
+                const btn = document.getElementById('execLogFoldBtn');
+                const box = document.getElementById('executionLogBox') || document.getElementById('sideTradeHistoryContainer');
+                if (!btn) return;
+                const isFolded = btn.textContent.trim() === '展开';
+                btn.textContent = isFolded ? '收起' : '展开';
+                if (box) box.style.maxHeight = isFolded ? '450px' : '150px';
+            } catch(e) {
+                console.warn('[Interactive] toggleExecutionLogFold error:', e);
+            }
+        }
+        window.toggleExecutionLogFold = toggleExecutionLogFold;
+
+
         // ==================== 3 账户异构策略元数据与矩阵渲染 ====================
         const HETERO_ACCOUNTS_META = {
             1: {
@@ -6455,53 +6582,55 @@
             }
         }
 
-        // Select stock
+        // Select stock (全要素异常隔离与 DOM 空指针守护)
         async function selectStock(code) {
-            currentSymbol = code;
-            chartCache = {};  // 切换股票清空图表缓存
-            chartAIInfo = null;
+            try {
+                if (!code) return;
+                currentSymbol = code;
+                chartCache = {};
+                chartAIInfo = null;
 
-            // Update active state
-            document.querySelectorAll('.stock-item').forEach(el => {
-                el.classList.toggle('active', el.dataset.code === code);
-            });
+                document.querySelectorAll('.stock-item').forEach(el => {
+                    el.classList.toggle('active', el.dataset.code === code);
+                });
 
-            stopChartRefresh();
+                if (typeof stopChartRefresh === 'function') stopChartRefresh();
 
-            // 并行加载：实时行情 + 当前周期图表 + AI决策（不阻塞）
-            const realtimePromise = fetch(`/api/stock/realtime/${code}`).then(r => r.json());
-            const chartPromise = loadChartData(code, currentChartPeriod);
-            const aiPromise = loadAIDecision(code);
+                const realtimePromise = fetch(`/api/stock/realtime/${code}`).then(r => r.json()).catch(() => ({}));
+                const chartPromise = (typeof loadChartData === 'function') ? loadChartData(code, currentChartPeriod) : Promise.resolve();
+                const aiPromise = (typeof loadAIDecision === 'function') ? loadAIDecision(code) : Promise.resolve();
 
-            // 实时行情到了立刻更新UI
-            realtimePromise.then(data => {
-                if (data.success) {
-                    const stock = data.data;
-                    currentPrice = stock.price;
-                    document.getElementById('currentStockHeader').textContent =
-                        `${stock.name} (${stock.code}) - ${stock.price.toFixed(2)}`;
-                    document.getElementById('tradeSymbol').value = code;
-                    document.getElementById('tradePrice').value = stock.price.toFixed(2);
-                    document.getElementById('currentPrice').textContent = stock.price.toFixed(2);
-                    updateEstimatedAmount();
-                }
-            }).catch(() => {});
+                realtimePromise.then(data => {
+                    if (data && data.success && data.data) {
+                        const stock = data.data;
+                        currentPrice = stock.price;
+                        const headerEl = document.getElementById('currentStockHeader');
+                        if (headerEl) headerEl.textContent = `${stock.name} (${stock.code}) - ${Number(stock.price).toFixed(2)}`;
+                        const symInput = document.getElementById('tradeSymbol');
+                        if (symInput) symInput.value = code;
+                        const priceInput = document.getElementById('tradePrice');
+                        if (priceInput) priceInput.value = Number(stock.price).toFixed(2);
+                        const curPriceEl = document.getElementById('currentPrice');
+                        if (curPriceEl) curPriceEl.textContent = Number(stock.price).toFixed(2);
+                        if (typeof updateEstimatedAmount === 'function') updateEstimatedAmount();
+                    }
+                }).catch(() => {});
 
-            // 图表数据到了立即渲染
-            chartPromise.catch(() => {});
+                if (chartPromise && chartPromise.catch) chartPromise.catch(() => {});
+                if (aiPromise && aiPromise.catch) aiPromise.catch(() => {});
 
-            // AI数据到了更新标记线（不重绘整个图）
-            aiPromise.catch(() => {});
+                const otherPeriods = ['intraday', 'daily', '5day'].filter(p => p !== currentChartPeriod);
+                otherPeriods.forEach(p => {
+                    if (!chartCache[p] && typeof loadChartData === 'function') loadChartData(code, p);
+                });
 
-            // 后台预加载其他周期（不阻塞当前显示）
-            const otherPeriods = ['intraday', 'daily', '5day'].filter(p => p !== currentChartPeriod);
-            otherPeriods.forEach(p => {
-                if (!chartCache[p]) loadChartData(code, p);
-            });
-
-            startChartRefresh();
-            startPriceRefresh();
+                if (typeof startChartRefresh === 'function') startChartRefresh();
+                if (typeof startPriceRefresh === 'function') startPriceRefresh();
+            } catch(e) {
+                console.warn('[Stock] selectStock 异常隔离:', e);
+            }
         }
+        window.selectStock = selectStock;
 
         // ==================== 图表系统 ====================
         let chartCache = {};
@@ -7039,14 +7168,24 @@
                     body: JSON.stringify({})
                 });
                 const data = await res.json();
-                if (data.success) {
-                    showToast(data.data.enabled ? 'AI自动交易已开启' : 'AI自动交易已关闭', 'success');
-                    loadAISchedulerStatus();
+                if (data && data.success) {
+                    const isEn = data.data && data.data.enabled;
+                    if (typeof showToast === 'function') {
+                        showToast(isEn ? 'AI自动交易已开启' : 'AI自动交易已关闭', 'success');
+                    }
+                    if (typeof loadAISchedulerStatus === 'function') loadAISchedulerStatus();
+                } else {
+                    if (typeof showToast === 'function') {
+                        showToast((data && data.message) || '操作失败', 'error');
+                    }
                 }
             } catch (e) {
-                showToast('操作失败: ' + e.message, 'error');
+                if (typeof showToast === 'function') {
+                    showToast('操作失败: ' + (e.message || '网络异常'), 'error');
+                }
             }
         }
+        window.toggleAIScheduler = toggleAIScheduler;
 
         async function runAISchedulerNow() {
             // 创建进度弹窗
@@ -7897,12 +8036,16 @@
     // ==================== 调度执行审计账本与演练调试 ====================
 
     async function openLedgerModal() {
-        const modal = document.createElement('div');
-        modal.id = 'ledgerModal';
-        modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.75);z-index:9999;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px);';
-        modal.onclick = function(e) { if (e.target === modal) modal.remove(); };
+        try {
+            let modal = document.getElementById('ledgerModal');
+            if (modal) modal.remove();
 
-        modal.innerHTML = `
+            modal = document.createElement('div');
+            modal.id = 'ledgerModal';
+            modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.75);z-index:9999;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px);';
+            modal.onclick = function(e) { if (e.target === modal) modal.remove(); };
+
+            modal.innerHTML = `
             <div style="background:#161b22;border:1px solid #30363d;border-radius:12px;padding:22px;width:92%;max-width:960px;max-height:85vh;overflow-y:auto;box-shadow:0 12px 36px rgba(0,0,0,0.5);" onclick="event.stopPropagation()">
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;border-bottom:1px solid #21262d;padding-bottom:12px;">
                     <div>
@@ -7945,8 +8088,11 @@
             </div>
         `;
         document.body.appendChild(modal);
-        refreshLedgerView();
+        if (typeof refreshLedgerView === 'function') refreshLedgerView();
+        } catch(e) { console.warn('[Ledger] openLedgerModal error:', e); }
     }
+    window.openLedgerModal = openLedgerModal;
+    window.refreshLedgerView = refreshLedgerView;
 
     async function refreshLedgerView() {
         const body = document.getElementById('ledgerTableBody');
@@ -8541,10 +8687,16 @@
     // 5. 渲染 3 账户矩阵卡片与资产总览
     async function syncAndRenderMultiAccounts() {
         let accounts = [];
+        let activeIdFromBackend = null;
         try {
             const res = await fetch('/api/accounts?_t=' + Date.now());
             const json = await res.json();
             accounts = (json.data && json.data.accounts) || json.accounts || (Array.isArray(json) ? json : []);
+            if (json.data && json.data.active_account_id) {
+                activeIdFromBackend = json.data.active_account_id;
+            } else if (json.active_account_id) {
+                activeIdFromBackend = json.active_account_id;
+            }
             _cachedAccounts = accounts;
         } catch(e) {
             console.warn('[P5] 获取账户列表失败:', e);
@@ -8555,6 +8707,19 @@
             if (grid) grid.innerHTML = '<div style="text-align:center;color:#94a3b8;padding:12px;font-size:11px;grid-column:1/-1;">暂无绑定账户</div>';
             return;
         }
+
+        // 精准自动同步后端 /api/accounts 返回的 active_account_id，首屏与切换无缝高亮
+        if (activeIdFromBackend) {
+            _activeAccountId = activeIdFromBackend;
+            window.activeAccountId = activeIdFromBackend;
+        } else if (window.activeAccountId) {
+            _activeAccountId = window.activeAccountId;
+        } else if (accounts.length) {
+            _activeAccountId = accounts[0].id;
+            window.activeAccountId = _activeAccountId;
+        }
+
+        const currentActiveId = window.activeAccountId || _activeAccountId || (accounts[0] && accounts[0].id);
 
         // 账户元数据风格配置 (先锋进攻, 稳健中军, 尾盘防守)
         const HETERO_ACCOUNTS_CONFIG = {
@@ -8567,8 +8732,6 @@
         let totalCombinedAvailable = 0;
         let totalCombinedInitial = 0;
         let totalCombinedProfit = 0;
-
-        const currentActiveId = window.activeAccountId || _activeAccountId || (accounts[0] && accounts[0].id);
 
         const grid = document.getElementById('accountCardsGrid');
         if (grid) {

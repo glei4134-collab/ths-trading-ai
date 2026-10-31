@@ -324,6 +324,19 @@ class AIBrain:
             reasons.append(f"风控一票否决: 标的{symbol}舆情得分高涨({sentiment_score})，但主力大单净流出达流通市值{net_outflow_ratio*100:.2f}% (>=0.80%)，判定为机构诱多出货，禁止买入")
             position_size = 0
 
+        # 战术矩阵前置预检: 账户 2 盘中追高 >7% 或 账户 3 早盘冲高 >3% 均属战术纪律一票否决
+        elif account_info and style_cfg.get("tactic") == "trend_mainforce_pullback" and stock_data.get("change_pct", 0) > 7.0:
+            action, signal = "hold", "HOLD"
+            status = "FILTERED_TACTIC_CHASING_HIGH"
+            reasons.append(f"战术矩阵过滤: 账户[{acc_name}]专职趋势中军缩量回调(StrongPullback)，拒绝追高(+{stock_data.get('change_pct',0):.1f}%)")
+            position_size = 0
+
+        elif account_info and style_cfg.get("tactic") == "closing_low_absorption" and not account_info.get("is_closing_session", False) and stock_data.get("change_pct", 0) > 3.0:
+            action, signal = "hold", "HOLD"
+            status = "FILTERED_TACTIC_NOT_CLOSING"
+            reasons.append(f"战术矩阵过滤: 账户[{acc_name}]专职14:50尾盘低吸套利，早盘盘中冲高(+{stock_data.get('change_pct',0):.1f}%)不予建仓，锁定尾盘博弈")
+            position_size = 0
+
         elif action == "buy" and account_info and price > 0:
             balance = float(account_info.get("balance", 0))
             total_assets = float(account_info.get("total_assets", balance))
@@ -344,18 +357,6 @@ class AIBrain:
                 action, signal = "hold", "HOLD"
                 status = "FILTERED_TACTIC_MISMATCH"
                 reasons.append(f"战术矩阵过滤: 账户[{acc_name}]专职先锋进攻(09:25竞价量比与连板突破)，标的{symbol}非突破态势")
-                position_size = 0
-
-            elif style_cfg.get("tactic") == "trend_mainforce_pullback" and stock_data.get("change_pct", 0) > 7.0:
-                action, signal = "hold", "HOLD"
-                status = "FILTERED_TACTIC_CHASING_HIGH"
-                reasons.append(f"战术矩阵过滤: 账户[{acc_name}]专职趋势中军缩量回调(StrongPullback)，拒绝追高(+{stock_data.get('change_pct',0):.1f}%)")
-                position_size = 0
-
-            elif style_cfg.get("tactic") == "closing_low_absorption" and not account_info.get("is_closing_session", False) and stock_data.get("change_pct", 0) > 3.0:
-                action, signal = "hold", "HOLD"
-                status = "FILTERED_TACTIC_NOT_CLOSING"
-                reasons.append(f"战术矩阵过滤: 账户[{acc_name}]专职14:50尾盘低吸套利，早盘盘中冲高(+{stock_data.get('change_pct',0):.1f}%)不予建仓，锁定尾盘博弈")
                 position_size = 0
 
             # 规则1: 账户风格置信度门槛一票否决
