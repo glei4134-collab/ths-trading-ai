@@ -1392,18 +1392,22 @@ def qr_generate():
 
 @app.route('/api/ths/qrcode/poll', methods=['GET'])
 def qr_poll():
-    """轮询扫码登录状态"""
+    """轮询扫码登录状态 (多用户并发会话隔离 + 唯一账号防重复绑定)"""
     try:
+        session_id = request.args.get('session_id', '')
         qrcode_id = request.args.get('qrcode_id', '')
         from ths_connector import qr_login_manager
-        result = qr_login_manager.poll_status(qrcode_id)
-        # 如果扫码成功，自动保存Cookie
+        result = qr_login_manager.poll_status(session_id=session_id, qrcode_id=qrcode_id)
+        # 如果扫码成功，自动调用 account_manager 唯一识别绑定或原地续签
         if result.get('success') and result.get('status') == 'confirmed':
             cookie = result.get('cookie', '')
             if cookie:
-                save_result = qr_login_manager.validate_and_save_cookie(cookie)
-                result['cookie_saved'] = save_result.get('success', False)
-                result['save_message'] = save_result.get('message', '')
+                from account_manager import account_manager
+                bind_result = account_manager.add_account("", cookie)
+                result['cookie_saved'] = bind_result.get('success', False)
+                result['save_message'] = bind_result.get('message', '')
+                result['account'] = bind_result.get('data')
+                result['renewed'] = bind_result.get('renewed', False)
         return jsonify(result)
     except Exception as e:
         return jsonify({"success": False, "status": "error", "message": str(e)})
@@ -1411,12 +1415,13 @@ def qr_poll():
 
 @app.route('/api/ths/qrcode/cancel', methods=['POST'])
 def qr_cancel():
-    """取消二维码"""
+    """取消并释放二维码会话 (多用户并发隔离)"""
     try:
         data = request.json or {}
+        session_id = data.get('session_id', '')
         qrcode_id = data.get('qrcode_id', '')
         from ths_connector import qr_login_manager
-        qr_login_manager.cancel_qrcode(qrcode_id)
+        qr_login_manager.cancel_qrcode(session_id=session_id, qrcode_id=qrcode_id)
         return jsonify({"success": True})
     except Exception as e:
         return jsonify({"success": True})

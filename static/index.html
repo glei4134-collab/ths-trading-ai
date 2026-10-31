@@ -2170,89 +2170,45 @@
                     </div>
                 </div>
 
-                <!-- 方案 A：云端二维码直扫绑定/续签（免F12 · 手机同花顺App直接扫码） -->
-                <div style="background: linear-gradient(135deg, rgba(35, 134, 54, 0.2) 0%, rgba(15, 23, 42, 0.9) 100%); border: 1px solid #238636; border-radius: 12px; padding: 14px 16px; margin-bottom: 14px; text-align: left;">
-                    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+                <!-- 官方唯一推荐：同花顺手机 App 扫码登录绑定/续签 (免复制 · 自动识别唯一账号 · 多人并发隔离) -->
+                <div style="background: linear-gradient(135deg, rgba(35, 134, 54, 0.2) 0%, rgba(15, 23, 42, 0.95) 100%); border: 1px solid #238636; border-radius: 12px; padding: 18px 20px; margin-bottom: 16px; text-align: left;">
+                    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px;">
                         <div style="display: flex; align-items: center; gap: 8px;">
-                            <span style="font-size: 18px;">📱</span>
-                            <span style="font-size: 14px; font-weight: 700; color: #3fb950;">方案 A：云端同花顺扫码自动提取 Cookie</span>
+                            <span style="font-size: 20px;">📱</span>
+                            <span style="font-size: 15px; font-weight: 700; color: #3fb950;">手机同花顺 App 扫码登录绑定 / 续签</span>
                         </div>
-                        <span style="font-size: 11px; background: #238636; color: white; padding: 2px 8px; border-radius: 12px; font-weight: 600;">免F12 · 自动编号入库</span>
+                        <span style="font-size: 11px; background: #238636; color: white; padding: 3px 10px; border-radius: 12px; font-weight: 600;">全自动识别 · 绝不重复建号</span>
                     </div>
-                    <div style="font-size: 12px; color: #94a3b8; line-height: 1.5; margin-bottom: 10px;">
-                        点击下方按钮直接生成同花顺官方登录二维码，用<strong>手机同花顺 App 扫码确认</strong>，云端自动截获 Cookie 并按顺序绑定/更新账号（1, 2, 3...）。
+                    <div style="font-size: 12px; color: #94a3b8; line-height: 1.6; margin-bottom: 12px;">
+                        打开<strong>手机同花顺 App「扫一扫」</strong>扫描下方二维码并在手机端确认登录。<br>
+                        系统会自动完成模拟盘席位激活，并精确识别同花顺唯一身份：<strong>已绑定的老账号将原地自动续签，新账号自动按序编号入库</strong>。
                     </div>
-                    <div style="display: flex; gap: 8px; align-items: center;">
-                        <button id="cloudQrStartBtn" onclick="startCloudQRLogin()"
-                                style="flex: 1; background: linear-gradient(135deg, #238636 0%, #2ea043 100%); color: white; border: none; padding: 10px 14px; border-radius: 8px; font-size: 13px; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px; box-shadow: 0 4px 12px rgba(35, 134, 54, 0.3);">
-                            <span>📷 生成同花顺登录二维码</span>
-                        </button>
-                        <button id="autoLoginSilentBtn" onclick="silentRefreshTHS()"
-                                style="background: #21262d; border: 1px solid #388bfd; color: #58a6ff; padding: 10px 12px; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap;"
-                                title="对已绑定账号立即执行一次全量心跳续签">
-                            ⚡ 心跳续签
-                        </button>
-                    </div>
-                    <!-- 云端二维码展示框 -->
-                    <div id="cloudQrContainer" style="display: none; margin-top: 12px; padding: 14px; border-radius: 10px; background: #0d1117; border: 1px solid #30363d; text-align: center;">
-                        <div style="background: #ffffff; padding: 10px; border-radius: 8px; display: inline-block; box-shadow: 0 4px 16px rgba(0,0,0,0.4);">
-                            <img id="cloudQrImage" src="" alt="同花顺扫码二维码" style="width: 156px; height: 156px; display: block;" />
+
+                    <!-- 云端二维码展示区（多用户并发会话隔离） -->
+                    <div id="cloudQrContainer" style="display: block; padding: 16px; border-radius: 10px; background: #0d1117; border: 1px solid #30363d; text-align: center;">
+                        <div style="background: #ffffff; padding: 10px; border-radius: 8px; display: inline-block; box-shadow: 0 4px 20px rgba(0,0,0,0.5);">
+                            <img id="cloudQrImage" src="" alt="同花顺扫码二维码" style="width: 168px; height: 168px; display: block;" />
                         </div>
-                        <div id="cloudQrStatusText" style="margin-top: 10px; font-size: 12px; color: #58a6ff; font-weight: 600;">
-                            请打开手机同花顺 App 扫描上方二维码
+                        <div id="cloudQrStatusText" style="margin-top: 12px; font-size: 13px; color: #58a6ff; font-weight: 600;">
+                            ⏳ 正在获取专属同花顺登录二维码...
+                        </div>
+                        <div style="margin-top: 10px; display: flex; justify-content: center; gap: 10px;">
+                            <button id="cloudQrStartBtn" onclick="startCloudQRLogin()"
+                                    style="background: #21262d; border: 1px solid #30363d; color: #c9d1d9; padding: 6px 14px; border-radius: 6px; font-size: 12px; cursor: pointer;">
+                                🔄 刷新二维码
+                            </button>
+                            <button id="autoLoginSilentBtn" onclick="silentRefreshTHS()"
+                                    style="background: #21262d; border: 1px solid #388bfd; color: #58a6ff; padding: 6px 14px; border-radius: 6px; font-size: 12px; cursor: pointer;">
+                                ⚡ 心跳快速续签
+                            </button>
                         </div>
                     </div>
+
                     <!-- 静默续签状态提示框 -->
                     <div id="autoLoginStatusBox" style="display: none; margin-top: 10px; padding: 10px 12px; border-radius: 8px; background: #0d1117; border: 1px solid #30363d; font-size: 12px;">
                         <div style="display: flex; align-items: center; gap: 8px;">
                             <span id="autoLoginSpinner" style="display: inline-block;">⏳</span>
                             <span id="autoLoginStatusText" style="color: #c9d1d9; flex: 1; line-height: 1.5;">正在处理...</span>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- 方案 B：浏览器书签栏“一键同步” + 控制台直传云端 -->
-                <div style="background: rgba(15, 23, 42, 0.85); border: 1px solid rgba(56, 189, 248, 0.35); border-radius: 12px; padding: 14px 16px; margin-bottom: 14px; text-align: left;">
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                        <div style="font-size: 14px; font-weight: 700; color: #38bdf8; display: flex; align-items: center; gap: 6px;">
-                            <span>⚡</span> 方案 B：浏览器一键直传云端（书签栏 / 控制台）
-                        </div>
-                        <span style="font-size: 11px; color: #38bdf8; background: rgba(56, 189, 248, 0.12); padding: 2px 8px; border-radius: 10px; border: 1px solid rgba(56, 189, 248, 0.25);">免粘贴 · 1秒直达</span>
-                    </div>
-
-                    <!-- B1: 书签栏拖拽小工具 (Bookmarklet) -->
-                    <div style="background: #090d16; border: 1px dashed rgba(56, 189, 248, 0.4); border-radius: 8px; padding: 10px 12px; margin-bottom: 10px;">
-                        <div style="font-size: 12px; color: #e2e8f0; line-height: 1.5; margin-bottom: 8px;">
-                            <strong>🌟 方式 B1（强烈推荐 · 永久免 F12）：</strong>将下方蓝色按钮<strong>按住鼠标左键拖拽到浏览器顶部书签栏</strong>。以后在 <a href="https://mncg.10jqka.com.cn/cgiwt/index/index" target="_blank" style="color:#38bdf8;text-decoration:underline;font-weight:600;">mncg.10jqka.com.cn</a> 登录后，只需<strong>点一下书签栏上的该按钮</strong>，即可全自动同步 Cookie 到云端！
-                        </div>
-                        <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
-                            <a id="thsBookmarkletBtn"
-                               href="javascript:void(0)"
-                               onclick="alert('请按住鼠标左键，将此按钮【拖拽】到浏览器顶部的书签栏（收藏夹栏）中使用！\n\n在同花顺 mncg.10jqka.com.cn 页面点击书签栏上的它，即可 1 秒自动同步 Cookie！'); return false;"
-                               style="display: inline-flex; align-items: center; gap: 6px; background: linear-gradient(135deg, #0284c7 0%, #2563eb 100%); color: #ffffff; font-weight: 700; font-size: 12px; padding: 7px 14px; border-radius: 20px; text-decoration: none; border: 1px solid #38bdf8; box-shadow: 0 2px 10px rgba(2, 132, 199, 0.4); cursor: grab;">
-                                ⚡ 一键同步同花顺Cookie
-                            </a>
-                            <span style="font-size: 11px; color: #94a3b8;">⬅ 按住拖到浏览器书签栏 (`Ctrl+Shift+B` 显示书签栏)</span>
-                        </div>
-                    </div>
-
-                    <!-- B2: 控制台单行直传命令（免切回粘贴） -->
-                    <div style="background: #090d16; border: 1px solid rgba(255,255,255,0.07); border-radius: 8px; padding: 10px 12px;">
-                        <div style="font-size: 12px; color: #e2e8f0; line-height: 1.5; margin-bottom: 6px;">
-                            <strong>🚀 方式 B2（F12 控制台直传命令 · 免切回网页粘贴）：</strong>在 <a href="https://mncg.10jqka.com.cn/cgiwt/index/index" target="_blank" style="color:#38bdf8;text-decoration:underline;">同花顺页面</a> 按 <kbd style="background:#1e293b;border:1px solid #475569;padding:1px 5px;border-radius:3px;color:#38bdf8;">F12</kbd> 切到 <strong>Console</strong>，点击下方按钮复制命令去回车，<strong>直接同步入库（无需再切回粘贴）</strong>：
-                        </div>
-                        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-                            <button onclick="copyAutoPushCommand()" id="copyAutoPushBtn"
-                                    style="flex: 1; min-width: 180px; background: rgba(16, 185, 129, 0.15); border: 1px solid rgba(52, 211, 153, 0.5); color: #34d399; font-size: 12px; font-weight: 700; padding: 8px 10px; border-radius: 6px; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px;">
-                                🚀 复制【全自动直传云端】命令
-                            </button>
-                            <button onclick="copyConsoleCommand()" id="copyBtnFeedback"
-                                    style="background: rgba(56, 189, 248, 0.12); border: 1px solid rgba(56, 189, 248, 0.35); color: #38bdf8; font-size: 12px; font-weight: 600; padding: 8px 10px; border-radius: 6px; cursor: pointer;">
-                                📋 复制 copy(document.cookie)
-                            </button>
-                        </div>
-                        <div id="copySuccessTip" style="display: none; font-size: 11px; color: #3fb950; margin-top: 6px; font-weight: 600;">
-                            ✨ 命令已复制！去同花顺 F12 控制台粘贴回车即可！
                         </div>
                     </div>
                 </div>
@@ -3848,37 +3804,14 @@
             }
         }
 
-        // ==================== Connection Functions (方案 A 云端扫码 + 方案 B 一键直传) ====================
+        // ==================== Connection Functions (手机同花顺 App 扫码登录 · 多用户隔离) ====================
 
         let _cloudQrPollTimer = null;
         let _currentCloudQrId = null;
-
-        function initBookmarkletHref() {
-            const btn = document.getElementById('thsBookmarkletBtn');
-            if (!btn) return;
-            const origin = window.location.origin;
-            const bmCode = `javascript:(function(){var c=document.cookie;if(!c||location.hostname.indexOf('10jqka.com.cn')===-1){alert('请先在同花顺模拟炒股页面 (mncg.10jqka.com.cn) 登录后，再点击书签栏上的此按钮！');return;}window.open('${origin}/api/accounts/quick-bind?cookie='+encodeURIComponent(c),'ths_quick_bind','width=420,height=280,left=320,top=220');})();`;
-            btn.setAttribute('href', bmCode);
-        }
-
-        // 监听方案B弹出窗口回传的成功消息
-        window.addEventListener('message', function(ev) {
-            if (ev && ev.data && ev.data.type === 'THS_COOKIE_BOUND') {
-                if (ev.data.success) {
-                    showToast(ev.data.message || 'Cookie 一键同步成功！', 'success');
-                    checkLoginStatus();
-                    if (typeof loadAccountList === 'function') loadAccountList();
-                    if (typeof loadExecutionAndPortfolio === 'function') loadExecutionAndPortfolio();
-                    closeConnectModal();
-                } else {
-                    showToast(ev.data.message || 'Cookie 同步失败', 'error');
-                }
-            }
-        });
+        let _currentCloudSessionId = null;
 
         async function startCloudQRLogin() {
             const btn = document.getElementById('cloudQrStartBtn');
-            const box = document.getElementById('cloudQrContainer');
             const img = document.getElementById('cloudQrImage');
             const statusEl = document.getElementById('cloudQrStatusText');
 
@@ -3887,50 +3820,53 @@
                 _cloudQrPollTimer = null;
             }
 
-            if (btn) {
-                btn.disabled = true;
-                btn.innerHTML = '<span>⏳ 正在获取同花顺官方二维码...</span>';
+            if (statusEl) {
+                statusEl.style.color = '#58a6ff';
+                statusEl.textContent = '⏳ 正在获取专属同花顺登录二维码...';
             }
+            if (btn) btn.disabled = true;
 
             try {
                 const res = await fetch('/api/ths/qrcode/generate', { method: 'POST' });
                 const data = await res.json();
                 if (!data.success || !data.qr_image_base64) {
                     showToast(data.message || '生成二维码失败', 'error');
-                    if (btn) {
-                        btn.disabled = false;
-                        btn.innerHTML = '<span>📷 重新生成同花顺二维码</span>';
+                    if (statusEl) {
+                        statusEl.style.color = '#f85149';
+                        statusEl.textContent = '❌ 生成二维码失败: ' + (data.message || '网络异常');
                     }
+                    if (btn) btn.disabled = false;
                     return;
                 }
 
+                _currentCloudSessionId = data.session_id;
                 _currentCloudQrId = data.qrcode_id;
+
                 if (img) img.src = 'data:image/png;base64,' + data.qr_image_base64;
-                if (box) box.style.display = 'block';
                 if (statusEl) {
                     statusEl.style.color = '#58a6ff';
-                    statusEl.textContent = '📱 请打开手机同花顺 App 扫描上方二维码';
+                    statusEl.textContent = '📱 请使用手机同花顺 App 扫描上方二维码';
                 }
-                if (btn) {
-                    btn.disabled = false;
-                    btn.innerHTML = '<span>🔄 刷新二维码</span>';
-                }
+                if (btn) btn.disabled = false;
 
-                _cloudQrPollTimer = setInterval(() => pollCloudQRStatus(_currentCloudQrId), 1500);
+                // 启动当前专属会话的轮询 (1.5秒一次)
+                _cloudQrPollTimer = setInterval(() => pollCloudQRStatus(_currentCloudSessionId, _currentCloudQrId), 1500);
             } catch (e) {
                 showToast('请求二维码异常: ' + e.message, 'error');
-                if (btn) {
-                    btn.disabled = false;
-                    btn.innerHTML = '<span>📷 生成同花顺登录二维码</span>';
+                if (statusEl) {
+                    statusEl.style.color = '#f85149';
+                    statusEl.textContent = '❌ 请求异常: ' + e.message;
                 }
+                if (btn) btn.disabled = false;
             }
         }
 
-        async function pollCloudQRStatus(qrcodeId) {
-            if (!qrcodeId) return;
+        async function pollCloudQRStatus(sessionId, qrcodeId) {
+            if (!sessionId && !qrcodeId) return;
             const statusEl = document.getElementById('cloudQrStatusText');
             try {
-                const res = await fetch('/api/ths/qrcode/poll?qrcode_id=' + encodeURIComponent(qrcodeId));
+                const url = `/api/ths/qrcode/poll?session_id=${encodeURIComponent(sessionId || '')}&qrcode_id=${encodeURIComponent(qrcodeId || '')}`;
+                const res = await fetch(url);
                 const data = await res.json();
                 if (!data.success && data.status === 'error') {
                     return;
@@ -3951,7 +3887,7 @@
                         clearInterval(_cloudQrPollTimer);
                         _cloudQrPollTimer = null;
                     }
-                    const msg = data.save_message || data.message || '扫码绑定成功！';
+                    const msg = data.save_message || data.message || '扫码登录成功！';
                     if (statusEl) {
                         statusEl.style.color = '#3fb950';
                         statusEl.textContent = '✅ ' + msg;
@@ -3960,7 +3896,7 @@
                     checkLoginStatus();
                     if (typeof loadAccountList === 'function') loadAccountList();
                     if (typeof loadExecutionAndPortfolio === 'function') loadExecutionAndPortfolio();
-                    setTimeout(() => closeConnectModal(), 1800);
+                    setTimeout(() => closeConnectModal(), 2000);
                 } else if (data.status === 'expired') {
                     if (_cloudQrPollTimer) {
                         clearInterval(_cloudQrPollTimer);
@@ -3968,7 +3904,7 @@
                     }
                     if (statusEl) {
                         statusEl.style.color = '#f85149';
-                        statusEl.textContent = '⚠️ 二维码已过期，请点击上方【刷新二维码】';
+                        statusEl.textContent = '⚠️ 二维码已过期，请点击下方【刷新二维码】';
                     }
                 }
             } catch (e) {
@@ -3977,9 +3913,10 @@
         }
 
         function openConnectModal() {
-            initBookmarkletHref();
             document.getElementById('connectModal').classList.add('active');
             checkLoginStatus();
+            // 打开弹窗自动获取专属二维码
+            startCloudQRLogin();
         }
 
         function closeConnectModal() {
@@ -3987,46 +3924,16 @@
                 clearInterval(_cloudQrPollTimer);
                 _cloudQrPollTimer = null;
             }
+            if (_currentCloudSessionId || _currentCloudQrId) {
+                fetch('/api/ths/qrcode/cancel', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({session_id: _currentCloudSessionId, qrcode_id: _currentCloudQrId})
+                }).catch(() => {});
+            }
             document.getElementById('connectModal').classList.remove('active');
         }
 
-        // 复制全自动直传云端命令（在同花顺控制台粘贴回车直接入库，免切回粘贴）
-        function copyAutoPushCommand() {
-            const origin = window.location.origin;
-            const code = `window.open('${origin}/api/accounts/quick-bind?cookie='+encodeURIComponent(document.cookie),'_blank','width=420,height=280')`;
-            if (navigator.clipboard && navigator.clipboard.writeText) {
-                navigator.clipboard.writeText(code).then(() => {
-                    renderAutoPushCopySuccess();
-                }).catch(() => {
-                    fallbackCopyText(code);
-                });
-            } else {
-                fallbackCopyText(code);
-            }
-        }
-
-        function renderAutoPushCopySuccess() {
-            const btn = document.getElementById('copyAutoPushBtn');
-            const tip = document.getElementById('copySuccessTip');
-            if (btn) {
-                btn.innerHTML = '✅ 全自动直传命令已复制！';
-                btn.style.background = '#15803d';
-                btn.style.color = '#ffffff';
-            }
-            if (tip) {
-                tip.style.display = 'block';
-                tip.textContent = '✨ 已复制全自动直传命令！去同花顺 F12 控制台粘贴回车，将直接自动绑定/续签入库（无需再切回粘贴）！';
-            }
-            setTimeout(() => {
-                if (btn) {
-                    btn.innerHTML = '🚀 复制【全自动直传云端】命令';
-                    btn.style.background = 'rgba(16, 185, 129, 0.15)';
-                    btn.style.color = '#34d399';
-                }
-            }, 3000);
-        }
-
-        // 一键复制控制台命令交互反馈
         function copyConsoleCommand() {
             const code = "copy(document.cookie)";
             if (navigator.clipboard && navigator.clipboard.writeText) {

@@ -13,6 +13,22 @@ from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
 
+def extract_account_identity(cookie: str, gdzh: str = "") -> dict:
+    ident = {
+        "gdzh": (gdzh or "").strip(),
+        "u_name": "",
+        "user": "",
+        "userid": ""
+    }
+    for part in (cookie or "").split(";"):
+        if "=" in part:
+            k, v = part.split("=", 1)
+            k = k.strip()
+            v = v.strip()
+            if k in ("u_name", "user", "userid"):
+                ident[k] = v
+    return ident
+
 
 class THSAccountTrader:
     """单个同花顺账户的交易管理"""
@@ -49,7 +65,7 @@ class THSAccountTrader:
         return {
             "success": True,
             "ky_fund": fund_result.get("data", 0),
-            "gdzh": account_info.get("gdzh", ""),
+            "gdzh": connector.gdzh or account_info.get("gdzh", ""),
             "account_info": account_info
         }
 
@@ -205,8 +221,9 @@ class AccountManager:
 
     def add_account(self, name: str, cookie: str) -> Dict:
         """
-        添加同花顺比赛账号
-        流程: 验证Cookie → 获取账户信息 → 检测是否重复 → 创建
+        添加或续签账户
+        流程: 验证Cookie -> 提取权威身份(gdzh / userid / u_name / user) -> 全局查重唯一性匹配 -> 原地续签 或 新增
+        保证对同一个同花顺账号确实唯一 ID，绝不创建多余的重复交易账号。
         """
         from db_store import db_store
 
@@ -231,68 +248,86 @@ class AccountManager:
         if not conn_result["success"]:
             return {"success": False, "message": conn_result["message"]}
 
-        gdzh = conn_result.get("gdzh", "")
+        gdzh = (conn_result.get("gdzh") or test_trader.connector.gdzh or "").strip()
         ky_fund = conn_result.get("ky_fund", 0)
+        new_ident = extract_account_identity(cookie, gdzh)
 
-        # 2. 检测是否已绑定过同一账户（通过gdzh或相同cookie查重 -> 自动原地更新Cookie并同步）
+        # 2. 严谨全局查重：对同一个账号确定唯一ID，不创建重复交易账号
         existing = db_store.list_accounts()
         matched_acc = None
+
         for acc in existing:
-            if acc.get("ths_gdzh") and gdzh and acc["ths_gdzh"] == gdzh:
+            old_cookie = db_store.get_account_cookie(acc["id"]) or ""
+            acc_gdzh = (acc.get("ths_gdzh") or "").strip()
+            old_ident = extract_account_identity(old_cookie, acc_gdzh)
+
+            # 匹配规则（任一命中均视为同一同花顺账号）:
+            # 1. 资金账号/股东号 gdzh 一致
+            if gdzh and acc_gdzh and gdzh == acc_gdzh:
                 matched_acc = acc
                 break
-        if not matched_acc:
-            for acc in existing:
-                old_cookie = db_store.get_account_cookie(acc["id"])
-                if old_cookie and old_cookie == cookie:
-                    matched_acc = acc
-                    break
+            # 2. 同花顺用户唯一标识 userid (纯数字且非访客) 一致
+            if new_ident["userid"] and old_ident["userid"] and not new_ident["userid"].startswith("ths_gu_") and new_ident["userid"] == old_ident["userid"]:
+                matched_acc = acc
+                break
+            # 3. 同花顺加密通行证签名 user 字段完全一致
+            if new_ident["user"] and old_ident["user"] and new_ident["user"] == old_ident["user"]:
+                matched_acc = acc
+                break
+            # 4. 同花顺用户昵称 u_name 一致
+            if new_ident["u_name"] and old_ident["u_name"] and new_ident["u_name"] == old_ident["u_name"]:
+                matched_acc = acc
+                break
+            # 5. Cookie 字符串相同
+            if old_cookie and old_cookie == cookie:
+                matched_acc = acc
+                break
 
         if matched_acc:
             acc_id = matched_acc["id"]
             acc_name = matched_acc.get("name", str(acc_id))
             db_store.update_account_cookie(acc_id, cookie)
+            # 若数据库之前缺少 ths_gdzh，本次自动补齐更新
+            if gdzh and not matched_acc.get("ths_gdzh"):
+                try:
+                    with db_store._get_conn() as conn:
+                        conn.execute("UPDATE accounts SET ths_gdzh = ? WHERE id = ?", (gdzh, acc_id))
+                        conn.commit()
+                except Exception:
+                    pass
+
             db_store.set_active_account_id(acc_id)
             from ths_connector import web_connector
             web_connector.cookie = cookie
             web_connector.connected = True
+            web_connector.gdzh = gdzh
             trader = THSAccountTrader(acc_id)
             trader.cookie = cookie
             trader.connected = True
             self.traders[acc_id] = trader
             sync_result = trader.sync_from_ths()
-            logger.info(f"自动更新已绑定账号 Cookie: {acc_name} (ID={acc_id}, gdzh={gdzh}, 资金={ky_fund})")
+            logger.info(f"安全识别并原地更新已绑定账号 Cookie: {acc_name} (ID={acc_id}, gdzh={gdzh}, 资金={ky_fund})")
             return {
                 "success": True,
                 "renewed": True,
                 "data": db_store.get_account(acc_id),
                 "sync": sync_result,
-                "message": f"账号 '{acc_name}' Cookie已自动续签同步，可用资金: {ky_fund:,.2f}",
+                "message": f"账号 '{acc_name}' 识别成功，已完成安全续签与数据同步（未创建重复账号）",
             }
 
-        # 3. 创建账户 (初始开户本金硬约束标准 200,000 元，名称按存入Cookie顺序自动为 1, 2, 3...)
+        # 3. 只有全新的账号，才按存入顺序自动命名为 1, 2, 3...
         seq_name = str(len(existing) + 1)
         acc = db_store.create_account(
             name=seq_name, balance=ky_fund, cookie=cookie,
             ths_gdzh=gdzh, ths_competition_id="", initial_balance=200000.0
         )
         name = acc.get("name", seq_name)
-
-        # 3.5 设为活跃账户
-        db_store.set_active_account_id(acc["id"])
-
-        # 同步更新全局 web_connector
-        from ths_connector import web_connector
-        web_connector.cookie = cookie
-        web_connector.connected = True
-
-        # 4. 创建trader并同步
-        trader = THSAccountTrader(acc["id"])
+        acc_id = acc["id"]
+        db_store.set_active_account_id(acc_id)
+        trader = THSAccountTrader(acc_id)
         trader.cookie = cookie
         trader.connected = True
-        self.traders[acc["id"]] = trader
-
-        # 5. 首次同步并立即记录日初基线快照
+        self.traders[acc_id] = trader
         sync_result = trader.sync_from_ths()
         try:
             if sync_result.get("success"):
@@ -308,13 +343,13 @@ class AccountManager:
         except Exception as e:
             logger.warning(f"新账户基线快照写入失败: {e}")
 
-        logger.info(f"绑定同花顺账号: {name} (ID={acc['id']}, 资金={ky_fund})")
+        logger.info(f"新增独立同花顺账户: {name} (ID={acc_id}, gdzh={gdzh}, 资金={ky_fund})")
         return {
             "success": True,
+            "renewed": False,
             "data": acc,
             "sync": sync_result,
-            "message": f"账号 '{name}' 绑定成功，可用资金: {ky_fund}",
-            "cloud_hint": "Cookie有效期30天，配置GitHub Actions云端续签可永不过期。详见 tools/setup_cookie_keeper.md"
+            "message": f"成功绑定新账号 '{name}' (初始本金锁定 ¥200,000.00)",
         }
 
     def remove_account(self, account_id: int) -> bool:
