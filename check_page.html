@@ -2256,13 +2256,7 @@
             .chart-area { min-height: 200px; }
         }
     
-        /* 全局彻底隐藏所有断开连接按钮 */
-        button[onclick*="disconnectAccount"],
-        .disconnect-btn,
-        #btnDisconnect,
-        #loginStatusBox button {
-            display: none !important;
-        }
+
 
     </style>
 
@@ -2583,9 +2577,9 @@
                     </div>
                 </div>
             </div>
-            <button onclick="openLedgerModal()" style="display:none;background:#21262d;border:1px solid #388bfd;color:#58a6ff;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">🕒 审计账本</button>
-            <button onclick="openDebugModal()" style="display:none;background:#21262d;border:1px solid #d29922;color:#e3b341;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">🧪 演练/时钟</button>
-            <button onclick="openDiagnosticModal()" style="display:none;background:#21262d;border:1px solid #2ea043;color:#3fb950;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">🩺 自动体检/调试</button>
+            
+            
+            
             <button onclick="toggleAIScheduler()" id="aiSchedToggle" style="background:#238636;border:none;color:white;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">开启</button>
             <button onclick="runAISchedulerNow()" style="background:#21262d;border:1px solid #30363d;color:#c9d1d9;border-radius:4px;padding:2px 8px;font-size:11px;cursor:pointer;">立即分析</button>
         </div>
@@ -2653,7 +2647,7 @@
         <div class="panel" id="pipelinePanel" style="display:flex;flex-direction:column;">
             <div class="panel-header" style="display:flex;justify-content:space-between;align-items:center;">
                 <span style="font-weight:600;color:#58a6ff;">🕒 8大时序自动化流水线</span>
-                <button class="debug-btn" onclick="openLedgerModal()" style="background:#21262d;border:1px solid #388bfd;color:#58a6ff;padding:3px 8px;border-radius:4px;font-size:11px;cursor:pointer;">审计账本</button>
+                
             </div>
             <div class="panel-body" style="flex:1;overflow-y:auto;padding:12px;">
                 <!-- Pipeline summary badge -->
@@ -2865,8 +2859,8 @@
 
                 <!-- 底部快捷工具 (手机端隐藏调试/演练/体检，只留账户管理) -->
                 <div style="display:flex;gap:6px;" class="bottom-tools-wrapper">
-                    <button class="debug-btn" onclick="openDebugModal()" style="flex:1;background:#161b22;border:1px solid #30363d;color:#e3b341;padding:8px;border-radius:6px;cursor:pointer;font-size:11px;">🧪 演练/时钟</button>
-                    <button class="debug-btn" onclick="openDiagnosticModal()" style="flex:1;background:#161b22;border:1px solid #238636;color:#3fb950;padding:8px;border-radius:6px;cursor:pointer;font-size:11px;">🩺 系统体检</button>
+                    
+                    
                     <button onclick="openConnectModal()" style="flex:1;background:#161b22;border:1px solid rgba(56,189,248,0.35);color:#38bdf8;padding:8px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:600;">⚙️ 账户与登录管理</button>
                 </div>
 
@@ -4525,16 +4519,7 @@
             }
         }
 
-        async function disconnectAccount() {
-            try {
-                await fetch('/api/connection/disconnect', { method: 'POST' });
-                updateAccountUI(false, null);
-                showToast('已断开连接', 'info');
-                checkLoginStatus();
-            } catch (e) {
-                showToast('断开失败: ' + e.message, 'error');
-            }
-        }
+// disconnectAccount removed from source
 
         function updateAccountUI(connected, data, state) {
             const avatar = document.getElementById('accountAvatar');
