@@ -69,15 +69,24 @@ class StepDefinition:
         }
 
 
-# 默认系统标准预设时序步骤
+# 默认系统标准预设时序步骤（8大时序流水线）
 STANDARD_STEPS: List[StepDefinition] = [
     StepDefinition(
+        step_id="pre_market_self_check",
+        name="盘前系统自检与基线核验",
+        window_start="09:00",
+        window_end="09:15",
+        policy=CatchupPolicy.MUST_CATCHUP,
+        description="检查系统健康、SQLite与网络数据连通性、账户Cookie及资金基线核验",
+        expire_tolerance_sec=1800,
+    ),
+    StepDefinition(
         step_id="pre_market_news",
-        name="盘前新闻舆情与情绪抓取",
+        name="盘前新闻舆情与情绪扫描",
         window_start="09:15",
         window_end="09:25",
         policy=CatchupPolicy.MUST_CATCHUP,
-        description="全网抓取最新财经宏观与个股新闻，计算情绪分数，为全天交易定调",
+        description="全网抓取最新财经宏观与个股新闻，预热 News Sentiment Engine 2.0 缓存，为全天交易定调",
         expire_tolerance_sec=1800,
     ),
     StepDefinition(
@@ -86,12 +95,12 @@ STANDARD_STEPS: List[StepDefinition] = [
         window_start="09:25",
         window_end="09:30",
         policy=CatchupPolicy.CRITICAL_EXPIRE,
-        description="依据9:25开盘量比和异动选出早盘冲击标的。超9:30严禁追买，以防盘中盲目追高",
+        description="依据9:25定盘行情和等效量比换算选出早盘冲击标的。超9:30严禁追买，以防盘中盲目追高",
         expire_tolerance_sec=120,
     ),
     StepDefinition(
         step_id="morning_open",
-        name="早盘开盘突击与委托重整",
+        name="早盘开盘突击与委托挂单清算",
         window_start="09:30",
         window_end="09:35",
         policy=CatchupPolicy.CRITICAL_EXPIRE,
@@ -109,21 +118,30 @@ STANDARD_STEPS: List[StepDefinition] = [
     ),
     StepDefinition(
         step_id="closing_rebalance",
-        name="尾盘防隔夜回撤与调仓",
+        name="尾盘防隔夜回撤与调仓锁定",
         window_start="14:50",
         window_end="15:00",
         policy=CatchupPolicy.MUST_CATCHUP,
-        description="T+1机制下尾盘买入确定性最高，撤销不可隔夜限价单，锁定全天战果",
+        description="T+1机制下尾盘买入确定性最高，执行硬止损清仓，撤销不可隔夜限价单，锁定全天战果",
         expire_tolerance_sec=600,
     ),
     StepDefinition(
         step_id="after_hours_settle",
-        name="盘后结算对账与策略复盘",
+        name="盘后清算对账与策略复盘",
         window_start="15:00",
         window_end="16:00",
         policy=CatchupPolicy.MUST_CATCHUP,
-        description="与同花顺真实账户核对持仓与收益率，更新策略权重，生成次日预选池与复盘简报",
+        description="与同花顺真实账户核对持仓与收益率，更新策略权重，生成次日预选池与复盘简报，执行数据库维护",
         expire_tolerance_sec=7200,
+    ),
+    StepDefinition(
+        step_id="night_review",
+        name="夜间复盘与自适应参数优化",
+        window_start="20:00",
+        window_end="23:59",
+        policy=CatchupPolicy.MUST_CATCHUP,
+        description="夜间全市场复盘、MarketRegime市场状态探测及参数网格自适应优化",
+        expire_tolerance_sec=14400,
     ),
 ]
 

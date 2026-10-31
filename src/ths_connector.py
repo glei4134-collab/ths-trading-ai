@@ -17,7 +17,7 @@ from urllib3.util.retry import Retry
 from pathlib import Path
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Callable
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +57,75 @@ COOKIE_FILE = COOKIE_DIR / "ths_cookie.json"
 
 # 同花顺模拟炒股 API 基础地址
 THS_API_BASE = "https://mncg.10jqka.com.cn"
+
+
+class THSErrorCode:
+    """同花顺网关标准错误分类代码"""
+    SUCCESS = "SUCCESS"                   # 请求成功
+    NETWORK_TIMEOUT = "NETWORK_TIMEOUT"   # 网络请求超时 (Timeout)
+    NETWORK_ERROR = "NETWORK_ERROR"       # 连接中断/网络不可达 (ConnectionError/DNS/5xx)
+    RATE_LIMIT = "RATE_LIMIT"             # 同花顺限频/频繁访问 (HTTP 429 或限流提示)
+    COOKIE_EXPIRED = "COOKIE_EXPIRED"     # Cookie失效/未登录/会话过期 (HTTP 401/403 或无权限提示)
+    ORDER_REJECTED = "ORDER_REJECTED"     # 废单拒绝/业务限制 (超出涨跌幅/非交易时间/资金不足/持仓不足等)
+    PARAM_ERROR = "PARAM_ERROR"           # 参数缺失/格式非法/证券代码无效
+    UNKNOWN_ERROR = "UNKNOWN_ERROR"       # 其他未知异常
+
+
+def classify_ths_error(status_code: int = 200, errorcode: any = 0, errormsg: str = "", exc: Optional[Exception] = None) -> str:
+    """细化分类同花顺错误码"""
+    if exc is not None:
+        if isinstance(exc, requests.exceptions.Timeout):
+            return THSErrorCode.NETWORK_TIMEOUT
+        if isinstance(exc, requests.exceptions.ConnectionError):
+            return THSErrorCode.NETWORK_ERROR
+        return THSErrorCode.UNKNOWN_ERROR
+
+    if status_code == 429:
+        return THSErrorCode.RATE_LIMIT
+    if status_code in (401, 403):
+        return THSErrorCode.COOKIE_EXPIRED
+    if status_code not in (200, 0):
+        return THSErrorCode.NETWORK_ERROR
+
+    msg = (errormsg or "").strip().lower()
+
+    # 1. Cookie / 登录态失效检测
+    cookie_expired_patterns = [
+        "未登录", "登录超时", "登录已过期", "会话已过期", "重新登录",
+        "请先登录", "未找到用户", "非法访问", "权限不足", "无权限",
+        "资金账号不存在", "登录状态失效", "session expired", "login timeout",
+        "not logged in", "请重新登录", "访问未授权", "身份已过期"
+    ]
+    if any(p in msg for p in cookie_expired_patterns):
+        return THSErrorCode.COOKIE_EXPIRED
+
+    # 2. 限频检测
+    rate_limit_patterns = [
+        "频繁", "操作过于频繁", "访问过于频繁", "限流", "每秒限制",
+        "系统繁忙", "稍后再试", "请稍后", "rate limit", "too many requests"
+    ]
+    if any(p in msg for p in rate_limit_patterns):
+        return THSErrorCode.RATE_LIMIT
+
+    # 3. 废单 / 交易规则拒绝检测
+    rejected_patterns = [
+        "废单", "拒绝", "资金不足", "可用资金不足", "持仓不足",
+        "可用余额不足", "可卖数量不足", "可卖不足", "非交易时间", "休市",
+        "未开市", "闭市", "停牌", "涨跌幅", "超出涨跌停", "超过涨跌幅",
+        "100的整数倍", "整数倍", "超出最大可买", "超出可买", "不可买入",
+        "不可卖出", "合同序号不存在", "已成交", "已撤", "申报价格超出"
+    ]
+    if any(p in msg for p in rejected_patterns):
+        return THSErrorCode.ORDER_REJECTED
+
+    # 4. 参数 / 代码格式错误
+    param_patterns = [
+        "参数错误", "缺少参数", "股东代码", "股东账号", "证券代码错误", "代码不存在"
+    ]
+    if any(p in msg for p in param_patterns):
+        return THSErrorCode.PARAM_ERROR
+
+    return THSErrorCode.UNKNOWN_ERROR
 
 
 class THSDesktopConnector:
@@ -348,6 +417,12 @@ def activate_mncg_trade_session(cookie: str, session: Optional[requests.Session]
 
     s = session or requests.Session()
     s.trust_env = False
+    if not hasattr(s, "_pool_mounted"):
+        retries = Retry(total=2, backoff_factor=0.2, status_forcelist=[500, 502, 503, 504], raise_on_status=False)
+        adapter = HTTPAdapter(pool_connections=20, pool_maxsize=50, max_retries=retries, pool_block=False)
+        s.mount("https://", adapter)
+        s.mount("http://", adapter)
+        s._pool_mounted = True
     cookie_dict = {}
     for part in cookie.split(";"):
         if "=" in part:
@@ -395,12 +470,54 @@ class THSWebConnector:
     API地址: https://mncg.10jqka.com.cn
     """
 
+    # 全局 Cookie 失效事件监听回调列表 (account_id: int, message: str)
+    _cookie_expired_callbacks: List[Callable[[int, str], None]] = []
+
+    @classmethod
+    def register_cookie_expired_callback(cls, callback: Callable[[int, str], None]):
+        """注册全局 Cookie 失效监听回调"""
+        if callback not in cls._cookie_expired_callbacks:
+            cls._cookie_expired_callbacks.append(callback)
+
+    def trigger_cookie_expired_alert(self, reason: str = ""):
+        """触发 Cookie 失效标准预警与系统通知（内置30秒防刷频）"""
+        now = time.time()
+        if hasattr(self, "_last_cookie_alert_time") and now - self._last_cookie_alert_time < 30:
+            return
+        self._last_cookie_alert_time = now
+        self.connected = False
+
+        acc_label = f"账户 #{self.account_id}" if getattr(self, "account_id", 0) else "默认账户"
+        alert_msg = f"【🚨 同花顺Cookie失效预警】{acc_label} 模拟盘登录态已失效或会话过期！详情: {reason}。请重新获取并更新 Cookie。"
+        logger.critical(alert_msg)
+
+        # 1. 触发注册的回调列表
+        for cb in self._cookie_expired_callbacks:
+            try:
+                cb(getattr(self, "account_id", 0), alert_msg)
+            except Exception as cb_err:
+                logger.error(f"执行 Cookie 失效回调异常: {cb_err}")
+
+        # 2. 联动系统级通知
+        try:
+            from notification import notification_manager
+            notification_manager.add({
+                "type": "risk",
+                "level": "critical",
+                "title": f"{acc_label} 交易Cookie失效",
+                "message": alert_msg,
+                "account_id": getattr(self, "account_id", 0)
+            })
+        except Exception:
+            pass
+
     def __init__(self, account_id: int = 0):
         self.account_id = account_id
         self.cookie = None
         self.connected = False
         self.gdzh = None  # 股东账户号
         self.ky_fund = 0  # 可用资金
+        self._last_cookie_alert_time = 0
 
         # 核心优化：底层使用 requests.Session 连接池长连接复用（Keep-Alive）
         self.session = requests.Session()
@@ -522,15 +639,17 @@ class THSWebConnector:
         }
 
     def _api_post(self, url: str, data: Dict, action_name: str = "api_post") -> Dict:
-        """发送API请求（基于Session连接池复用与性能耗时打点）"""
+        """发送API请求（基于Session连接池复用、性能耗时打点与精准错误码分类）"""
         if not self.cookie:
-            return {"success": False, "message": "未登录，请先保存Cookie"}
+            return {"success": False, "error_code": THSErrorCode.COOKIE_EXPIRED, "message": "未登录，请先保存Cookie"}
 
         start_time = time.perf_counter()
         status_code = 0
         err_msg = ""
         success = False
         result_data = None
+        error_code = THSErrorCode.SUCCESS
+        raw_errorcode = 0
 
         try:
             headers = self._get_headers()
@@ -540,25 +659,30 @@ class THSWebConnector:
 
             if status_code == 200:
                 result = response.json()
-                errorcode = result.get("errorcode", "")
-                if str(errorcode) == "0":
+                raw_errorcode = result.get("errorcode", "")
+                if str(raw_errorcode) == "0":
                     success = True
                     result_data = result
                 else:
                     errormsg = result.get("errormsg", "未知错误")
                     err_msg = f"API错误: {errormsg}"
+                    error_code = classify_ths_error(status_code=status_code, errorcode=raw_errorcode, errormsg=errormsg)
             else:
                 err_msg = f"HTTP请求失败: {status_code}"
+                error_code = classify_ths_error(status_code=status_code, errormsg=err_msg)
 
-        except requests.exceptions.Timeout:
+        except requests.exceptions.Timeout as e:
             err_msg = "请求超时"
-        except requests.exceptions.ConnectionError:
+            error_code = classify_ths_error(exc=e)
+        except requests.exceptions.ConnectionError as e:
             err_msg = "网络连接失败，请检查网络"
+            error_code = classify_ths_error(exc=e)
         except Exception as e:
             err_msg = f"请求异常: {str(e)}"
+            error_code = classify_ths_error(exc=e)
         finally:
             duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
-            logger.info(f"⚡ [HTTP-KeepAlive] {action_name} 耗时: {duration_ms}ms 状态: {status_code or 'ERR'} 成功: {success}")
+            logger.info(f"⚡ [HTTP-KeepAlive] {action_name} 耗时: {duration_ms}ms 状态: {status_code or 'ERR'} 成功: {success} 错误类型: {error_code}")
             try:
                 from db_store import db_store
                 db_store.record_api_metric(
@@ -573,9 +697,12 @@ class THSWebConnector:
             except Exception:
                 pass
 
+        if error_code == THSErrorCode.COOKIE_EXPIRED:
+            self.trigger_cookie_expired_alert(err_msg)
+
         if success:
-            return {"success": True, "data": result_data, "duration_ms": duration_ms}
-        return {"success": False, "message": err_msg, "duration_ms": duration_ms}
+            return {"success": True, "error_code": THSErrorCode.SUCCESS, "data": result_data, "duration_ms": duration_ms}
+        return {"success": False, "error_code": error_code, "raw_errorcode": raw_errorcode, "message": err_msg, "duration_ms": duration_ms}
 
     def get_fund(self) -> Dict:
         """查询可用资金"""
@@ -594,10 +721,13 @@ class THSWebConnector:
                     fund_data = (qryzijin.get("result") or {}).get("data") or {}
                     self.ky_fund = float(fund_data.get("kyje", 0))
                     self.gdzh = fund_data.get("zjzh", "")  # 保存资金账号
-                    return {"success": True, "data": self.ky_fund}
+                    return {"success": True, "error_code": THSErrorCode.SUCCESS, "data": self.ky_fund}
                 else:
                     err = qryzijin.get("errormsg", "未知错误")
-                    return {"success": False, "message": f"查询资金失败: {err}"}
+                    sub_err_code = classify_ths_error(200, qryzijin.get("errorcode"), err)
+                    if sub_err_code == THSErrorCode.COOKIE_EXPIRED:
+                        self.trigger_cookie_expired_alert(err)
+                    return {"success": False, "error_code": sub_err_code, "raw_errorcode": qryzijin.get("errorcode"), "message": f"查询资金失败: {err}"}
             except (KeyError, TypeError, ValueError) as e:
                 return {"success": False, "message": f"解析资金数据失败: {str(e)}"}
         return result
@@ -609,7 +739,7 @@ class THSWebConnector:
             "type": "cmd_wt_mairu",
             "updateClass": "qryzijin|qryChicang|"
         }
-        result = self._api_post(url, data, action_name="get_fund")
+        result = self._api_post(url, data, action_name="get_positions")
         if result["success"]:
             try:
                 api_data = result["data"]
@@ -620,9 +750,15 @@ class THSWebConnector:
                 }
                 qryzijin = (api_data.get("result") or {}).get("qryzijin") or {}
                 if qryzijin.get("errorcode") != 0:
+                    err = qryzijin.get('errormsg', '未授权或Cookie失效')
+                    sub_err_code = classify_ths_error(200, qryzijin.get("errorcode"), err)
+                    if sub_err_code == THSErrorCode.COOKIE_EXPIRED:
+                        self.trigger_cookie_expired_alert(err)
                     return {
                         "success": False,
-                        "message": f"资金查询接口异常: {qryzijin.get('errormsg', '未授权或Cookie失效')}"
+                        "error_code": sub_err_code,
+                        "raw_errorcode": qryzijin.get("errorcode"),
+                        "message": f"资金查询接口异常: {err}"
                     }
                 fd = (qryzijin.get("result") or {}).get("data") or {}
                 fund_info["available"] = float(fd.get("kyje", 0))      # 可用余额
@@ -679,7 +815,7 @@ class THSWebConnector:
             "type": "cmd_qu_chedan",
             "updateClass": "qryzijin|qryChedan|"
         }
-        result = self._api_post(url, data, action_name="get_fund")
+        result = self._api_post(url, data, action_name="get_positions")
         if result["success"]:
             try:
                 api_data = result["data"]
@@ -719,7 +855,7 @@ class THSWebConnector:
             "type": cmd,
             "stockcode": symbol
         }
-        result = self._api_post(url, data, action_name="get_fund")
+        result = self._api_post(url, data, action_name="qry_stock")
         if result["success"]:
             try:
                 info = result["data"]["result"]["data"]
@@ -858,8 +994,24 @@ class THSWebConnector:
         logger.info(f"[BUY] request data: {data}")
         result = self._api_post(url, data, action_name="buy")
         if result["success"]:
+            api_data = result.get("data") or {}
+            inner_res = api_data.get("result")
+            if isinstance(inner_res, dict):
+                inner_ec = inner_res.get("errorcode")
+                if inner_ec is not None and str(inner_ec) != "0":
+                    inner_msg = inner_res.get("errormsg", "委托被拒绝")
+                    ec = classify_ths_error(status_code=200, errorcode=inner_ec, errormsg=inner_msg)
+                    if ec == THSErrorCode.COOKIE_EXPIRED:
+                        self.trigger_cookie_expired_alert(inner_msg)
+                    return {
+                        "success": False,
+                        "error_code": ec,
+                        "raw_errorcode": inner_ec,
+                        "message": f"买入委托被同花顺拒绝: {inner_msg}"
+                    }
             return {
                 "success": True,
+                "error_code": THSErrorCode.SUCCESS,
                 "message": f"买入委托成功: {symbol} {price}元 x{amount}股",
                 "data": result["data"]
             }
@@ -929,8 +1081,24 @@ class THSWebConnector:
         logger.info(f"[SELL] request data: {data}")
         result = self._api_post(url, data, action_name="sell")
         if result["success"]:
+            api_data = result.get("data") or {}
+            inner_res = api_data.get("result")
+            if isinstance(inner_res, dict):
+                inner_ec = inner_res.get("errorcode")
+                if inner_ec is not None and str(inner_ec) != "0":
+                    inner_msg = inner_res.get("errormsg", "委托被拒绝")
+                    ec = classify_ths_error(status_code=200, errorcode=inner_ec, errormsg=inner_msg)
+                    if ec == THSErrorCode.COOKIE_EXPIRED:
+                        self.trigger_cookie_expired_alert(inner_msg)
+                    return {
+                        "success": False,
+                        "error_code": ec,
+                        "raw_errorcode": inner_ec,
+                        "message": f"卖出委托被同花顺拒绝: {inner_msg}"
+                    }
             return {
                 "success": True,
+                "error_code": THSErrorCode.SUCCESS,
                 "message": f"卖出委托成功: {symbol} {price}元 x{amount}股",
                 "data": result["data"]
             }
@@ -987,11 +1155,12 @@ class THSWebConnector:
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             }
 
-            # 方法1: 从主页提取用户名
+            # 方法1: 从主页提取用户名（复用长连接池）
             try:
-                resp = requests.get("https://mncg.10jqka.com.cn/cgiwt/index/index",
-                                    headers=headers, timeout=10,
-                                    proxies={"http": None, "https": None})
+                client = getattr(self, 'session', requests)
+                resp = client.get("https://mncg.10jqka.com.cn/cgiwt/index/index",
+                                  headers=headers, timeout=10,
+                                  proxies={"http": None, "https": None})
                 if resp.status_code == 200:
                     text = resp.text
                     # 常见格式: <span class="user-name">张三</span> 或 data-username="xxx"
@@ -1023,10 +1192,11 @@ class THSWebConnector:
             except Exception as e:
                 logger.debug(f"主页提取用户信息失败: {e}")
 
-            # 方法2: 通过API获取比赛列表
+            # 方法2: 通过API获取比赛列表（复用长连接池）
             if not result["competition_name"]:
                 try:
-                    resp = requests.post(
+                    client = getattr(self, 'session', requests)
+                    resp = client.post(
                         "https://mncg.10jqka.com.cn/cgiwt/delegate/updateclass",
                         headers={**headers, "Content-Type": "application/x-www-form-urlencoded"},
                         data="type=cmd_wt_mairu&updateClass=queryGame|",
@@ -1080,10 +1250,47 @@ class THSWebConnector:
 
         return {"success": True, "data": summary}
 
+    def send_phone_verify_code(self, phone: str) -> Dict:
+        """调用同花顺官方网关向用户手机发送验证码"""
+        from ths_auth import ths_auth_client
+        return ths_auth_client.send_phone_verify_code(phone)
+
+    def login_by_phone_code(self, phone: str, code: str) -> Dict:
+        """手机短信验证码鉴权登录并绑定席位"""
+        from ths_auth import ths_auth_client
+        res = ths_auth_client.login_by_phone_code(phone, code, account_id=self.account_id)
+        if res.get("success") and res.get("cookie"):
+            self.cookie = res["cookie"]
+            self.connected = True
+        return res
+
+    def login_by_password(self, account: str, password: str) -> Dict:
+        """账号密码登录鉴权并绑定席位"""
+        from ths_auth import ths_auth_client
+        res = ths_auth_client.login_by_password(account, password, account_id=self.account_id)
+        if res.get("success") and res.get("cookie"):
+            self.cookie = res["cookie"]
+            self.connected = True
+        return res
+
 
 # 全局连接器实例
 desktop_connector = THSDesktopConnector()
 web_connector = THSWebConnector()
+
+from ths_auth import ths_auth_client
+
+def send_phone_verify_code(phone: str) -> Dict:
+    """调用同花顺官方网关下发短信验证码"""
+    return ths_auth_client.send_phone_verify_code(phone)
+
+def login_by_phone_code(phone: str, code: str, account_id: Optional[int] = None) -> Dict:
+    """手机短信验证码鉴权登录并绑定席位"""
+    return ths_auth_client.login_by_phone_code(phone, code, account_id=account_id)
+
+def login_by_password(account: str, password: str, account_id: Optional[int] = None) -> Dict:
+    """账号密码登录鉴权并绑定席位"""
+    return ths_auth_client.login_by_password(account, password, account_id=account_id)
 
 
 # 同花顺客户端默认路径

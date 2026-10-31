@@ -1,0 +1,25 @@
+[Unit]
+Description=THS Quant Trading AI Engine (7x24 High Availability)
+After=network.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/ths-trading-ai
+Environment="PYTHONUNBUFFERED=1"
+Environment="TZ=Asia/Shanghai"
+Environment="PATH=/opt/ths-trading-ai/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin"
+ExecStart=/opt/ths-trading-ai/venv/bin/python api.py --port 5000
+Restart=always
+RestartSec=5s
+KillMode=process
+TimeoutStopSec=15s
+LimitNOFILE=65536
+
+# SQLite WAL 读写高并发防死锁与空间保障
+StandardOutput=append:/opt/ths-trading-ai/data/systemd_stdout.log
+StandardError=append:/opt/ths-trading-ai/data/systemd_stderr.log
+
+[Install]
+WantedBy=multi-user.target

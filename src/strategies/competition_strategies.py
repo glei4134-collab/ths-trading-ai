@@ -49,10 +49,14 @@ class StrongPullbackStrategy(BaseStrategy):
         change_pct = stock_data.get("change_pct", 0)
 
         # 3. 成交量缩放
+        is_call_auction = kwargs.get("is_call_auction", False) or (market_data and market_data.get("is_call_auction", False))
         volume = stock_data.get("volume", 0)
         vol_list = [h.get("volume", 0) for h in history[-5:]]
         avg_vol_5d = sum(vol_list) / len(vol_list) if vol_list else 1
-        vol_ratio = volume / avg_vol_5d if avg_vol_5d > 0 else 1
+        if is_call_auction:
+            vol_ratio = (volume * 48.0) / avg_vol_5d if avg_vol_5d > 0 else 1.0
+        else:
+            vol_ratio = volume / avg_vol_5d if avg_vol_5d > 0 else 1.0
 
         # --- 核心条件 ---
         # 强势: 近5日涨幅 > 8%
@@ -117,11 +121,12 @@ class VolumeBreakoutCompetition(BaseStrategy):
             return StrategyResult(Signal.HOLD, 0, 0, ["数据不足"],
                                   strategy_name=self.name)
 
+        is_call_auction = kwargs.get("is_call_auction", False) or (market_data and market_data.get("is_call_auction", False))
         score = 0.0
         reasons = []
-        close = stock_data.get("price", 0)
-        high = stock_data.get("high", 0)
-        low = stock_data.get("low", 0)
+        close = indicators.get("close") or stock_data.get("price", 0) or stock_data.get("open", 0)
+        high = stock_data.get("high") or close
+        low = stock_data.get("low") or close
         volume = stock_data.get("volume", 0)
 
         if not close:
@@ -157,10 +162,14 @@ class VolumeBreakoutCompetition(BaseStrategy):
             return StrategyResult(Signal.WEAK_BUY, score, 0.2, reasons,
                                   strategy_name=self.name)
 
-        # 4. 放量确认
+        # 4. 放量确认（适配集合竞价与盘中K线两种时序场景）
         vol_list = [h.get("volume", 0) for h in history[-5:]]
         avg_vol = sum(vol_list) / len(vol_list) if vol_list else 1
-        vol_ratio = volume / avg_vol if avg_vol > 0 else 1
+        if is_call_auction:
+            # 集合竞价等效量比换算：全天48个5分钟，竞价成交量占日均量>=2.5%即等效全天放量1.5倍以上
+            vol_ratio = (volume * 48.0) / avg_vol if avg_vol > 0 else 1.0
+        else:
+            vol_ratio = volume / avg_vol if avg_vol > 0 else 1.0
         min_vol_ratio = self.params["volume_ratio_min"]["default"]
 
         if vol_ratio >= min_vol_ratio:
@@ -198,13 +207,14 @@ class LimitUpContinuationStrategy(BaseStrategy):
             return StrategyResult(Signal.HOLD, 0, 0, ["数据不足"],
                                   strategy_name=self.name)
 
+        is_call_auction = kwargs.get("is_call_auction", False) or (market_data and market_data.get("is_call_auction", False))
         score = 0.0
         reasons = []
         open_price = stock_data.get("open", 0)
-        close = stock_data.get("price", 0)
+        close = indicators.get("close") or stock_data.get("price", 0) or open_price
         pre_close = history[-1].get("close", 0)
-        high = stock_data.get("high", 0)
-        low = stock_data.get("low", 0)
+        high = stock_data.get("high") or close
+        low = stock_data.get("low") or close
 
         if not all([open_price, close, pre_close]):
             return StrategyResult(Signal.HOLD, 0, 0, ["价格数据不足"],
@@ -270,20 +280,34 @@ class LimitUpContinuationStrategy(BaseStrategy):
             reasons.append(f"平开 {gap_pct:.1f}%")
 
         # 4. 非一字板（有交易空间）
-        if high > low and high != low:
-            score += 0.1
-            reasons.append("非一字板，有交易空间")
+        if is_call_auction:
+            # 集合竞价阶段 high == low == open_price 属正常现象，只要没有直接一字封涨停（高开 < 9.5%），即存在竞价撮合成交空间
+            gap_limit_up = (open_price / pre_close - 1) * 100 if pre_close > 0 else 0
+            if gap_limit_up < 9.5:
+                score += 0.1
+                reasons.append("竞价非一字涨停，具备开盘交易空间")
+            else:
+                reasons.append("竞价一字涨停，无买入机会")
+                return StrategyResult(Signal.HOLD, 0, 0, reasons, strategy_name=self.name)
         else:
-            reasons.append("一字板，无法买入")
-            return StrategyResult(Signal.HOLD, 0, 0, reasons, strategy_name=self.name)
+            if high > low and high != low:
+                score += 0.1
+                reasons.append("非一字板，有交易空间")
+            else:
+                reasons.append("一字板，无法买入")
+                return StrategyResult(Signal.HOLD, 0, 0, reasons, strategy_name=self.name)
 
         # 5. 开盘后走势
-        if close > open_price:
-            score += 0.1
-            reasons.append("高开高走，强势")
-        elif close < open_price * 0.98:
-            score -= 0.2
-            reasons.append("高开低走，封板失败风险")
+        if is_call_auction:
+            score += 0.05
+            reasons.append("集合竞价已完成高开定盘")
+        else:
+            if close > open_price:
+                score += 0.1
+                reasons.append("高开高走，强势")
+            elif close < open_price * 0.98:
+                score -= 0.2
+                reasons.append("高开低走，封板失败风险")
 
         signal = self._score_to_signal(score)
         confidence = min(0.4 + abs(score) * 0.6, 0.85)
@@ -456,14 +480,16 @@ class TrendAccelerationStrategy(BaseStrategy):
                 reasons.append(f"RSI={rsi:.1f}")
 
         # 5. 放量配合
+        is_call_auction = kwargs.get("is_call_auction", False) or (market_data and market_data.get("is_call_auction", False))
         volume = stock_data.get("volume", 0)
         if history and len(history) >= 5:
             avg_vol = sum(h.get("volume", 0) for h in history[-5:]) / 5
             if avg_vol > 0:
-                vol_ratio = volume / avg_vol
+                vol_ratio = (volume * 48.0) / avg_vol if is_call_auction else volume / avg_vol
                 if vol_ratio > 1.3:
                     score += 0.1
-                    reasons.append(f"放量(量比{vol_ratio:.1f})")
+                    lbl = "竞价等效量比" if is_call_auction else "量比"
+                    reasons.append(f"放量({lbl}{vol_ratio:.1f})")
 
         signal = self._score_to_signal(score)
         confidence = min(0.3 + abs(score) * 0.7, 0.9)

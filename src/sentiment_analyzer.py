@@ -9,6 +9,7 @@ import json
 import logging
 import re
 import time
+from collections import OrderedDict, deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -49,24 +50,28 @@ class SentimentAnalyzer:
         "震荡上行": 0.8, "底部放量": 0.9, "突破压力": 1.0, "蓄力": 0.85,
         "站上均线": 0.8, "多头排列": 0.9, "量价配合": 0.9,
 
-        # 行业正面
-        "芯片": 0.7, "半导体": 0.7, "新能源": 0.7, "光伏": 0.7,
-        "锂电池": 0.7, "人工智能": 0.8, "算力": 0.8, "国产替代": 0.9,
+        # 行业泛词正面（降权至 0.25-0.35，严防行业泛词掩盖个股实质业绩暴雷）
+        "芯片": 0.25, "半导体": 0.25, "新能源": 0.25, "光伏": 0.25,
+        "锂电池": 0.25, "人工智能": 0.3, "算力": 0.3, "国产替代": 0.35,
     }
 
     NEGATIVE_KEYWORDS = {
-        # 强负面 (1.3-1.5)
-        "暴跌": 1.5, "崩盘": 1.5, "跌停": 1.4, "新低": 1.3, "闪崩": 1.5,
-        "大幅下跌": 1.3, "破位下跌": 1.3, "连续跌停": 1.5, "立案调查": 1.5,
-        "财务造假": 1.5, "退市": 1.5, "暴雷": 1.5,
+        # 极强负面与财务/监管暴雷 (2.0-2.5，设置一票压制基石)
+        "立案调查": 2.5, "财务造假": 2.5, "暴雷": 2.5, "退市": 2.5,
+        "暴跌": 2.0, "崩盘": 2.2, "跌停": 1.8, "新低": 1.6, "闪崩": 2.0,
+        "连续跌停": 2.2, "大幅下跌": 1.5, "破位下跌": 1.5,
+        "巨额亏损": 2.5, "净亏损": 2.2, "单季净利润同比下降": 2.5, "净利润同比下降": 2.2,
+        "净利润大幅下降": 2.2, "净利减少": 2.0, "业绩大幅下滑": 2.2, "业绩腰斩": 2.5,
+        "重组失败": 2.2, "资金链断裂": 2.5, "违约": 2.0, "清仓式减持": 2.0,
+        "毛利率下降": 1.5, "首亏": 2.0, "立案": 2.2, "冻结": 1.8,
 
-        # 中等负面 (1.0-1.2)
-        "利空": 1.2, "下跌": 1.0, "破位": 1.1, "亏损": 1.1, "首亏": 1.25,
+        # 中等负面 (1.0-1.4)
+        "利空": 1.2, "下跌": 1.0, "破位": 1.1, "亏损": 1.2,
         "下滑": 1.0, "不及预期": 1.3, "业绩下滑": 1.2, "下降": 1.0, "承压": 1.0,
         "缩量": 0.9, "死叉": 1.0, "资金流出": 1.1, "净流出": 1.1, "机构卖出": 1.0,
-        "政策收紧": 1.1, "北向资金卖出": 1.0, "减持": 1.15, "清仓式减持": 1.4,
-        "质押": 0.85, "商誉减值": 1.2, "计提减值": 1.15, "评级:卖出": 1.3, "评级:减持": 1.2,
-        "信仰松动": 1.1, "违约": 1.3, "冻结": 1.2, "诉讼": 1.0,
+        "政策收紧": 1.1, "北向资金卖出": 1.0, "减持": 1.15,
+        "质押": 0.9, "商誉减值": 1.4, "计提减值": 1.3, "评级:卖出": 1.4, "评级:减持": 1.3,
+        "信仰松动": 1.1, "诉讼": 1.1,
 
         # 弱负面 (0.6-0.9)
         "熊市": 0.9, "弱势": 0.9, "低迷": 0.8, "疲软": 0.8, "分化": 0.6,
@@ -74,8 +79,15 @@ class SentimentAnalyzer:
         "缩量下跌": 0.8, "阴跌": 0.8, "套牢": 0.9,
 
         # 行业与监管负面
-        "产能过剩": 0.9, "价格战": 0.9, "处罚": 1.1, "警示函": 1.1,
-        "ST": 1.2, "*ST": 1.3, "违规": 1.1,
+        "产能过剩": 0.9, "价格战": 0.9, "处罚": 1.3, "警示函": 1.2,
+        "ST": 1.3, "*ST": 1.8, "违规": 1.2,
+    }
+
+    # 重大风险关键词（触发一票压制机制，得分强制截断 <= 35分）
+    CRITICAL_RISK_KEYWORDS = {
+        "立案调查", "财务造假", "暴雷", "退市", "巨额亏损",
+        "单季净利润同比下降", "净亏损", "资金链断裂", "业绩腰斩",
+        "重组失败", "违约", "清仓式减持", "首亏", "净利润大幅下降"
     }
 
     # 股票绑定关键词（特定股票的特殊关键词）
@@ -114,13 +126,51 @@ class SentimentAnalyzer:
         "baidu": 0.7,
     }
 
+    # 常见财经噪音与广告关键词（预编译快速过滤）
+    NOISE_KEYWORDS = [
+        "广告", "推广", "赞助", "点击查看", "了解更多", "立即注册",
+        "免费领取", "限时优惠", "点击链接", "扫描二维码", "关注公众号",
+        "免责声明", "风险提示", "过往业绩", "不代表未来", "投资需谨慎",
+        "市场有风险", "入市需谨慎", "历史业绩", "不代表未来表现",
+        "违法和违规信息举报", "举报中心", "驻中国人民银行纪检监察组",
+    ]
+
     def __init__(self):
         self._cache: Dict = {}
         self._cache_time: float = 0
-        self._stock_cache: Dict[str, Tuple[float, Dict]] = {}
+        # News Sentiment Engine 2.0: LRU 有界队列缓存，上限 300 标的，淘汰最旧
+        self._stock_cache: OrderedDict[str, Tuple[float, Dict]] = OrderedDict()
+        self._max_stock_cache: int = 300
         self._stock_cache_ttl: int = 1800  # 个股情绪缓存 30 分钟
-        self._sentiment_history: Dict[str, List[Dict]] = {}
+        # 有界时序历史（上限 200 标的，每只标的仅保留最近 20 次快照）
+        self._sentiment_history: OrderedDict[str, deque] = OrderedDict()
+        self._max_history_keys: int = 200
+        # 异步解耦非阻塞后台工作线程池，彻底杜绝网络请求阻塞交易主循环
+        self._async_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="sentiment_async")
+
+        # 正则表达式 DFA 预编译缓存 (单次扫描 O(L) 复杂度)
+        self._pos_pattern: Optional[re.Pattern] = None
+        self._neg_pattern: Optional[re.Pattern] = None
+        self._crit_pattern: Optional[re.Pattern] = None
+        self._noise_pattern: Optional[re.Pattern] = None
+
         self._load_lexicon()
+        self._compile_patterns()
+
+    def _compile_patterns(self):
+        """预编译正则表达式，将关键词循环匹配降阶为单次正则DFA扫描 (O(L))"""
+        try:
+            pos_sorted = sorted(self.POSITIVE_KEYWORDS.keys(), key=len, reverse=True)
+            neg_sorted = sorted(self.NEGATIVE_KEYWORDS.keys(), key=len, reverse=True)
+            crit_sorted = sorted(self.CRITICAL_RISK_KEYWORDS, key=len, reverse=True)
+            noise_sorted = sorted(self.NOISE_KEYWORDS, key=len, reverse=True)
+
+            self._pos_pattern = re.compile(r'(' + '|'.join(re.escape(k) for k in pos_sorted) + r')') if pos_sorted else None
+            self._neg_pattern = re.compile(r'(' + '|'.join(re.escape(k) for k in neg_sorted) + r')') if neg_sorted else None
+            self._crit_pattern = re.compile(r'(' + '|'.join(re.escape(k) for k in crit_sorted) + r')') if crit_sorted else None
+            self._noise_pattern = re.compile(r'(' + '|'.join(re.escape(k) for k in noise_sorted) + r')') if noise_sorted else None
+        except Exception as e:
+            logger.error(f"预编译情感正则模式失败: {e}")
 
     def _load_lexicon(self):
         """加载金融情感词库"""
@@ -141,6 +191,7 @@ class SentimentAnalyzer:
                     self.STOCK_KEYWORDS[code] = kws
 
                 logger.info(f"加载情感词库: {len(self.POSITIVE_KEYWORDS)} 正面, {len(self.NEGATIVE_KEYWORDS)} 负面")
+            self._compile_patterns()
         except Exception as e:
             logger.error(f"加载情感词库失败: {e}")
 
@@ -207,30 +258,85 @@ class SentimentAnalyzer:
             logger.error(f"获取市场情绪失败: {e}")
             return {"score": 50, "news_count": 0, "keywords": [], "matched_keywords": [], "description": "无法获取情绪数据"}
 
-    def get_stock_sentiment(self, symbol: str, stock_name: str = "", force_refresh: bool = False) -> Dict:
+    def get_stock_sentiment(
+        self,
+        symbol: str,
+        stock_name: str = "",
+        force_refresh: bool = False,
+        non_blocking: bool = False
+    ) -> Dict:
         """
-        获取个股专属情绪（增强版 v2.0）
-        聚合：新浪个股专属新闻 + 东方财富个股公告(含日期衰减) + 东方财富个股机构研报
-        彻底隔离全市场宏观滚动新闻，防止个股情绪同质化污染
+        获取个股专属情绪（增强版 News Sentiment Engine 2.0）
+        - 聚合：新浪个股专属新闻 + 东方财富个股公告(含日期衰减) + 东方财富个股机构研报
+        - LRU 有界队列缓存（上限 300 标的），自动驱逐最旧数据，限制内存常驻
+        - non_blocking 模式：高频/实时交易决策主循环中若无新鲜缓存，立即返回降级估值并在后台线程异步刷新，杜绝网络阻塞交易
         """
         try:
             symbol = str(symbol).strip()
             now = time.time()
 
-            # 1. 检查 30 分钟个股缓存，避免盘中循环扫描 50 只股票时重复网络请求
+            # 1. 检查 LRU 缓存，命中则移至队尾（O(1) 访问并保持热度）
             if not force_refresh and symbol in self._stock_cache:
                 cached_ts, cached_res = self._stock_cache[symbol]
                 if now - cached_ts < self._stock_cache_ttl:
+                    self._stock_cache.move_to_end(symbol)
                     return cached_res
 
-            # 若未传入股票名称，尝试从配置或持仓中补全
+            # 2. 若启用 non_blocking 模式且未命中新鲜缓存
+            if non_blocking:
+                if symbol in self._stock_cache:
+                    cached_ts, cached_res = self._stock_cache[symbol]
+                    # 提交后台异步刷新
+                    self._async_pool.submit(self._fetch_and_cache_stock, symbol, stock_name)
+                    stale_res = dict(cached_res)
+                    stale_res["stale"] = True
+                    return stale_res
+                else:
+                    # 完全冷启动：提交后台异步抓取，前台立即返回安全中性基线（耗时 < 1ms，绝不挂起下单线程）
+                    self._async_pool.submit(self._fetch_and_cache_stock, symbol, stock_name)
+                    if not stock_name:
+                        stock_name = self._resolve_stock_name(symbol)
+                    keyword = stock_name or symbol
+                    return {
+                        "score": 50,
+                        "news_count": 0,
+                        "weighted_score": 50,
+                        "rule_score": 50,
+                        "nlp_score": 50,
+                        "trend": "stable",
+                        "keywords": [],
+                        "matched_keywords": [],
+                        "news_headlines": [],
+                        "description": f"{keyword} 情绪后台异步抓取中(暂取基线50分)",
+                        "non_blocking_fallback": True,
+                    }
+
+            return self._fetch_and_cache_stock(symbol, stock_name)
+        except Exception as e:
+            logger.warning(f"获取个股情绪失败 ({symbol}): {e}")
+            return {
+                "score": 50,
+                "news_count": 0,
+                "weighted_score": 50,
+                "trend": "stable",
+                "keywords": [],
+                "matched_keywords": [],
+                "news_headlines": [],
+                "description": "无法获取情绪",
+            }
+
+    def _fetch_and_cache_stock(self, symbol: str, stock_name: str = "") -> Dict:
+        """实际执行个股专属新闻抓取并写入 LRU 缓存（受保护执行）"""
+        try:
+            symbol = str(symbol).strip()
+            now = time.time()
             if not stock_name:
                 stock_name = self._resolve_stock_name(symbol)
             keyword = stock_name or symbol
 
             all_news_with_source: List[Tuple[str, str]] = []
 
-            # 2. 并发获取 3 个真正按个股过滤的权威数据源
+            # 并发获取 3 个按个股过滤的权威数据源
             with ThreadPoolExecutor(max_workers=3) as pool:
                 f_sina = pool.submit(self._fetch_sina_stock_news, symbol, stock_name)
                 f_ann = pool.submit(self._fetch_eastmoney_ann, symbol)
@@ -244,7 +350,7 @@ class SentimentAnalyzer:
                     except Exception:
                         pass
 
-            # 若三者均为空，尝试同花顺个股页兜底（绝不回退全市场新浪滚动新闻）
+            # 若三者均为空，尝试同花顺个股页兜底
             if not all_news_with_source:
                 all_news_with_source.extend(self._fetch_ths_stockpage(symbol, stock_name))
 
@@ -261,7 +367,7 @@ class SentimentAnalyzer:
                     "news_headlines": [],
                     "description": f"{keyword} 暂无最新个股专属资讯",
                 }
-                self._stock_cache[symbol] = (now, empty_res)
+                self._set_lru_cache(symbol, (now, empty_res))
                 return empty_res
 
             result = self._analyze_sentiment_with_weight(
@@ -278,23 +384,37 @@ class SentimentAnalyzer:
                 result["concepts"] = []
                 result["industry"] = ""
 
-            bias_label = "偏多" if result["score"] > 55 else "偏空" if result["score"] < 45 else "中性"
+            if result.get("critical_risk"):
+                risk_tag = "、".join(result.get("critical_reasons", [])[:2])
+                bias_label = f"🚨重大风险一票压制[{risk_tag}]"
+            else:
+                bias_label = "偏多" if result["score"] > 55 else "偏空" if result["score"] < 45 else "中性"
             result["description"] = f"{keyword} {result['news_count']}条专属资讯，情绪{bias_label}({result['score']}分)"
 
-            self._stock_cache[symbol] = (now, result)
+            self._set_lru_cache(symbol, (now, result))
             return result
         except Exception as e:
-            logger.warning(f"获取个股情绪失败 ({symbol}): {e}")
-            return {
-                "score": 50,
-                "news_count": 0,
-                "weighted_score": 50,
-                "trend": "stable",
-                "keywords": [],
-                "matched_keywords": [],
-                "news_headlines": [],
-                "description": "无法获取情绪",
-            }
+            logger.warning(f"抓取并缓存个股情绪失败 ({symbol}): {e}")
+            return {"score": 50, "news_count": 0, "description": "抓取失败"}
+
+    def _set_lru_cache(self, symbol: str, entry: Tuple[float, Dict]):
+        """线程安全地向 LRU 缓存写入条目并淘汰最旧条目"""
+        if symbol in self._stock_cache:
+            self._stock_cache.move_to_end(symbol)
+        self._stock_cache[symbol] = entry
+        if len(self._stock_cache) > self._max_stock_cache:
+            self._stock_cache.popitem(last=False)
+
+    def get_stock_sentiment_async(self, symbol: str, stock_name: str = ""):
+        """异步非阻塞提交个股情绪抓取任务，返回 Future 对象"""
+        return self._async_pool.submit(self._fetch_and_cache_stock, symbol, stock_name)
+
+    def prefetch_stocks_sentiment(self, stocks: List[Tuple[str, str]]):
+        """批量预热股票池情绪缓存（如盘前 09:15 扫描 40 只候选股）"""
+        futures = []
+        for sym, name in stocks:
+            futures.append(self._async_pool.submit(self._fetch_and_cache_stock, sym, name))
+        return futures
 
     def _resolve_stock_name(self, symbol: str) -> str:
         """尝试从本地词库或缓存解析股票名称"""
@@ -402,14 +522,16 @@ class SentimentAnalyzer:
             title_has_pos = False
             title_has_neg = False
 
-            # 通用正面关键词（带前序否定词反转检测，如"未增长"、"不理想"）
-            for kw, kw_weight in self.POSITIVE_KEYWORDS.items():
-                idx = title.find(kw)
-                if idx != -1:
-                    if idx > 0 and title[idx - 1] in negation_prefixes:
+            # 通用正面关键词（单次正则 finditer 扫描，带前序否定词反转检测）
+            if self._pos_pattern:
+                for match in self._pos_pattern.finditer(title):
+                    kw = match.group(0)
+                    kw_weight = self.POSITIVE_KEYWORDS.get(kw, 1.0)
+                    idx = match.start()
+                    if (idx > 0 and title[idx - 1] in negation_prefixes) or (idx > 1 and title[idx - 2:idx] in ("没有", "未能", "并非")):
                         total_weighted_negative += kw_weight * weight
                         title_has_neg = True
-                        neg_tag = f"{title[idx - 1]}{kw}"
+                        neg_tag = f"{title[idx - 1]}{kw}" if idx > 0 else f"未{kw}"
                         if neg_tag not in negative_keywords:
                             negative_keywords.append(neg_tag)
                     else:
@@ -418,12 +540,13 @@ class SentimentAnalyzer:
                         if kw not in positive_keywords:
                             positive_keywords.append(kw)
 
-            # 通用负面关键词
-            for kw, kw_weight in self.NEGATIVE_KEYWORDS.items():
-                idx = title.find(kw)
-                if idx != -1:
-                    # 若"不"在负面词前（如"不错"、"不跌"），但注意"不及预期"本身就是负面词
-                    if not kw.startswith("不") and idx > 0 and title[idx - 1] in ("不", "未", "无"):
+            # 通用负面关键词（单次正则 finditer 扫描）
+            if self._neg_pattern:
+                for match in self._neg_pattern.finditer(title):
+                    kw = match.group(0)
+                    kw_weight = self.NEGATIVE_KEYWORDS.get(kw, 1.0)
+                    idx = match.start()
+                    if not kw.startswith("不") and ((idx > 0 and title[idx - 1] in ("不", "未", "无")) or (idx > 1 and title[idx - 2:idx] in ("没有", "未能", "并非"))):
                         total_weighted_positive += kw_weight * 0.6 * weight
                         title_has_pos = True
                     else:
@@ -452,7 +575,24 @@ class SentimentAnalyzer:
             if title_has_neg:
                 simple_negative += 1
 
-        # 3. 计算加权规则得分 (weighted_score) 与简单计数得分 (simple_score)
+        # 3. 检查是否触发重大风险一票压制（单次正则扫描）
+        has_critical_risk = False
+        critical_risk_hits: List[str] = []
+        if self._crit_pattern:
+            for title, _ in news_with_source:
+                for match in self._crit_pattern.finditer(title):
+                    ckw = match.group(0)
+                    has_critical_risk = True
+                    if ckw not in critical_risk_hits:
+                        critical_risk_hits.append(ckw)
+        else:
+            for kw in self.CRITICAL_RISK_KEYWORDS:
+                if any(kw in neg_kw for neg_kw in negative_keywords):
+                    has_critical_risk = True
+                    if kw not in critical_risk_hits:
+                        critical_risk_hits.append(kw)
+
+        # 4. 计算加权规则得分 (weighted_score) 与简单计数得分 (simple_score)
         total_weight = total_weighted_positive + total_weighted_negative
         if total_weight > 0:
             raw_ratio = (total_weighted_positive / total_weight) * 100.0
@@ -462,16 +602,27 @@ class SentimentAnalyzer:
         else:
             weighted_score = 50
 
+        # 重大风险一票压制
+        if has_critical_risk:
+            weighted_score = min(weighted_score, 35)
+
         simple_total = simple_positive + simple_negative
         simple_score = int(round((simple_positive / simple_total) * 100)) if simple_total > 0 else 50
+        if has_critical_risk:
+            simple_score = min(simple_score, 35)
 
-        # 4. 中文金融否定词与程度副词引擎 (cn_sentiment) + NLP 融合
+        # 5. 中文金融否定词与程度副词引擎 (cn_sentiment) + NLP 融合
         cn_score = 50
         nlp_score = 50
         sample_text = "；".join([t for t, _ in news_with_source[:15]])
         try:
             from cn_sentiment import cn_sentiment
             cn_res = cn_sentiment.analyze(sample_text)
+            if cn_res.get("critical_risk"):
+                has_critical_risk = True
+                for cr in cn_res.get("critical_reasons", []):
+                    if cr not in critical_risk_hits:
+                        critical_risk_hits.append(cr)
             if cn_res.get("positive_count", 0) + cn_res.get("negative_count", 0) > 0:
                 cn_score = cn_res.get("score", 50)
             else:
@@ -486,8 +637,10 @@ class SentimentAnalyzer:
         except Exception:
             nlp_score = weighted_score
 
-        # 5. 最终综合评分：加权词库(含时间衰减+来源权重) 60% + 中文语法情感 25% + NLP 15%
+        # 6. 最终综合评分：加权词库(含时间衰减+来源权重) 60% + 中文语法情感 25% + NLP 15%
         final_score = int(round(weighted_score * 0.60 + cn_score * 0.25 + nlp_score * 0.15))
+        if has_critical_risk:
+            final_score = min(final_score, 35)
         final_score = max(5, min(95, final_score))
 
         # 优先展示通用强情感词，再展示专属词
@@ -511,6 +664,8 @@ class SentimentAnalyzer:
             "keywords": all_keywords,
             "matched_keywords": [{"word": w} for w in all_keywords],
             "news_headlines": [{"title": t, "source": s} for t, s in news_with_source[:10]],
+            "critical_risk": has_critical_risk,
+            "critical_reasons": critical_risk_hits,
         }
 
     def _get_time_weight(self, title: str) -> float:
@@ -543,17 +698,9 @@ class SentimentAnalyzer:
         return 1.0
 
     def _filter_noise(self, news_with_source: List[Tuple[str, str]]) -> List[Tuple[str, str]]:
-        """噪音过滤：移除乱码、英文无意义符号、导航短链、广告及重复新闻"""
+        """噪音过滤：单次正则快速过滤噪音广告与重复新闻"""
         filtered = []
         seen_titles = set()
-
-        noise_keywords = [
-            "广告", "推广", "赞助", "点击查看", "了解更多", "立即注册",
-            "免费领取", "限时优惠", "点击链接", "扫描二维码", "关注公众号",
-            "免责声明", "风险提示", "过往业绩", "不代表未来", "投资需谨慎",
-            "市场有风险", "入市需谨慎", "历史业绩", "不代表未来表现",
-            "违法和违规信息举报", "举报中心", "驻中国人民银行纪检监察组",
-        ]
 
         for raw_title, source in news_with_source:
             if not raw_title:
@@ -576,7 +723,8 @@ class SentimentAnalyzer:
             if len(chinese_chars) < 4:
                 continue
 
-            if any(kw in title for kw in noise_keywords):
+            # 单次正则快速匹配过滤噪音
+            if self._noise_pattern and self._noise_pattern.search(title):
                 continue
 
             # 归一化去重键（忽略日期前缀和标点差异）
@@ -607,17 +755,22 @@ class SentimentAnalyzer:
             return re.split(r'[，。！？、；：\s]+', text)
 
     def _calculate_trend(self, key: str, current_score: float) -> str:
-        """计算情绪趋势"""
+        """计算情绪趋势（LRU 有界队列结构）"""
         now = datetime.now(ZoneInfo('Asia/Shanghai'))
-        history = self._sentiment_history.get(key, [])
+        if key not in self._sentiment_history:
+            if len(self._sentiment_history) >= self._max_history_keys:
+                self._sentiment_history.popitem(last=False)
+            self._sentiment_history[key] = deque(maxlen=20)
+        history = self._sentiment_history[key]
         history.append({"score": current_score, "time": now})
-        self._sentiment_history[key] = history[-10:]
+        self._sentiment_history.move_to_end(key)
 
         if len(history) < 3:
             return "stable"
 
-        recent = [h["score"] for h in history[-3:]]
-        earlier = [h["score"] for h in history[:-3]] if len(history) > 3 else recent
+        hist_list = list(history)
+        recent = [h["score"] for h in hist_list[-3:]]
+        earlier = [h["score"] for h in hist_list[:-3]] if len(hist_list) > 3 else recent
         avg_recent = sum(recent) / len(recent)
         avg_earlier = sum(earlier) / len(earlier)
         diff = avg_recent - avg_earlier

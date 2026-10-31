@@ -58,10 +58,12 @@ class NLPSentimentAnalyzer:
             return {"score": 50, "confidence": 0, "label": "neutral", "details": "empty"}
 
         # 1. 中文金融否定词与程度副词情感引擎（毫秒级）
+        critical_risk = False
         try:
             from cn_sentiment import cn_sentiment
             cn_res = cn_sentiment.analyze(text)
             cn_score = cn_res.get("score", 50)
+            critical_risk = cn_res.get("critical_risk", False)
         except Exception:
             cn_score = 50
 
@@ -74,11 +76,16 @@ class NLPSentimentAnalyzer:
             snow_scores = [SnowNLP(p).sentiments * 100 for p in parts[:15]]
             snow_avg = sum(snow_scores) / len(snow_scores) if snow_scores else 50.0
             score = int(snow_avg * 0.5 + cn_score * 0.5)
+            if critical_risk:
+                score = min(score, 35)
             label = "positive" if score > 58 else "negative" if score < 42 else "neutral"
-            return {"score": score, "confidence": 0.7, "label": label, "details": "snownlp+cn_sentiment"}
+            return {"score": score, "confidence": 0.7, "label": label, "details": "snownlp+cn_sentiment", "critical_risk": critical_risk}
         except Exception:
-            label = "positive" if cn_score > 58 else "negative" if cn_score < 42 else "neutral"
-            return {"score": int(cn_score), "confidence": 0.65, "label": label, "details": "cn_sentiment"}
+            score = int(cn_score)
+            if critical_risk:
+                score = min(score, 35)
+            label = "positive" if score > 58 else "negative" if score < 42 else "neutral"
+            return {"score": score, "confidence": 0.65, "label": label, "details": "cn_sentiment", "critical_risk": critical_risk}
 
     def _split_text(self, text: str, max_length: int = 500) -> List[str]:
         """分割长文本"""

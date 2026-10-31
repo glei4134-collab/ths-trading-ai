@@ -1,11 +1,13 @@
 """
-团队赛多策略集成表决器 (Team Strategy Ensemble Voter)
+团队赛多策略集成表决器 (Team Strategy Ensemble Voter - 优化增强版 v2.1)
 专为 2026 年第十三届全国证券投资模拟实训大赛（团队赛段）设计。
 
 核心机制:
 1. 组合集成: 聚合强势回调(StrongPullback)、放量突破(VolumeBreakout)、趋势加速(TrendAcceleration)、缩量企稳(ShrinkStabilize)等多个子策略。
-2. 市场状态自适应: 联动 MarketRegime，在牛市加大突破权重，在震荡市加大回调与企稳权重。
-3. 团队投票决策: 必须至少有 2 个子策略同时发出 BUY 信号，且综合置信度 >= 0.60 才会触发开仓。
+2. 市场状态与时序自适应: 
+   - 集合竞价时段 (09:25): 重点加权放量突破(35%)、趋势加速(30%)与连板追踪(20%)，启用竞价专用等效量比；
+   - 盘中时段: 联动 MarketRegime，牛市加大突破权重，弱势/震荡加大回调与企稳反转权重。
+3. 团队投票决策: 必须至少有 2 个子策略同时发出 BUY 信号且综合置信度达标，或触发极高确信度单兵突破，才会开仓。
 4. 团队风控内置约束: 单票建议仓位控制在 25%~30%（严格低于 35% 红线），止损线设为 -4.5%。
 """
 
@@ -45,15 +47,25 @@ class TeamEnsembleStrategy(BaseStrategy):
             TrendAccelerationStrategy(),
         ]
 
-    def _get_regime_weights(self, market_data: Optional[Dict]) -> Dict[str, float]:
-        """根据大盘市场状态返回子策略权重"""
-        # 默认中性/震荡权重
+    def _get_regime_weights(self, market_data: Optional[Dict], is_auction: bool = False) -> Dict[str, float]:
+        """根据大盘市场状态及是否集合竞价返回子策略精确权重"""
+        if is_auction:
+            # 集合竞价时段：重点聚焦高开突破与趋势惯性延续
+            return {
+                "competition_breakout": 0.35,
+                "trend_acceleration": 0.30,
+                "limit_up_continue": 0.20,
+                "strong_pullback": 0.10,
+                "volume_shrink_reversal": 0.05,
+            }
+
+        # 默认中性/震荡权重（修复策略类实际名称映射）
         weights = {
-            "strong_pullback": 0.30,
-            "comp_volume_breakout": 0.25,
-            "limit_up_continuation": 0.15,
-            "comp_volume_shrink": 0.15,
-            "trend_acceleration": 0.15,
+            "strong_pullback": 0.25,
+            "competition_breakout": 0.25,
+            "limit_up_continue": 0.15,
+            "volume_shrink_reversal": 0.15,
+            "trend_acceleration": 0.20,
         }
         if not market_data:
             return weights
@@ -61,18 +73,18 @@ class TeamEnsembleStrategy(BaseStrategy):
         regime = market_data.get("regime", "neutral")  # bull / bear / volatile / neutral
         if regime == "bull":
             # 牛市/强趋势：加大突破与连板、趋势加速权重
-            weights["comp_volume_breakout"] = 0.35
+            weights["competition_breakout"] = 0.35
             weights["trend_acceleration"] = 0.25
-            weights["limit_up_continuation"] = 0.20
+            weights["limit_up_continue"] = 0.20
             weights["strong_pullback"] = 0.10
-            weights["comp_volume_shrink"] = 0.10
+            weights["volume_shrink_reversal"] = 0.10
         elif regime == "bear":
             # 弱势/防守：加大缩量企稳与强势回调权重，压低追高
-            weights["comp_volume_shrink"] = 0.40
+            weights["volume_shrink_reversal"] = 0.35
             weights["strong_pullback"] = 0.35
-            weights["comp_volume_breakout"] = 0.10
+            weights["competition_breakout"] = 0.10
             weights["trend_acceleration"] = 0.10
-            weights["limit_up_continuation"] = 0.05
+            weights["limit_up_continue"] = 0.10
         return weights
 
     def analyze(
@@ -89,14 +101,18 @@ class TeamEnsembleStrategy(BaseStrategy):
                 strategy_name=self.name
             )
 
-        close = indicators.get("close", stock_data.get("price", 0))
+        close = indicators.get("close") or stock_data.get("price", 0) or stock_data.get("open", 0)
         if not close or close <= 0:
             return StrategyResult(
                 Signal.HOLD, 0, 0, ["价格指标缺失"],
                 strategy_name=self.name
             )
 
-        weights = self._get_regime_weights(market_data)
+        is_auction = kwargs.get("is_call_auction", False)
+        if market_data and market_data.get("is_call_auction"):
+            is_auction = True
+
+        weights = self._get_regime_weights(market_data, is_auction=is_auction)
 
         votes_buy = 0
         total_weighted_score = 0.0
@@ -104,16 +120,19 @@ class TeamEnsembleStrategy(BaseStrategy):
         total_weight = sum(weights.values())
         sub_reasons = []
 
-        # 遍历子策略执行打分
+        # 遍历子策略执行打分并传递竞价上下文
+        sub_kwargs = dict(kwargs)
+        sub_kwargs.pop("is_call_auction", None)
         for strat in self.sub_strategies:
-            w = weights.get(strat.name, 0.25)
+            w = weights.get(strat.name, 0.20)
             try:
                 sub_res = strat.analyze(
                     stock_data=stock_data,
                     indicators=indicators,
                     market_data=market_data,
                     history=history,
-                    **kwargs
+                    is_call_auction=is_auction,
+                    **sub_kwargs
                 )
                 if sub_res.signal in (Signal.BUY, Signal.STRONG_BUY):
                     votes_buy += 1
@@ -133,16 +152,30 @@ class TeamEnsembleStrategy(BaseStrategy):
         min_conf = self.params["min_confidence"]["default"]
         stop_pct = self.params["stop_loss_pct"]["default"]
 
+        mode_desc = "集合竞价定盘模式" if is_auction else "盘中K线常规模式"
         reasons = [
-            f"团队策略投票: {votes_buy}/{len(self.sub_strategies)} 赞成 (阈值>={min_votes})",
-            f"综合评分: {final_score:+.2f}, 置信度: {final_conf:.2f} (阈值>={min_conf})",
+            f"团队策略投票({mode_desc}): {votes_buy}/{len(self.sub_strategies)} 赞成",
+            f"综合评分: {final_score:+.2f}, 置信度: {final_conf:.2f}",
             "子策略明细: " + " ".join(sub_reasons)
         ]
 
-        # 判断表决结果
-        if votes_buy >= min_votes and final_conf >= min_conf and final_score > 0.25:
-            sig = Signal.STRONG_BUY if (votes_buy >= 3 and final_conf >= 0.75) else Signal.BUY
-            reasons.append("✅ 达到团队多策略集成买入标准，建议仓位 25%~28% (严防单票35%红线)")
+        # 判定表决通过门槛
+        vote_passed = False
+        if is_auction:
+            # 集合竞价时段：若 >=2 票赞成且置信度>=0.55且评分>0.20；或 >=1 票且置信度>=0.75与评分>0.38 (高确定性突破加速)
+            if votes_buy >= 2 and final_conf >= 0.55 and final_score > 0.20:
+                vote_passed = True
+                reasons.append("⚡ 集合竞价多策略集成赞成表决通过")
+            elif votes_buy >= 1 and final_conf >= 0.72 and final_score >= 0.35:
+                vote_passed = True
+                reasons.append("⚡ 集合竞价高确定性放量突破/趋势加速表决通过")
+        else:
+            if votes_buy >= min_votes and final_conf >= min_conf and final_score > 0.25:
+                vote_passed = True
+
+        if vote_passed:
+            sig = Signal.STRONG_BUY if (votes_buy >= 3 or (is_auction and final_conf >= 0.70)) else Signal.BUY
+            reasons.append("✅ 达到团队集成买入标准，建议仓位 25%~28% (严防单票35%红线)")
             return StrategyResult(
                 signal=sig,
                 score=final_score,
@@ -153,7 +186,8 @@ class TeamEnsembleStrategy(BaseStrategy):
                 strategy_name=self.name,
                 extra={
                     "votes_buy": votes_buy,
-                    "target_position_pct": self.params["target_position_pct"]["default"]
+                    "target_position_pct": self.params["target_position_pct"]["default"],
+                    "is_call_auction": is_auction
                 }
             )
         else:
@@ -165,5 +199,5 @@ class TeamEnsembleStrategy(BaseStrategy):
                 target_price=None,
                 stop_loss=round(close * (1 - stop_pct / 100), 2),
                 strategy_name=self.name,
-                extra={"votes_buy": votes_buy}
+                extra={"votes_buy": votes_buy, "is_call_auction": is_auction}
             )

@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  quant-trading-ai:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ths-quant-ai
+    restart: always
+    environment:
+      - TZ=Asia/Shanghai
+      - PYTHONUNBUFFERED=1
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./data:/app/data
+      - ./config:/app/config
+    healthcheck:
+      test: ["CMD", "python", "tools/auto_debugger.py", "--check-all"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 20s

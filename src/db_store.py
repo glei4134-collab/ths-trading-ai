@@ -12,6 +12,10 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from datetime import timedelta
 from typing import Dict, List, Optional
+import time
+import functools
+import random
+from contextlib import contextmanager
 from ths_connector import encrypt_cookie, decrypt_cookie
 
 logger = logging.getLogger(__name__)
@@ -21,21 +25,56 @@ from paths import BASE_DIR, DATA_DIR
 DB_PATH = DATA_DIR / "trading.db"
 
 
+def retry_on_db_locked(max_retries: int = 5, base_delay: float = 0.05, max_delay: float = 0.5):
+    """当遇到 SQLite 数据库锁争用 (database is locked / busy) 时自动指数避让重试"""
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            last_err = None
+            for attempt in range(1, max_retries + 1):
+                try:
+                    return func(*args, **kwargs)
+                except (sqlite3.OperationalError, sqlite3.DatabaseError) as e:
+                    err_msg = str(e).lower()
+                    if "locked" in err_msg or "busy" in err_msg:
+                        last_err = e
+                        if attempt < max_retries:
+                            sleep_time = min(max_delay, base_delay * (2 ** (attempt - 1)) + random.uniform(0.01, 0.05))
+                            logger.warning(f"⚠️ SQLite 并发锁争用检测 (第 {attempt}/{max_retries} 次)，等待 {sleep_time:.3f}s 后重试: {e}")
+                            time.sleep(sleep_time)
+                            continue
+                    raise e
+            if last_err:
+                raise last_err
+        return wrapper
+    return decorator
+
+
 class DBStore:
     """SQLite 数据存储（多账户，线程安全）"""
 
     def __init__(self):
         DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-        self._lock = threading.Lock()
-        self.conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
+        self._lock = threading.RLock()
+        self.conn = sqlite3.connect(str(DB_PATH), timeout=15.0, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
-        # 启用 WAL 模式，允许并发读
+        # 启用 WAL 模式与并发防锁优化
         self.conn.execute("PRAGMA journal_mode=WAL")
+        self.conn.execute("PRAGMA busy_timeout=5000")
+        self.conn.execute("PRAGMA synchronous=NORMAL")
+        self.conn.execute("PRAGMA cache_size=-8000")
+        self.conn.execute("PRAGMA wal_autocheckpoint=1000")
         self._init_tables()
         self._migrate_json_if_needed()
         self._ensure_account_id_columns()
         self._init_sentiment_tables()
         self.resequence_account_names()
+
+    @contextmanager
+    def _get_conn(self):
+        """提供上下文管理器获取底层连接，兼容外部 with db_store._get_conn() as conn 并发防锁"""
+        with self._lock:
+            yield self.conn
 
     def _init_tables(self):
         """创建表结构"""
@@ -276,6 +315,7 @@ class DBStore:
 
     # ========== 情绪数据 CRUD ==========
 
+    @retry_on_db_locked()
     def save_sentiment_snapshot(self, symbol: str, stock_name: str, action: str,
                                 price: float, amount: int, sentiment: int,
                                 keywords: list = None, news_titles: list = None,
@@ -292,6 +332,7 @@ class DBStore:
         )
         self.conn.commit()
 
+    @retry_on_db_locked()
     def save_sentiment_daily(self, symbol: str, sentiment: int, price: float,
                              change_pct: float = 0, keywords: list = None,
                              regime: str = "", account_id: int = 1):
@@ -316,6 +357,7 @@ class DBStore:
             )
         self.conn.commit()
 
+    @retry_on_db_locked()
     def save_sentiment_regret(self, symbol: str, stock_name: str, signal: str,
                               confidence: float, sentiment: int, price: float,
                               regime: str = ""):
@@ -470,6 +512,7 @@ class DBStore:
                 c.execute("UPDATE accounts SET name = ? WHERE id = ?", (str(idx), r["id"]))
             self.conn.commit()
 
+    @retry_on_db_locked()
     def create_account(self, name: str, balance: float = 200000.0,
                        cookie: str = '', ths_gdzh: str = '',
                        ths_competition_id: str = '',
@@ -544,6 +587,7 @@ class DBStore:
         row = c.fetchone()
         return decrypt_cookie(row["cookie"]) if row and row["cookie"] else ""
 
+    @retry_on_db_locked()
     def update_account_cookie(self, account_id: int, cookie: str):
         """更新指定账户的Cookie（自动加密存储）"""
         with self._lock:
@@ -554,6 +598,7 @@ class DBStore:
             self.conn.commit()
             logger.info(f"账户 {account_id} Cookie已更新")
 
+    @retry_on_db_locked()
     def update_account_sync(self, account_id: int, balance: float, ky_fund: float,
                             market_value: float, total_assets: float):
         """更新账户同步数据（从THS拉取后）"""
@@ -566,6 +611,7 @@ class DBStore:
             """, (balance, ky_fund, market_value, total_assets, now, now, account_id))
             self.conn.commit()
 
+    @retry_on_db_locked()
     def update_balance(self, balance: float, account_id: int = 1):
         """更新余额"""
         with self._lock:
@@ -575,6 +621,7 @@ class DBStore:
                       (balance, now, account_id))
             self.conn.commit()
 
+    @retry_on_db_locked()
     def delete_account(self, account_id: int) -> bool:
         """删除账户并重排剩余账号序号"""
         with self._lock:
@@ -588,6 +635,7 @@ class DBStore:
         self.resequence_account_names()
         return True
 
+    @retry_on_db_locked()
     def rename_account(self, account_id: int, name: str):
         """重命名账户"""
         with self._lock:
@@ -597,6 +645,7 @@ class DBStore:
 
     # ==================== 交易记录（多账户） ====================
 
+    @retry_on_db_locked()
     def add_trade(self, trade: Dict, account_id: int = 1):
         """写入交易记录"""
         with self._lock:
@@ -637,6 +686,7 @@ class DBStore:
 
     # ==================== 持仓（多账户） ====================
 
+    @retry_on_db_locked()
     def save_positions(self, positions: Dict, account_id: int = 1):
         """保存所有持仓"""
         with self._lock:
@@ -666,6 +716,7 @@ class DBStore:
 
     # ==================== 策略信号（多账户） ====================
 
+    @retry_on_db_locked()
     def add_signal(self, signal: Dict, account_id: int = 1):
         """写入策略信号"""
         with self._lock:
@@ -711,6 +762,7 @@ class DBStore:
 
     # ==================== 账户快照 ====================
 
+    @retry_on_db_locked()
     def save_snapshot(self, balance: float, market_value: float,
                       total_assets: float, total_profit: float, position_count: int,
                       account_id: int = 1):
@@ -843,6 +895,7 @@ class DBStore:
         }
 
 
+    @retry_on_db_locked()
     def record_api_metric(self, action: str, url: str, duration_ms: float,
                           account_id: int = 0, status_code: int = 200,
                           success: bool = True, error_message: str = ""):
@@ -886,6 +939,22 @@ class DBStore:
                 logger.error(f"获取API性能分析失败: {e}")
                 return {"summary": [], "recent": []}
 
+    @retry_on_db_locked()
+    def clean_old_performance_logs(self, keep_days: int = 7) -> int:
+        """清理指定天数之前的 API 性能追踪日志，避免日志表无限膨胀"""
+        with self._lock:
+            try:
+                cutoff = (datetime.now(ZoneInfo('Asia/Shanghai')) - timedelta(days=keep_days)).strftime("%Y-%m-%d %H:%M:%S")
+                c = self.conn.cursor()
+                c.execute("DELETE FROM api_performance_logs WHERE timestamp < ?", (cutoff,))
+                deleted_rows = c.rowcount
+                self.conn.commit()
+                logger.info(f"✅ 清理 {keep_days} 天前的 API 性能日志完成，删除 {deleted_rows} 条记录 (截止时间: {cutoff})")
+                return deleted_rows
+            except Exception as e:
+                logger.error(f"清理 API 性能日志失败: {e}")
+                return 0
+
     def checkpoint_wal(self, mode: str = "TRUNCATE") -> Dict:
         """执行 WAL 检查点，将 WAL 事务日志压缩截断合并至主库"""
         with self._lock:
@@ -908,6 +977,26 @@ class DBStore:
             except Exception as e:
                 logger.error(f"SQLite VACUUM 失败: {e}")
                 return {"success": False, "error": str(e)}
+
+    def daily_maintenance(self, keep_perf_days: int = 7) -> Dict:
+        """收盘每日全套数据库维护：清理过期日志 -> TRUNCATE WAL -> 整理碎片 VACUUM"""
+        logger.info("🔧 开始执行 SQLite 数据库收盘自动化维护...")
+        res = {
+            "deleted_perf_logs": 0,
+            "wal_checkpoint": {},
+            "vacuum": {},
+            "success": False
+        }
+        try:
+            res["deleted_perf_logs"] = self.clean_old_performance_logs(keep_days=keep_perf_days)
+            res["wal_checkpoint"] = self.checkpoint_wal(mode="TRUNCATE")
+            res["vacuum"] = self.vacuum_and_optimize()
+            res["success"] = bool(res["wal_checkpoint"].get("success", False) and res["vacuum"].get("success", False))
+            logger.info(f"✅ SQLite 收盘自动化维护完成: {res}")
+        except Exception as e:
+            logger.error(f"SQLite 收盘维护异常: {e}")
+            res["error"] = str(e)
+        return res
 
     def export_all(self, account_id: int = None) -> Dict:
         """导出数据"""

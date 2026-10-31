@@ -26,6 +26,8 @@ class THSAutoLoginService:
         self._login_thread = None
         self._keep_alive_thread = None
         self._running_keep_alive = False
+        self._account_heartbeat: Dict[int, Dict] = {}
+        self._last_alert_times: Dict[int, float] = {}
         self.state = {
             "status": "idle",       # idle | launching | waiting_login | success | failed | timeout | canceled
             "message": "待机中",
@@ -286,10 +288,53 @@ class THSAutoLoginService:
                 except Exception:
                     pass
 
+
+    @staticmethod
+    def _is_session_expired(message: str) -> bool:
+        """判定返回错误是否属于会话过期或鉴权失败"""
+        msg = (message or "").lower()
+        keywords = ["未登录", "超时", "401", "重新登录", "cookie验证失败", "失效", "鉴权", "请登录", "登录已失效", "login", "expired", "invalid session"]
+        return any(k in msg for k in keywords)
+
+    def _trigger_account_session_expired_alert(self, account_id: int, account_name: str, error_msg: str):
+        """单账户 Session 过期定向报警，隔离不干扰其他正常运行账户"""
+        now_ts = time.time()
+        last_alert = self._last_alert_times.get(account_id, 0)
+        # 30分钟报警防频发抑制
+        if now_ts - last_alert < 1800:
+            logger.info(f"⏳ 账户 [{account_name}] (ID:{account_id}) 会话已过期，处于报警冷却期")
+            return
+
+        self._last_alert_times[account_id] = now_ts
+        try:
+            from notification import notification_manager
+            title = f"🚨 账户 [{account_name}] 会话已失效"
+            message = (
+                f"【多账户保活告警】账户「{account_name}」(ID: {account_id}) 同花顺 Session 会话已失效或鉴权失败: {error_msg}。\n"
+                f"建议进入控制台重新扫码授权登录该账户。其他正常运行账户不受任何影响。"
+            )
+            notification_manager.add_system_notification(
+                title=title,
+                message=message,
+                level="error"
+            )
+            logger.error(f"🚨 [KeepAlive Directed Alert] 已触发定向报警: 账户「{account_name}」 (ID:{account_id}) - {error_msg}")
+        except Exception as e:
+            logger.warning(f"定向报警推送异常: {e}")
+
+    def get_all_heartbeat_status(self) -> Dict:
+        """获取所有账户的心跳健康状态"""
+        with self._lock:
+            return {
+                "running": self._running_keep_alive,
+                "accounts": dict(self._account_heartbeat),
+                "checked_at": datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S")
+            }
+
     # ==================== 会话心跳保活守护 (Keep-Alive Daemon) ====================
 
     def silent_refresh(self, account_id: Optional[int] = None) -> Dict:
-        """会话心跳刷新：直接调用资金与持仓 API 续期 Session（支持单账户或全矩阵账户）"""
+        """会话心跳刷新：直接调用资金与持仓 API 续期 Session（支持单账户或全矩阵账户独立隔离巡检）"""
         try:
             from db_store import db_store
             from account_manager import account_manager
@@ -310,32 +355,80 @@ class THSAutoLoginService:
 
             results = {}
             success_count = 0
+            now_str = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S")
+
             for acc in target_accounts:
                 acc_id = acc["id"]
                 acc_name = acc.get("name", f"账户{acc_id}")
                 cookie = db_store.get_account_cookie(acc_id)
                 if not cookie or cookie.startswith("sandbox_"):
-                    results[acc_id] = {"success": False, "name": acc_name, "message": "未绑定真实Cookie或为沙盒模式"}
+                    results[acc_id] = {
+                        "success": False,
+                        "name": acc_name,
+                        "status": "sandbox",
+                        "message": "未绑定真实Cookie或为沙盒模式"
+                    }
+                    with self._lock:
+                        self._account_heartbeat[acc_id] = {
+                            "name": acc_name,
+                            "status": "sandbox",
+                            "last_check": now_str,
+                            "message": "沙盒模式"
+                        }
                     continue
 
-                trader = account_manager.get_trader(acc_id)
-                if trader:
-                    sync_res = trader.sync_from_ths()
-                    if sync_res.get("success"):
-                        success_count += 1
-                        results[acc_id] = {
-                            "success": True,
-                            "name": acc_name,
-                            "ky_fund": sync_res.get("ky_fund", 0),
-                            "total_assets": sync_res.get("total_assets", 0),
-                            "message": "续签同步成功"
-                        }
-                    else:
-                        results[acc_id] = {
-                            "success": False,
-                            "name": acc_name,
-                            "message": sync_res.get("message", "接口请求失败")
-                        }
+                try:
+                    trader = account_manager.get_trader(acc_id)
+                    if trader:
+                        sync_res = trader.sync_from_ths()
+                        if sync_res.get("success"):
+                            success_count += 1
+                            ky_fund = sync_res.get("ky_fund", 0)
+                            tot_assets = sync_res.get("total_assets", 0)
+                            results[acc_id] = {
+                                "success": True,
+                                "name": acc_name,
+                                "status": "active",
+                                "ky_fund": ky_fund,
+                                "total_assets": tot_assets,
+                                "message": "续签同步成功"
+                            }
+                            with self._lock:
+                                self._account_heartbeat[acc_id] = {
+                                    "name": acc_name,
+                                    "status": "active",
+                                    "last_check": now_str,
+                                    "ky_fund": ky_fund,
+                                    "total_assets": tot_assets,
+                                    "message": "活跃有效"
+                                }
+                        else:
+                            err_msg = sync_res.get("message", "接口请求失败")
+                            is_expired = self._is_session_expired(err_msg)
+                            status_code = "expired" if is_expired else "degraded"
+                            results[acc_id] = {
+                                "success": False,
+                                "name": acc_name,
+                                "status": status_code,
+                                "message": err_msg
+                            }
+                            with self._lock:
+                                self._account_heartbeat[acc_id] = {
+                                    "name": acc_name,
+                                    "status": status_code,
+                                    "last_check": now_str,
+                                    "error": err_msg
+                                }
+                            if is_expired:
+                                self._trigger_account_session_expired_alert(acc_id, acc_name, err_msg)
+                except Exception as ex:
+                    logger.warning(f"账户 [{acc_name}] 刷新异常: {ex}")
+                    results[acc_id] = {
+                        "success": False,
+                        "name": acc_name,
+                        "status": "error",
+                        "message": str(ex)
+                    }
 
             active_id = db_store.get_active_account_id()
             active_cookie = db_store.get_account_cookie(active_id)
@@ -355,14 +448,14 @@ class THSAutoLoginService:
             return {"success": False, "message": str(e)}
 
     def start_keep_alive(self, interval_sec: int = 600):
-        """启动后台自动心跳保活线程，默认每10分钟唤醒保活一次所有已绑定同花顺账户"""
+        """启动后台自动心跳保活线程，支持轮询所有已绑定的活跃账户，单账户过期定向告警且互不干扰"""
         if self._running_keep_alive:
             return
 
         self._running_keep_alive = True
 
         def _worker():
-            logger.info(f"💓 同花顺多账户全自动矩阵保活守护线程已启动 (心跳周期: {interval_sec}秒)")
+            logger.info(f"💓 同花顺多账户全自动矩阵保活守护线程已启动 (巡检周期: {interval_sec}秒)")
             while self._running_keep_alive:
                 time.sleep(interval_sec)
                 try:
@@ -376,14 +469,26 @@ class THSAutoLoginService:
                             res = web_connector.get_fund()
                             if res.get("success"):
                                 logger.info(f"💓 [KeepAlive] 单账户心跳成功 | 资金: ¥{res.get('data', 0):,.2f}")
+                            elif self._is_session_expired(res.get("message", "")):
+                                self._trigger_account_session_expired_alert(0, "主账户", res.get("message", ""))
                         continue
 
                     active_id = db_store.get_active_account_id()
+                    now_str = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S")
+
+                    # 轮询所有绑定账户，单账户异常完全隔离，绝不影响其他正常运行账户
                     for acc in accounts:
                         acc_id = acc["id"]
                         acc_name = acc.get("name", f"账户{acc_id}")
                         cookie = db_store.get_account_cookie(acc_id)
                         if not cookie or cookie.startswith("sandbox_"):
+                            with self._lock:
+                                self._account_heartbeat[acc_id] = {
+                                    "name": acc_name,
+                                    "status": "sandbox",
+                                    "last_check": now_str,
+                                    "message": "沙盒模式"
+                                }
                             continue
 
                         try:
@@ -391,14 +496,45 @@ class THSAutoLoginService:
                             if trader:
                                 sync_res = trader.sync_from_ths()
                                 if sync_res.get("success"):
-                                    logger.info(f"💓 [KeepAlive] 账户 [{acc_name}] (ID:{acc_id}) 心跳续签成功 | 资金: ¥{sync_res.get('ky_fund', 0):,.2f}")
+                                    ky_fund = sync_res.get("ky_fund", 0)
+                                    tot_assets = sync_res.get("total_assets", 0)
+                                    logger.info(f"💓 [KeepAlive] 账户 [{acc_name}] (ID:{acc_id}) 心跳续签成功 | 资金: ¥{ky_fund:,.2f}")
+                                    with self._lock:
+                                        self._account_heartbeat[acc_id] = {
+                                            "name": acc_name,
+                                            "status": "active",
+                                            "last_check": now_str,
+                                            "ky_fund": ky_fund,
+                                            "total_assets": tot_assets,
+                                            "message": "活跃有效"
+                                        }
                                     if acc_id == active_id:
                                         web_connector.cookie = cookie
                                         web_connector.connected = True
                                 else:
-                                    logger.warning(f"⚠️ [KeepAlive] 账户 [{acc_name}] (ID:{acc_id}) 心跳返回异常: {sync_res.get('message', '未知')}")
+                                    err_msg = str(sync_res.get("message", "未知响应"))
+                                    is_expired = self._is_session_expired(err_msg)
+                                    status_code = "expired" if is_expired else "degraded"
+                                    logger.warning(f"⚠️ [KeepAlive] 账户 [{acc_name}] (ID:{acc_id}) 心跳异常 ({status_code}): {err_msg}")
+                                    with self._lock:
+                                        self._account_heartbeat[acc_id] = {
+                                            "name": acc_name,
+                                            "status": status_code,
+                                            "last_check": now_str,
+                                            "error": err_msg
+                                        }
+                                    # 单账户 Session 过期触发定向报警，不干扰其他正常账户
+                                    if is_expired:
+                                        self._trigger_account_session_expired_alert(acc_id, acc_name, err_msg)
                         except Exception as acc_e:
-                            logger.warning(f"⚠️ [KeepAlive] 账户 [{acc_name}] (ID:{acc_id}) 心跳检测出错: {acc_e}")
+                            logger.warning(f"⚠️ [KeepAlive] 账户 [{acc_name}] (ID:{acc_id}) 心跳检测隔离捕获: {acc_e}")
+                            with self._lock:
+                                self._account_heartbeat[acc_id] = {
+                                    "name": acc_name,
+                                    "status": "error",
+                                    "last_check": now_str,
+                                    "error": str(acc_e)
+                                }
 
                 except Exception as e:
                     logger.debug(f"[KeepAlive] 矩阵心跳守护异常: {e}")

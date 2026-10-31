@@ -75,6 +75,82 @@ class BacktestResult:
         }
 
 
+@dataclass
+class AccountBacktestMetrics:
+    """单个账户维度的量化收益指标"""
+    account_id: int
+    account_name: str
+    account_style: str
+    initial_capital: float
+    final_capital: float
+    total_return: float
+    annual_return: float
+    max_drawdown: float
+    max_drawdown_duration: int
+    sharpe_ratio: float
+    win_rate: float
+    profit_factor: float
+    total_trades: int
+    winning_trades: int
+    losing_trades: int
+    trades: List[Dict] = field(default_factory=list)
+    equity_curve: List[Dict] = field(default_factory=list)
+
+    def to_dict(self) -> Dict:
+        return {
+            "account_id": self.account_id,
+            "account_name": self.account_name,
+            "account_style": self.account_style,
+            "initial_capital": round(self.initial_capital, 2),
+            "final_capital": round(self.final_capital, 2),
+            "total_return": round(self.total_return, 2),
+            "annual_return": round(self.annual_return, 2),
+            "max_drawdown": round(self.max_drawdown, 2),
+            "max_drawdown_duration": self.max_drawdown_duration,
+            "sharpe_ratio": round(self.sharpe_ratio, 2),
+            "win_rate": round(self.win_rate, 2),
+            "profit_factor": round(self.profit_factor, 2),
+            "total_trades": self.total_trades,
+            "winning_trades": self.winning_trades,
+            "losing_trades": self.losing_trades,
+            "trades_count": len(self.trades),
+            "equity_curve": self.equity_curve[-50:]
+        }
+
+
+@dataclass
+class MultiAccountBacktestResult:
+    """多账户聚合量化收益回测结果"""
+    start_date: str
+    end_date: str
+    accounts: Dict[int, AccountBacktestMetrics] = field(default_factory=dict)
+    aggregate_initial_capital: float = 0.0
+    aggregate_final_capital: float = 0.0
+    aggregate_total_return: float = 0.0
+    aggregate_annual_return: float = 0.0
+    aggregate_max_drawdown: float = 0.0
+    aggregate_sharpe_ratio: float = 0.0
+    aggregate_win_rate: float = 0.0
+    aggregate_total_trades: int = 0
+    aggregate_equity_curve: List[Dict] = field(default_factory=list)
+
+    def to_dict(self) -> Dict:
+        return {
+            "start_date": self.start_date,
+            "end_date": self.end_date,
+            "aggregate_initial_capital": round(self.aggregate_initial_capital, 2),
+            "aggregate_final_capital": round(self.aggregate_final_capital, 2),
+            "aggregate_total_return": round(self.aggregate_total_return, 2),
+            "aggregate_annual_return": round(self.aggregate_annual_return, 2),
+            "aggregate_max_drawdown": round(self.aggregate_max_drawdown, 2),
+            "aggregate_sharpe_ratio": round(self.aggregate_sharpe_ratio, 2),
+            "aggregate_win_rate": round(self.aggregate_win_rate, 2),
+            "aggregate_total_trades": self.aggregate_total_trades,
+            "aggregate_equity_curve": self.aggregate_equity_curve[-50:],
+            "accounts": {acc_id: acc.to_dict() for acc_id, acc in self.accounts.items()}
+        }
+
+
 class Backtester:
     """
     回测引擎
@@ -742,6 +818,326 @@ class Backtester:
             total_trades=0, winning_trades=0, losing_trades=0,
             avg_profit=0, avg_loss=0, profit_factor=0
         )
+
+
+    # ==================== 多账户收益度量与聚合回测 ====================
+
+    def _calc_curve_metrics(self, equity_curve: List[Dict], trades: List[Dict],
+                            initial_capital: float, days: int = 60) -> Dict:
+        """基于净值曲线与交易列表精确度量夏普比率、胜率与最大回撤"""
+        if not equity_curve:
+            return {
+                "initial_capital": initial_capital, "final_capital": initial_capital,
+                "total_return": 0.0, "annual_return": 0.0, "max_drawdown": 0.0,
+                "max_drawdown_duration": 0, "sharpe_ratio": 0.0, "win_rate": 0.0,
+                "profit_factor": 0.0, "total_trades": 0, "winning_trades": 0, "losing_trades": 0
+            }
+
+        final_capital = equity_curve[-1]["equity"]
+        total_return = (final_capital - initial_capital) / initial_capital * 100 if initial_capital > 0 else 0.0
+        annual_return = total_return * 250 / max(1, days)
+
+        # 最大回撤
+        max_capital = initial_capital
+        max_drawdown = 0.0
+        max_duration = 0
+        cur_duration = 0
+        for pt in equity_curve:
+            eq = pt["equity"]
+            if eq > max_capital:
+                max_capital = eq
+                cur_duration = 0
+            else:
+                cur_duration += 1
+                if cur_duration > max_duration:
+                    max_duration = cur_duration
+            dd = (max_capital - eq) / max_capital if max_capital > 0 else 0
+            if dd > max_drawdown:
+                max_drawdown = dd
+
+        # 夏普比率（年化，按250交易日标准）
+        if len(equity_curve) > 1:
+            returns = []
+            for j in range(1, len(equity_curve)):
+                prev_eq = equity_curve[j-1]["equity"]
+                cur_eq = equity_curve[j]["equity"]
+                if prev_eq > 0:
+                    returns.append((cur_eq - prev_eq) / prev_eq)
+            if returns:
+                avg_ret = sum(returns) / len(returns)
+                std_ret = (sum((r - avg_ret) ** 2 for r in returns) / len(returns)) ** 0.5
+                sharpe = (avg_ret * 250.0) / (std_ret * (250.0 ** 0.5)) if std_ret > 0 else 0.0
+            else:
+                sharpe = 0.0
+        else:
+            sharpe = 0.0
+
+        # 胜率与盈亏比
+        sell_trades = [t for t in trades if t.get("action") == "sell"]
+        winning = [t for t in sell_trades if t.get("profit", 0) > 0]
+        losing = [t for t in sell_trades if t.get("profit", 0) <= 0]
+        win_rate = (len(winning) / len(sell_trades) * 100) if sell_trades else 0.0
+
+        profits = [t["profit"] for t in winning]
+        losses = [abs(t["profit"]) for t in losing]
+        pf = (sum(profits) / sum(losses)) if (losses and sum(losses) > 0) else (float('inf') if profits else 0.0)
+
+        return {
+            "initial_capital": initial_capital,
+            "final_capital": final_capital,
+            "total_return": total_return,
+            "annual_return": annual_return,
+            "max_drawdown": max_drawdown * 100.0,
+            "max_drawdown_duration": max_duration,
+            "sharpe_ratio": sharpe,
+            "win_rate": win_rate,
+            "profit_factor": pf if pf != float('inf') else 999.0,
+            "total_trades": len(trades),
+            "winning_trades": len(winning),
+            "losing_trades": len(losing),
+        }
+
+    def run_multi_account_backtest(
+        self,
+        symbol: str,
+        account_configs: Optional[List[Dict]] = None,
+        days: int = 60,
+        strategy_names: Optional[List[str]] = None
+    ) -> MultiAccountBacktestResult:
+        """
+        多账户异构资产回测：
+        各账户按自身资金体量、持仓风格与置信度门槛独立执行风控决策与交易，
+        按账户维度统计夏普比率、胜率、最大回撤，并聚合输出整体量化收益指标。
+        """
+        from ai_brain import ai_brain
+
+        # 1. 默认构建3大风格异构账户矩阵
+        if not account_configs:
+            account_configs = [
+                {"account_id": 1, "name": "账户1-进攻型", "style": "aggressive", "initial_capital": 500000.0, "max_single_position": 0.33, "min_confidence": 0.55},
+                {"account_id": 2, "name": "账户2-均衡型", "style": "balanced", "initial_capital": 300000.0, "max_single_position": 0.28, "min_confidence": 0.60},
+                {"account_id": 3, "name": "账户3-高股息防御型", "style": "defensive", "initial_capital": 200000.0, "max_single_position": 0.20, "min_confidence": 0.65},
+            ]
+
+        strat_list = strategy_names or ["team_ensemble"]
+
+        # 2. 获取历史行情数据并逐日计算指标
+        data = self.fetch_real_data(symbol, days + 30)
+        if not data:
+            return MultiAccountBacktestResult(start_date="", end_date="")
+        data = self.calculate_indicators_for_data(data)
+        if len(data) > days:
+            data = data[-days:]
+        if len(data) < 20:
+            return MultiAccountBacktestResult(start_date="", end_date="")
+
+        # 3. 初始化各账户内部状态
+        class AccState:
+            def __init__(self, cfg):
+                self.id = cfg["account_id"]
+                self.name = cfg["name"]
+                self.style = cfg["style"]
+                self.init_cap = float(cfg["initial_capital"])
+                self.cap = self.init_cap
+                self.max_single = cfg.get("max_single_position", 0.30)
+                self.min_conf = cfg.get("min_confidence", 0.60)
+                self.pos_shares = 0
+                self.buy_px = 0.0
+                self.trades = []
+                self.curve = []
+
+        acc_states = {cfg["account_id"]: AccState(cfg) for cfg in account_configs}
+        agg_curve = []
+
+        # 4. 逐日回放模拟
+        for i in range(20, len(data)):
+            day = data[i]
+            date_str = day["date"]
+            price = day["close"]
+            history = data[max(0, i-20):i]
+            chg = ((price - data[i-1]["close"]) / data[i-1]["close"] * 100) if i > 0 else 0
+
+            stock_data = {
+                "code": symbol,
+                "price": price,
+                "open": day["open"],
+                "high": day["high"],
+                "low": day["low"],
+                "change_pct": chg,
+                "volume": day["volume"],
+            }
+            indicators = self._build_indicators(day)
+
+            # 遍历每个异构账户，分别进行个性化决策与独立风控
+            day_agg_equity = 0.0
+            for acc_id, st in acc_states.items():
+                cur_total = st.cap + st.pos_shares * price
+                acc_info = {
+                    "account_id": st.id,
+                    "name": st.name,
+                    "style": st.style,
+                    "balance": st.cap,
+                    "total_assets": cur_total,
+                    "max_single_position": st.max_single,
+                    "min_confidence": st.min_conf,
+                    "positions": {
+                        symbol: {
+                            "amount": st.pos_shares,
+                            "available": st.pos_shares,
+                            "current_price": price,
+                            "market_value": st.pos_shares * price
+                        }
+                    } if st.pos_shares > 0 else {}
+                }
+
+                # 调用 AI 大脑（含风格与异构风控过滤）
+                dec = ai_brain.decide(symbol, stock_data, indicators, account_info=acc_info, strategy_names=strat_list)
+
+                # 处理买入
+                if dec.action == "buy" and dec.status == "APPROVED" and dec.position_size > 0:
+                    buy_qty = dec.position_size
+                    exec_px = price * (1 + self.slippage)
+                    comm = max(buy_qty * exec_px * self.commission_rate, self.min_commission)
+                    cost = buy_qty * exec_px + comm
+                    if cost <= st.cap:
+                        st.cap -= cost
+                        st.pos_shares += buy_qty
+                        st.buy_px = exec_px
+                        st.trades.append({
+                            "date": date_str, "symbol": symbol, "action": "buy",
+                            "price": round(exec_px, 2), "amount": buy_qty,
+                            "value": round(buy_qty * exec_px, 2), "commission": round(comm, 2),
+                            "reasons": dec.reasons[-1] if dec.reasons else ""
+                        })
+
+                # 处理卖出
+                elif dec.action == "sell" and dec.status == "APPROVED" and st.pos_shares > 0:
+                    sell_qty = st.pos_shares
+                    exec_px = price * (1 - self.slippage)
+                    comm = max(sell_qty * exec_px * self.commission_rate, self.min_commission)
+                    revenue = sell_qty * exec_px - comm
+                    profit = (exec_px - st.buy_px) * sell_qty - comm
+                    st.cap += revenue
+                    st.trades.append({
+                        "date": date_str, "symbol": symbol, "action": "sell",
+                        "price": round(exec_px, 2), "amount": sell_qty,
+                        "value": round(sell_qty * exec_px, 2), "commission": round(comm, 2),
+                        "profit": round(profit, 2),
+                        "profit_pct": round(profit / (st.buy_px * sell_qty) * 100, 2) if st.buy_px > 0 else 0.0,
+                        "reasons": dec.reasons[-1] if dec.reasons else ""
+                    })
+                    st.pos_shares = 0
+                    st.buy_px = 0.0
+
+                # 记录该账户单日净值
+                acc_eq = st.cap + st.pos_shares * price
+                st.curve.append({"date": date_str, "equity": round(acc_eq, 2)})
+                day_agg_equity += acc_eq
+
+            # 记录合并整体资产曲线
+            agg_curve.append({"date": date_str, "equity": round(day_agg_equity, 2)})
+
+        # 5. 分账户统计夏普、胜率、回撤
+        acc_results = {}
+        for acc_id, st in acc_states.items():
+            m = self._calc_curve_metrics(st.curve, st.trades, st.init_cap, days=days)
+            acc_results[acc_id] = AccountBacktestMetrics(
+                account_id=st.id,
+                account_name=st.name,
+                account_style=st.style,
+                initial_capital=m["initial_capital"],
+                final_capital=m["final_capital"],
+                total_return=m["total_return"],
+                annual_return=m["annual_return"],
+                max_drawdown=m["max_drawdown"],
+                max_drawdown_duration=m["max_drawdown_duration"],
+                sharpe_ratio=m["sharpe_ratio"],
+                win_rate=m["win_rate"],
+                profit_factor=m["profit_factor"],
+                total_trades=m["total_trades"],
+                winning_trades=m["winning_trades"],
+                losing_trades=m["losing_trades"],
+                trades=st.trades,
+                equity_curve=st.curve
+            )
+
+        # 6. 计算多账户整体聚合量化收益指标
+        agg_init = sum(st.init_cap for st in acc_states.values())
+        all_trades = [t for st in acc_states.values() for t in st.trades]
+        agg_m = self._calc_curve_metrics(agg_curve, all_trades, agg_init, days=days)
+
+        return MultiAccountBacktestResult(
+            start_date=data[20]["date"],
+            end_date=data[-1]["date"],
+            accounts=acc_results,
+            aggregate_initial_capital=agg_init,
+            aggregate_final_capital=agg_m["final_capital"],
+            aggregate_total_return=agg_m["total_return"],
+            aggregate_annual_return=agg_m["annual_return"],
+            aggregate_max_drawdown=agg_m["max_drawdown"],
+            aggregate_sharpe_ratio=agg_m["sharpe_ratio"],
+            aggregate_win_rate=agg_m["win_rate"],
+            aggregate_total_trades=agg_m["total_trades"],
+            aggregate_equity_curve=agg_curve
+        )
+
+    def get_multi_account_live_performance(self, days: int = 30) -> Dict:
+        """
+        从数据库获取实盘各账户的历史快照与成交记录，
+        按账户独立度量夏普比率、胜率、最大回撤，并聚合输出整体量化收益指标
+        """
+        from db_store import db_store
+        accounts = db_store.list_accounts()
+        if not accounts:
+            return {"error": "暂无账户数据"}
+
+        account_metrics = {}
+        daily_combined = {}  # {date: total_equity}
+
+        for acc in accounts:
+            acc_id = acc["id"]
+            acc_name = acc.get("name", f"账户{acc_id}")
+            snapshots = db_store.get_equity_curve(days=days, account_id=acc_id)
+            trades = db_store.get_trades(account_id=acc_id, limit=200)
+
+            # 提取账户净值曲线
+            curve = []
+            for s in snapshots:
+                ts = s["timestamp"][:10]
+                eq = float(s["total_assets"] or 0)
+                curve.append({"date": ts, "equity": eq})
+                daily_combined[ts] = daily_combined.get(ts, 0.0) + eq
+
+            init_cap = float(acc.get("initial_balance") or 200000.0)
+            if curve:
+                init_cap = curve[0]["equity"] if curve[0]["equity"] > 0 else init_cap
+
+            metrics = self._calc_curve_metrics(curve, trades, init_cap, days=days)
+            metrics["account_id"] = acc_id
+            metrics["account_name"] = acc_name
+            account_metrics[acc_id] = metrics
+
+        # 聚合整体净值曲线
+        agg_curve = [{"date": d, "equity": eq} for d, eq in sorted(daily_combined.items())]
+        total_init = sum(m["initial_capital"] for m in account_metrics.values())
+        all_trades = db_store.get_trades(limit=500)
+        agg_metrics = self._calc_curve_metrics(agg_curve, all_trades, total_init, days=days)
+
+        return {
+            "period_days": days,
+            "aggregate": {
+                "total_initial_capital": round(total_init, 2),
+                "total_final_capital": round(agg_metrics["final_capital"], 2),
+                "total_return": round(agg_metrics["total_return"], 2),
+                "annual_return": round(agg_metrics["annual_return"], 2),
+                "max_drawdown": round(agg_metrics["max_drawdown"], 2),
+                "sharpe_ratio": round(agg_metrics["sharpe_ratio"], 2),
+                "win_rate": round(agg_metrics["win_rate"], 2),
+                "total_trades": agg_metrics["total_trades"],
+            },
+            "accounts": account_metrics,
+            "aggregate_equity_curve": agg_curve[-50:]
+        }
 
 
 # 全局回测实例

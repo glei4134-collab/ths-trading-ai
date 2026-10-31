@@ -6,6 +6,7 @@ AI统一管理所有账户，账户间数据完全隔离
 
 import logging
 import time
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Optional
 from datetime import datetime
@@ -39,6 +40,7 @@ class THSAccountTrader:
         self.connected = False
         self._positions = {}  # 从THS同步的持仓
         self._fund_data = {}  # 资金数据
+        self._order_lock = threading.RLock()  # 单账户细粒度互斥锁：防止并发报单产生超买或限频
         from ths_connector import THSWebConnector
         self.connector = THSWebConnector(account_id=account_id)
 
@@ -69,42 +71,137 @@ class THSAccountTrader:
             "account_info": account_info
         }
 
+    def _reload_cookie_if_updated(self) -> bool:
+        """检查并无感热重载后端自愈续期的最新 Cookie"""
+        try:
+            from db_store import db_store
+            db_cookie = db_store.get_account_cookie(self.account_id)
+            if db_cookie and db_cookie != self.cookie and not db_cookie.startswith("sandbox_"):
+                self.cookie = db_cookie
+                self.connector.cookie = db_cookie
+                self.connected = True
+                logger.info(f"🔄 [SELF-HEALING] 账户 #{self.account_id} 检测到后端自愈新凭据，透明热重载生效")
+                return True
+        except Exception as e:
+            logger.debug(f"检查自愈凭据忽略: {e}")
+        return False
+
     def get_fund(self) -> Dict:
-        """获取资金信息（复用长连接Session）"""
+        """获取资金信息（复用长连接Session + 自愈热重载）"""
+        if not self.cookie:
+            self._reload_cookie_if_updated()
         if not self.cookie:
             return {"success": False, "message": "未连接"}
         self.connector.cookie = self.cookie
-        return self.connector.get_fund()
+        res = self.connector.get_fund()
+        if not res.get("success") and res.get("error_code") == "COOKIE_EXPIRED":
+            if self._reload_cookie_if_updated():
+                res = self.connector.get_fund()
+        return res
 
     def get_positions(self) -> Dict:
-        """获取THS持仓（复用长连接Session）"""
+        """获取THS持仓（复用长连接Session + 自愈热重载）"""
+        if not self.cookie:
+            self._reload_cookie_if_updated()
         if not self.cookie:
             return {"success": False, "message": "未连接"}
         self.connector.cookie = self.cookie
-        return self.connector.get_positions()
+        res = self.connector.get_positions()
+        if not res.get("success") and res.get("error_code") == "COOKIE_EXPIRED":
+            if self._reload_cookie_if_updated():
+                res = self.connector.get_positions()
+        return res
 
     def buy(self, symbol: str, price: float, amount: int) -> Dict:
-        """买入（复用长连接Session）"""
-        if not self.cookie:
-            return {"success": False, "message": "未连接"}
-        self.connector.cookie = self.cookie
-        return self.connector.buy(symbol, price, amount)
+        """买入（复用长连接Session + 防死锁超时锁 + 零中断自愈透明重试）"""
+        if not self._order_lock.acquire(timeout=6.0):
+            logger.error(f"🚨 [DEADLOCK-PROTECTION] 账户 #{self.account_id} 报单获取锁超时(>6s)，触发防死锁熔断")
+            return {"success": False, "message": "交易网关锁竞争超时，系统已自动保护阻断以避免死锁"}
+        try:
+            if not self.cookie:
+                self._reload_cookie_if_updated()
+            if not self.cookie:
+                return {"success": False, "message": "未连接"}
+            self.connector.cookie = self.cookie
+            res = self.connector.buy(symbol, price, amount)
+            # 若遇 Cookie 失效，立即尝试自愈凭据热重载并透明重试一次
+            if not res.get("success") and res.get("error_code") == "COOKIE_EXPIRED":
+                logger.warning(f"⚠️ 账户 #{self.account_id} 报单遭遇凭据失效，协同自愈尝试透明重试...")
+                if self._reload_cookie_if_updated():
+                    res = self.connector.buy(symbol, price, amount)
+                    if res.get("success"):
+                        logger.info(f"✅ 账户 #{self.account_id} 自愈协同重载后重试买入成功！")
+            return res
+        finally:
+            self._order_lock.release()
 
     def sell(self, symbol: str, price: float, amount: int) -> Dict:
-        """卖出（复用长连接Session）"""
-        if not self.cookie:
-            return {"success": False, "message": "未连接"}
-        self.connector.cookie = self.cookie
-        pos_result = self.connector.get_positions()
-        mkcode = ""
-        gdzh = ""
-        if pos_result["success"]:
-            for p in pos_result["data"].get("positions", []):
-                if p["symbol"] == symbol:
-                    mkcode = p.get("mkcode", "")
-                    gdzh = p.get("gdzh", "")
-                    break
-        return self.connector.sell(symbol, price, amount, mkcode=mkcode, gdzh=gdzh)
+        """卖出（复用长连接Session + 防死锁超时锁 + 零中断自愈透明重试）"""
+        if not self._order_lock.acquire(timeout=6.0):
+            logger.error(f"🚨 [DEADLOCK-PROTECTION] 账户 #{self.account_id} 卖出获取锁超时(>6s)，触发防死锁熔断")
+            return {"success": False, "message": "交易网关锁竞争超时，系统已自动保护阻断以避免死锁"}
+        try:
+            if not self.cookie:
+                self._reload_cookie_if_updated()
+            if not self.cookie:
+                return {"success": False, "message": "未连接"}
+            self.connector.cookie = self.cookie
+            pos_result = self.connector.get_positions()
+            mkcode = ""
+            gdzh = ""
+            if pos_result.get("success"):
+                for p in pos_result["data"].get("positions", []):
+                    if p["symbol"] == symbol:
+                        mkcode = p.get("mkcode", "")
+                        gdzh = p.get("gdzh", "")
+                        break
+            res = self.connector.sell(symbol, price, amount, mkcode=mkcode, gdzh=gdzh)
+            # 若遇 Cookie 失效，透明自愈重试
+            if not res.get("success") and res.get("error_code") == "COOKIE_EXPIRED":
+                logger.warning(f"⚠️ 账户 #{self.account_id} 卖出遭遇凭据失效，协同自愈尝试透明重试...")
+                if self._reload_cookie_if_updated():
+                    res = self.connector.sell(symbol, price, amount, mkcode=mkcode, gdzh=gdzh)
+                    if res.get("success"):
+                        logger.info(f"✅ 账户 #{self.account_id} 自愈协同重载后重试卖出成功！")
+            return res
+        finally:
+            self._order_lock.release()
+
+    def cancel_order(self, order_id: str, date: str) -> Dict:
+        """撤销委托（复用长连接Session + 防死锁超时锁）"""
+        if not self._order_lock.acquire(timeout=5.0):
+            return {"success": False, "message": "撤单获取锁超时"}
+        try:
+            if not self.cookie:
+                self._reload_cookie_if_updated()
+            if not self.cookie:
+                return {"success": False, "message": "未连接"}
+            self.connector.cookie = self.cookie
+            res = self.connector.cancel_order(order_id, date)
+            if not res.get("success") and res.get("error_code") == "COOKIE_EXPIRED":
+                if self._reload_cookie_if_updated():
+                    res = self.connector.cancel_order(order_id, date)
+            return res
+        finally:
+            self._order_lock.release()
+
+    def cancel_all_orders(self) -> Dict:
+        """撤销所有未成交委托（复用长连接Session + 防死锁超时锁）"""
+        if not self._order_lock.acquire(timeout=5.0):
+            return {"success": False, "message": "撤单获取锁超时"}
+        try:
+            if not self.cookie:
+                self._reload_cookie_if_updated()
+            if not self.cookie:
+                return {"success": False, "message": "未连接"}
+            self.connector.cookie = self.cookie
+            res = self.connector.cancel_all_orders()
+            if not res.get("success") and res.get("error_code") == "COOKIE_EXPIRED":
+                if self._reload_cookie_if_updated():
+                    res = self.connector.cancel_all_orders()
+            return res
+        finally:
+            self._order_lock.release()
 
     def sync_from_ths(self) -> Dict:
         """从同花顺同步账户数据，返回同步结果"""
@@ -238,7 +335,7 @@ class AccountManager:
         conn_result = test_trader.connect(cookie)
         if not conn_result["success"] and ("资金账号不存在" in str(conn_result.get("message")) or "未登录" in str(conn_result.get("message"))):
             from ths_connector import activate_mncg_trade_session
-            act_res = activate_mncg_trade_session(cookie)
+            act_res = activate_mncg_trade_session(cookie, session=test_trader.connector.session)
             if act_res.get("success"):
                 cookie = act_res["cookie"]
                 conn_result = test_trader.connect(cookie)
@@ -466,30 +563,123 @@ class AccountManager:
                 results[acc_id] = {"error": str(e)}
         return results
 
+    def get_account_lock(self, account_id: int):
+        """获取指定账户的交易互斥锁"""
+        trader = self.get_trader(account_id)
+        return trader._order_lock if trader else None
+
     def execute_for_account(self, account_id: int, symbol: str, action: str,
                             price: float, amount: int) -> Dict:
-        """为指定账户执行交易"""
-        trader = self.traders.get(account_id)
+        """为指定账户执行交易（经过单账户细粒度锁保护）"""
+        trader = self.get_trader(account_id)
         if not trader:
             return {"success": False, "message": "账户未连接"}
         if action == "buy":
             return trader.buy(symbol, price, amount)
-        else:
+        elif action == "sell":
             return trader.sell(symbol, price, amount)
+        elif action in ("cancel", "cancel_all"):
+            return trader.cancel_all_orders()
+        else:
+            return {"success": False, "message": f"不支持的交易指令: {action}"}
+
+    def calculate_dynamic_amount(self, account_id: int, symbol: str, action: str,
+                                 price: float, position_ratio: float = 0.20,
+                                 amount_per_account: Optional[int] = None) -> int:
+        """
+        动态头寸计算器：
+        根据指定账户当前可用资金（ky_fund）、总资产及持仓限制，动态计算合规的委托股数（100股整数倍）
+        """
+        trader = self.get_trader(account_id)
+        if not trader or price <= 0:
+            return 0
+
+        if action == "buy":
+            # 1. 获取最新资金
+            fund_res = trader.get_fund()
+            ky = float(fund_res.get("data", trader.ky_fund or 0.0)) if fund_res.get("success") else float(trader._fund_data.get("ky_fund", 0.0) or trader.connector.ky_fund or 0.0)
+            if ky < price * 100:
+                logger.warning(f"账户 #{account_id} 可用资金 ({ky:.2f}元) 不足以买入 100 股 {symbol} (单价 {price}元)")
+                return 0
+
+            # 2. 如果调用方显式指定了自定义非默认固定手数且未启用动态比例，校验资金充裕度后使用
+            if amount_per_account and amount_per_account > 0 and amount_per_account != 100 and position_ratio <= 0.0:
+                max_affordable = int((ky * 0.98) / price / 100) * 100
+                return max(0, min(amount_per_account, max_affordable))
+
+            # 3. 动态头寸计算：默认按可用资金的 position_ratio（默认 20%）建仓
+            effective_ratio = position_ratio if position_ratio > 0.0 else 0.20
+            target_cash = ky * effective_ratio
+            shares = int(target_cash / price / 100) * 100
+
+            # 至少买一手 100 股
+            if shares < 100 and ky >= price * 100 * 1.002:
+                shares = 100
+
+            # 上限限制：不能超过可用资金的 95%（保留必要手续费缓冲）
+            max_shares = int((ky * 0.95) / price / 100) * 100
+            shares = min(shares, max_shares)
+
+            return max(0, shares)
+
+        elif action == "sell":
+            # 卖出：按该账户持仓实际可卖股数计算
+            pos_res = trader.get_positions()
+            available_qty = 0
+            if pos_res.get("success"):
+                for p in pos_res["data"].get("positions", []):
+                    if p.get("symbol") == symbol:
+                        available_qty = int(float(p.get("available", 0)))
+                        break
+
+            if amount_per_account and amount_per_account > 0 and amount_per_account != 100:
+                sell_shares = min(available_qty, amount_per_account)
+            else:
+                sell_shares = available_qty
+
+            return int(sell_shares / 100) * 100
+
+        return 0
 
     def execute_for_all(self, symbol: str, action: str, price: float,
-                        amount_per_account: int = 100) -> Dict:
-        """并发为所有账户下发委托订单（毫秒级并发多路派发）"""
+                        amount_per_account: Optional[int] = None,
+                        position_ratio: float = 0.20) -> Dict:
+        """
+        并发为所有账户下发委托订单（毫秒级多路并发派发 + 单账户RLock独立隔离 + 动态头寸计算）
+        """
         start_t = time.perf_counter()
         results = {}
         acc_ids = list(self.traders.keys())
         if not acc_ids:
             return results
 
+        def _calc_and_exec(acc_id: int):
+            trader = self.get_trader(acc_id)
+            if not trader or not trader.connected:
+                return {"success": False, "message": "账户未连接或已离线", "shares": 0}
+
+            order_amount = self.calculate_dynamic_amount(
+                account_id=acc_id,
+                symbol=symbol,
+                action=action,
+                price=price,
+                position_ratio=position_ratio,
+                amount_per_account=amount_per_account
+            )
+            if order_amount <= 0:
+                if action == "buy":
+                    return {"success": False, "message": f"账户 #{acc_id} 可用资金不足一手，跳过买入", "shares": 0}
+                else:
+                    return {"success": False, "message": f"账户 #{acc_id} 无 {symbol} 可卖持仓，跳过卖出", "shares": 0}
+
+            res = self.execute_for_account(acc_id, symbol, action, price, order_amount)
+            res["shares"] = order_amount
+            return res
+
         max_workers = min(len(acc_ids), 10)
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_to_acc = {
-                executor.submit(self.execute_for_account, acc_id, symbol, action, price, amount_per_account): acc_id
+                executor.submit(_calc_and_exec, acc_id): acc_id
                 for acc_id in acc_ids
             }
             for future in as_completed(future_to_acc):
@@ -497,7 +687,7 @@ class AccountManager:
                 try:
                     results[acc_id] = future.result()
                 except Exception as e:
-                    results[acc_id] = {"success": False, "message": f"并发下单异常: {e}"}
+                    results[acc_id] = {"success": False, "message": f"并发下单异常: {e}", "shares": 0}
 
         total_cost_ms = round((time.perf_counter() - start_t) * 1000, 2)
         logger.info(f"🚀 [CONCURRENT-ORDER] {action} {symbol} 并发多账户下单完成: {len(results)}个账户, 总耗时: {total_cost_ms}ms")

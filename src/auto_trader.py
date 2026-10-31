@@ -1107,4 +1107,31 @@ class MultiAccountTrader:
         for trader in self.traders.values():
             trader.stop_monitor()
 
+    def generate_multi_account_decisions(self, symbol: str, stock_data: Dict, indicators: Dict,
+                                         strategy_names: List[str] = None) -> Dict[int, Dict]:
+        """
+        为所有异构账户生成定制化策略建议与独立风控过滤
+        返回格式: {account_id: {"account_id": id, "account_name": name, "symbol": sym, "action": act, "quantity": qty, "price": px, "confidence": conf, "reasons": reasons, "status": status}}
+        """
+        from ai_brain import ai_brain
+        decisions = ai_brain.decide_for_all(symbol, stock_data, indicators, strategy_names)
+        recommendations = {}
+        px = stock_data.get("price", 0)
+        for acc_id, dec in decisions.items():
+            recommendations[acc_id] = {
+                "account_id": acc_id,
+                "account_name": dec.account_name,
+                "symbol": symbol,
+                "action": dec.action,
+                "signal": dec.signal,
+                "quantity": dec.position_size,
+                "price": px,
+                "confidence": dec.confidence,
+                "reasons": dec.reasons,
+                "status": dec.status,
+                "target_price": dec.target_price,
+                "stop_loss": dec.stop_loss
+            }
+        return recommendations
+
 multi_account_trader = MultiAccountTrader()

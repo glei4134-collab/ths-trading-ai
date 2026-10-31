@@ -29,9 +29,16 @@ def set_stock_data_func(func):
     _stock_data_func = func
 
 
+ACCOUNT_STYLE_CONFIG = {
+    "aggressive": {"max_single_position": 0.33, "min_confidence": 0.55, "stop_loss_pct": 0.05, "desc": "进攻型"},
+    "balanced": {"max_single_position": 0.28, "min_confidence": 0.60, "stop_loss_pct": 0.045, "desc": "均衡型"},
+    "defensive": {"max_single_position": 0.20, "min_confidence": 0.65, "stop_loss_pct": 0.035, "desc": "高股息防御型"},
+}
+
+
 @dataclass
 class BrainDecision:
-    """AI大脑决策结果"""
+    """AI大脑决策结果（支持多账户定制与独立风控状态）"""
     symbol: str
     action: str  # buy/sell/hold
     signal: str  # STRONG_BUY/BUY/WEAK_BUY/HOLD/WEAK_SELL/SELL/STRONG_SELL
@@ -40,9 +47,12 @@ class BrainDecision:
     reasons: List[str]
     target_price: Optional[float] = None
     stop_loss: Optional[float] = None
-    position_size: int = 0  # 建议买入股数
+    position_size: int = 0  # 建议买入/卖出股数
     ai_reasoning: str = ""  # AI的推理过程
     timestamp: str = ""
+    account_id: Optional[int] = None
+    account_name: str = ""
+    status: str = "APPROVED"  # APPROVED / REJECTED_POSITION_LIMIT / REJECTED_INSUFFICIENT_FUNDS / FILTERED_NO_HOLDINGS / FILTERED_T1_LOCKED / REJECTED_CONFIDENCE
 
     def __post_init__(self):
         if not self.timestamp:
@@ -60,7 +70,10 @@ class BrainDecision:
             "stop_loss": self.stop_loss,
             "position_size": self.position_size,
             "ai_reasoning": self.ai_reasoning,
-            "timestamp": self.timestamp
+            "timestamp": self.timestamp,
+            "account_id": self.account_id,
+            "account_name": self.account_name,
+            "status": self.status
         }
 
 
@@ -116,7 +129,8 @@ class AIBrain:
         return registry.get_catalog_json()
 
     def decide(self, symbol: str, stock_data: Dict, indicators: Dict,
-               account_info: Dict = None, strategy_names: List[str] = None) -> BrainDecision:
+               account_info: Dict = None, strategy_names: List[str] = None,
+               history: Optional[List[Dict]] = None) -> BrainDecision:
         """
         AI 做出交易决策
 
@@ -176,7 +190,7 @@ class AIBrain:
                                 original_params[k] = strategy.params[k].get("default")
                                 strategy.params[k]["default"] = v
                     try:
-                        result = strategy.analyze(stock_data, indicators, market_data=market_data)
+                        result = strategy.analyze(stock_data, indicators, market_data=market_data, history=history)
                     finally:
                         # 恢复原始参数
                         for k, v in original_params.items():
@@ -251,48 +265,96 @@ class AIBrain:
         # 4. 决策
         action, signal = self._score_to_action(avg_score)
 
-        # 5. 风控检查和仓位计算
+        # 5. 异构资产信号适配与每账户独立风控过滤
         price = stock_data.get("price", 0)
         position_size = 0
         target_price = None
         stop_loss = None
+        status = "APPROVED"
+        acc_id = account_info.get("account_id") if account_info else None
+        acc_name = account_info.get("name", f"账户_{acc_id}" if acc_id else "默认账户") if account_info else "默认账户"
+        acc_style = account_info.get("style", "balanced") if account_info else "balanced"
+        style_cfg = ACCOUNT_STYLE_CONFIG.get(acc_style, ACCOUNT_STYLE_CONFIG["balanced"])
+        max_single_pos = account_info.get("max_single_position", style_cfg["max_single_position"]) if account_info else 0.30
+        min_conf_req = account_info.get("min_confidence", style_cfg["min_confidence"]) if account_info else 0.50
 
         if action == "buy" and account_info and price > 0:
-            balance = account_info.get("balance", 0)
-            total_assets = account_info.get("total_assets", balance)
+            balance = float(account_info.get("balance", 0))
+            total_assets = float(account_info.get("total_assets", balance))
+            if total_assets <= 0:
+                total_assets = balance or 1000000.0
             positions = account_info.get("positions", {})
-            current_positions = len(positions)
+            existing_pos = positions.get(symbol, {})
+            existing_amount = existing_pos.get("amount", 0)
+            existing_mv = existing_amount * price
 
-            # 用 risk_manager 计算最优仓位（基于总资产）
-            volatility = indicators.get("atr", price * 0.02) / price if price else 0.02
-            pos_info = risk_manager.calculate_optimal_position(
-                avg_confidence, volatility, total_assets, current_positions
-            )
-            position_size = pos_info["shares"]
-
-            # 用可用余额限制实际可买数量
-            if balance > 0 and price > 0:
-                max_affordable = int(balance * 0.95 / price / 100) * 100  # 留5%余量给佣金
-                position_size = min(position_size, max_affordable)
-
-            # 检查风控限制
-            risk_check = risk_manager.check_position_limit(
-                {s: {"market_value": p.get("current_price", 0) * p.get("amount", 0)}
-                 for s, p in positions.items()},
-                total_assets
-            )
-            if any(a.level == "critical" for a in risk_check):
-                reasons.append("风控拒绝: " + "; ".join(a.message for a in risk_check if a.level == "critical"))
+            # 规则1: 账户风格置信度门槛一票否决
+            if avg_confidence < min_conf_req:
                 action, signal = "hold", "HOLD"
+                status = "REJECTED_CONFIDENCE"
+                reasons.append(f"风控一票否决: 信号置信度({avg_confidence:.2f})未达账户[{acc_name}]门槛({min_conf_req:.2f})")
                 position_size = 0
 
-            # 用 risk_manager 计算止损止盈
+            # 规则2: 单票持仓上限一票否决 (持仓已接近或超过单票红线)
+            elif total_assets > 0 and (existing_mv / total_assets) >= (max_single_pos - 0.005):
+                action, signal = "hold", "HOLD"
+                status = "REJECTED_POSITION_LIMIT"
+                reasons.append(f"风控一票否决: 账户[{acc_name}]对标的{symbol}持仓已达单票上限({existing_mv/total_assets*100:.1f}% >= {max_single_pos*100:.1f}%)")
+                position_size = 0
+
+            # 规则3: 账户可用资金不足一票否决 (买不起1手)
+            elif balance < price * 100 * 1.001:
+                action, signal = "hold", "HOLD"
+                status = "REJECTED_INSUFFICIENT_FUNDS"
+                reasons.append(f"风控一票否决: 账户[{acc_name}]可用资金({balance:.2f}元)不足以买入1手(需{price*100:.2f}元)")
+                position_size = 0
+
+            else:
+                # 规则4: 定制化可买仓位精算（在单票上限剩余额度与可用现金之间取最小值）
+                remaining_mv_room = max(0.0, total_assets * max_single_pos - existing_mv)
+                cash_available = balance * 0.95  # 预留5%手续费与滑点缓冲
+                affordable_val = min(remaining_mv_room, cash_available)
+                custom_shares = int(affordable_val / price / 100) * 100 if price > 0 else 0
+
+                if custom_shares < 100:
+                    action, signal = "hold", "HOLD"
+                    status = "REJECTED_INSUFFICIENT_FUNDS"
+                    reasons.append(f"风控拦截: 账户[{acc_name}]经单票上限与可用资金约束后可买数量不足1手")
+                    position_size = 0
+                else:
+                    position_size = custom_shares
+                    status = "APPROVED"
+                    reasons.append(f"风控通过: 账户[{acc_name}]建议定制委托买入 {custom_shares}股 (预计占用{custom_shares*price:.2f}元, 占总资产{(existing_mv+custom_shares*price)/total_assets*100:.1f}%)")
+
+            # 动态止损止盈
+            volatility = indicators.get("atr", price * 0.02) / price if price else 0.02
             sl_info = risk_manager.calculate_stop_loss(price, volatility)
             tp_info = risk_manager.calculate_take_profit(price, volatility)
             stop_loss = sl_info["stop_loss"]
             target_price = tp_info["take_profit"]
 
         elif action == "sell":
+            if account_info:
+                positions = account_info.get("positions", {})
+                existing_pos = positions.get(symbol, {})
+                existing_amount = existing_pos.get("amount", 0)
+                available_to_sell = existing_pos.get("available", existing_amount)
+
+                if existing_amount <= 0:
+                    action, signal = "hold", "HOLD"
+                    status = "FILTERED_NO_HOLDINGS"
+                    reasons.append(f"风控过滤: 账户[{acc_name}]当前未持有{symbol}，忽略卖出信号")
+                    position_size = 0
+                elif available_to_sell <= 0:
+                    action, signal = "hold", "HOLD"
+                    status = "FILTERED_T1_LOCKED"
+                    reasons.append(f"风控过滤: 账户[{acc_name}]持有{symbol}{existing_amount}股，但处于T+1锁定中，今日可用为0")
+                    position_size = 0
+                else:
+                    status = "APPROVED"
+                    position_size = available_to_sell
+                    reasons.append(f"风控通过: 账户[{acc_name}]建议定制委托卖出 {available_to_sell}股")
+
             target_price = price * 0.92 if price else None
             stop_loss = price * 1.05 if price else None
 
@@ -314,7 +376,10 @@ class AIBrain:
             reasons=reasons,
             target_price=round(target_price, 2) if target_price else None,
             stop_loss=round(stop_loss, 2) if stop_loss else None,
-            position_size=position_size
+            position_size=position_size,
+            account_id=acc_id,
+            account_name=acc_name,
+            status=status
         )
 
         self.context["recent_decisions"].append(decision.to_dict())
@@ -670,20 +735,47 @@ from strategies.base import BaseStrategy, StrategyResult, Signal
 
     def decide_for_account(self, account_id: int, symbol: str, stock_data: Dict,
                            indicators: Dict, strategy_names: List[str] = None) -> BrainDecision:
-        """为指定账户做交易决策"""
+        """为指定账户做交易决策（异构资产与独立风控过滤）"""
         from account_manager import account_manager
-        ds = account_manager.get(account_id)
-        account_info = ds.get_account_summary()
-        account_info["positions"] = {p["symbol"]: p for p in ds.positions.values()}
+        from db_store import db_store
+
+        acc = db_store.get_account(account_id) or {}
+        acc_name = acc.get("name", f"账户_{account_id}")
+
+        # 风格智能映射（账户1进攻、账户2均衡、账户3高股息防御）
+        style = "balanced"
+        if account_id == 1 or "进攻" in acc_name:
+            style = "aggressive"
+        elif account_id == 3 or "防御" in acc_name or "高股息" in acc_name:
+            style = "defensive"
+
+        account_info = db_store.get_account_summary(account_id) or {}
+        trader = account_manager.get_trader(account_id)
+        if trader and trader._positions:
+            account_info["positions"] = {s: p for s, p in trader._positions.items()}
+        elif not account_info.get("positions"):
+            account_info["positions"] = db_store.get_positions(account_id) or {}
+
+        account_info["account_id"] = account_id
+        account_info["name"] = acc_name
+        account_info["style"] = style
         return self.decide(symbol, stock_data, indicators, account_info, strategy_names)
 
-    def decide_for_all(self, symbol: str, stock_data: Dict, indicators: Dict) -> Dict:
-        """为所有账户做交易决策，返回 {account_id: BrainDecision}"""
+    def decide_for_all(self, symbol: str, stock_data: Dict, indicators: Dict,
+                       strategy_names: List[str] = None) -> Dict[int, BrainDecision]:
+        """为所有账户做交易决策，返回各账户定制化委托建议 {account_id: BrainDecision}"""
         from account_manager import account_manager
+        from db_store import db_store
+
+        accounts = db_store.list_accounts()
+        acc_ids = [a["id"] for a in accounts] if accounts else list(account_manager._stores.keys())
+        if not acc_ids:
+            acc_ids = [1, 2, 3]
+
         results = {}
-        for acc_id in account_manager._stores:
+        for acc_id in acc_ids:
             try:
-                results[acc_id] = self.decide_for_account(acc_id, symbol, stock_data, indicators)
+                results[acc_id] = self.decide_for_account(acc_id, symbol, stock_data, indicators, strategy_names)
             except Exception as e:
                 logger.error(f"账户 {acc_id} 决策失败: {e}")
         return results

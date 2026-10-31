@@ -198,7 +198,8 @@ class CompetitionManager:
             }
 
         windows = [
-            ("W1_PRE_MARKET_NEWS", "盘前新闻舆情与全网情绪抓取", time(9, 15), time(9, 25), "POLICY_MUST_CATCHUP", "抓取早间宏观、行业新闻与持仓股票情绪，生成多空基调"),
+            ("W0_PRE_MARKET_CHECK", "盘前系统自检与基线核验", time(9, 0), time(9, 15), "POLICY_MUST_CATCHUP", "检查系统健康、数据库连通性及异构账户基线"),
+            ("W1_PRE_MARKET_NEWS", "盘前新闻舆情与全网情绪抓取", time(9, 15), time(9, 25), "POLICY_MUST_CATCHUP", "抓取早间宏观、行业新闻与持仓股票情绪，预热情绪引擎"),
             ("W2_CALL_AUCTION", "集合竞价决断与冲击池筛选", time(9, 25), time(9, 30), "POLICY_TIME_CRITICAL_DISCARD", "集合竞价定盘，筛选高开量比强势异动股，超9:30严禁追买"),
             ("W3_MORNING_OPEN", "早盘开盘突击与委托挂单清算", time(9, 30), time(9, 35), "POLICY_TIME_CRITICAL_DISCARD", "开盘冲击波执行，清理昨夜遗留未成交单，超9:40弃用"),
             ("W4_INTRADAY_MORNING", "早盘连续竞价（高频止盈止损+策略轮询）", time(9, 35), time(11, 30), "POLICY_DEGRADE_ADAPT", "盘中连续交易时段，动态监控止盈止损，按设定间隔执行策略扫描"),
@@ -206,6 +207,7 @@ class CompetitionManager:
             ("W6_INTRADAY_AFTERNOON", "午盘连续竞价（趋势跟踪与换手）", time(13, 0), time(14, 50), "POLICY_DEGRADE_ADAPT", "午后趋势追踪，逢高止盈或破位止损"),
             ("W7_CLOSING_REBALANCE", "尾盘防隔夜回撤与尾盘调仓", time(14, 50), time(15, 0), "POLICY_MUST_CATCHUP", "A股实行T+1，尾盘买入隔夜风险最低，撤销不可隔夜限价单，锁定当日胜率"),
             ("W8_AFTER_HOURS_SETTLE", "盘后结算对账与次日策略预选", time(15, 0), time(16, 0), "POLICY_MUST_CATCHUP", "核对券商真实持仓资金，评估策略衰减权重，计算明日备选池与生成复盘报告"),
+            ("W9_NIGHT_REVIEW", "夜间全市场复盘与参数网格优化", time(20, 0), time(23, 59), "POLICY_MUST_CATCHUP", "全市场行情复盘、市场状态识别及自适应参数网格优化"),
         ]
 
         matched = None

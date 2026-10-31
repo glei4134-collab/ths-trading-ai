@@ -22,3 +22,6 @@ deploy_railway.py
 
 config/cookies.json
 config/ai_config.local.json
+
+*.bak
+*.bak*
