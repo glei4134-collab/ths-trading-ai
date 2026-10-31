@@ -12,6 +12,8 @@ import hashlib
 import base64
 import socket
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from pathlib import Path
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -334,11 +336,20 @@ class THSWebConnector:
     API地址: https://mncg.10jqka.com.cn
     """
 
-    def __init__(self):
+    def __init__(self, account_id: int = 0):
+        self.account_id = account_id
         self.cookie = None
         self.connected = False
         self.gdzh = None  # 股东账户号
         self.ky_fund = 0  # 可用资金
+
+        # 核心优化：底层使用 requests.Session 连接池长连接复用（Keep-Alive）
+        self.session = requests.Session()
+        self.session.trust_env = False  # 绕过系统代理直连同花顺
+        retries = Retry(total=2, backoff_factor=0.2, status_forcelist=[500, 502, 503, 504], raise_on_status=False)
+        adapter = HTTPAdapter(pool_connections=20, pool_maxsize=50, max_retries=retries, pool_block=False)
+        self.session.mount("https://", adapter)
+        self.session.mount("http://", adapter)
 
     def save_cookie(self, cookie: str, user_info: Dict = None) -> Dict:
         """
@@ -439,33 +450,61 @@ class THSWebConnector:
             "Content-Type": "application/x-www-form-urlencoded"
         }
 
-    def _api_post(self, url: str, data: Dict) -> Dict:
-        """发送API请求"""
+    def _api_post(self, url: str, data: Dict, action_name: str = "api_post") -> Dict:
+        """发送API请求（基于Session连接池复用与性能耗时打点）"""
         if not self.cookie:
             return {"success": False, "message": "未登录，请先保存Cookie"}
 
+        start_time = time.perf_counter()
+        status_code = 0
+        err_msg = ""
+        success = False
+        result_data = None
+
         try:
             headers = self._get_headers()
-            response = requests.post(url, headers=headers, data=data, timeout=10,
-                                     proxies={"http": None, "https": None})  # 绕过系统代理
+            response = self.session.post(url, headers=headers, data=data, timeout=8,
+                                         proxies={"http": None, "https": None})
+            status_code = response.status_code
 
-            if response.status_code == 200:
+            if status_code == 200:
                 result = response.json()
                 errorcode = result.get("errorcode", "")
                 if str(errorcode) == "0":
-                    return {"success": True, "data": result}
+                    success = True
+                    result_data = result
                 else:
                     errormsg = result.get("errormsg", "未知错误")
-                    return {"success": False, "message": f"API错误: {errormsg}"}
+                    err_msg = f"API错误: {errormsg}"
             else:
-                return {"success": False, "message": f"HTTP请求失败: {response.status_code}"}
+                err_msg = f"HTTP请求失败: {status_code}"
 
         except requests.exceptions.Timeout:
-            return {"success": False, "message": "请求超时"}
+            err_msg = "请求超时"
         except requests.exceptions.ConnectionError:
-            return {"success": False, "message": "网络连接失败，请检查网络"}
+            err_msg = "网络连接失败，请检查网络"
         except Exception as e:
-            return {"success": False, "message": f"请求异常: {str(e)}"}
+            err_msg = f"请求异常: {str(e)}"
+        finally:
+            duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
+            logger.info(f"⚡ [HTTP-KeepAlive] {action_name} 耗时: {duration_ms}ms 状态: {status_code or 'ERR'} 成功: {success}")
+            try:
+                from db_store import db_store
+                db_store.record_api_metric(
+                    action=action_name,
+                    url=url,
+                    duration_ms=duration_ms,
+                    account_id=getattr(self, 'account_id', 0),
+                    status_code=status_code,
+                    success=success,
+                    error_message=err_msg
+                )
+            except Exception:
+                pass
+
+        if success:
+            return {"success": True, "data": result_data, "duration_ms": duration_ms}
+        return {"success": False, "message": err_msg, "duration_ms": duration_ms}
 
     def get_fund(self) -> Dict:
         """查询可用资金"""
@@ -474,7 +513,7 @@ class THSWebConnector:
             "type": "cmd_wt_mairu",
             "updateClass": "qryzijin|"
         }
-        result = self._api_post(url, data)
+        result = self._api_post(url, data, action_name="get_fund")
         if result["success"]:
             try:
                 # API 返回格式: result.data.result.qryzijin.result.data.kyje
@@ -499,7 +538,7 @@ class THSWebConnector:
             "type": "cmd_wt_mairu",
             "updateClass": "qryzijin|qryChicang|"
         }
-        result = self._api_post(url, data)
+        result = self._api_post(url, data, action_name="get_fund")
         if result["success"]:
             try:
                 api_data = result["data"]
@@ -569,7 +608,7 @@ class THSWebConnector:
             "type": "cmd_qu_chedan",
             "updateClass": "qryzijin|qryChedan|"
         }
-        result = self._api_post(url, data)
+        result = self._api_post(url, data, action_name="get_fund")
         if result["success"]:
             try:
                 api_data = result["data"]
@@ -609,7 +648,7 @@ class THSWebConnector:
             "type": cmd,
             "stockcode": symbol
         }
-        result = self._api_post(url, data)
+        result = self._api_post(url, data, action_name="get_fund")
         if result["success"]:
             try:
                 info = result["data"]["result"]["data"]
@@ -746,7 +785,7 @@ class THSWebConnector:
             "amount": str(amount)
         }
         logger.info(f"[BUY] request data: {data}")
-        result = self._api_post(url, data)
+        result = self._api_post(url, data, action_name="buy")
         if result["success"]:
             return {
                 "success": True,
@@ -817,7 +856,7 @@ class THSWebConnector:
             "amount": str(amount)
         }
         logger.info(f"[SELL] request data: {data}")
-        result = self._api_post(url, data)
+        result = self._api_post(url, data, action_name="sell")
         if result["success"]:
             return {
                 "success": True,
@@ -833,7 +872,7 @@ class THSWebConnector:
             "htbh": order_id,
             "wtrq": date
         }
-        result = self._api_post(url, data)
+        result = self._api_post(url, data, action_name="cancel_order")
         if result["success"]:
             return {"success": True, "message": "撤单成功"}
         return result
@@ -1061,92 +1100,131 @@ def get_connection_info() -> Dict:
     return info
 
 
-# ========== 扫码登录 ==========
+# ========== 扫码登录 (同花顺统一认证中心 upass.10jqka.com.cn) ==========
 
 class QRLoginManager:
     """
-    同花顺扫码登录管理器
-    通过同花顺passport API生成二维码，用户扫码后自动获取Cookie
-    支持30天免登录（remember=1）
+    同花顺云端扫码登录管理器 (方案 A)
+    通过同花顺最新统一认证中心 upass.10jqka.com.cn/scan 接口生成二维码，
+    用户使用同花顺手机 App 扫码后自动获取 Cookie 并绑定/更新账号 (1, 2, 3...)
     """
 
-    # 同花顺passport二维码API
-    _PASSPORT_BASE = "https://passport.10jqka.com.cn"
-    _QR_GENERATE_URL = f"{_PASSPORT_BASE}/iframe/qrcode"
-    _QR_POLL_URL = f"{_PASSPORT_BASE}/iframe/qrcode/query"
-    _QR_CANCEL_URL = f"{_PASSPORT_BASE}/iframe/qrcode/cancel"
+    _UPASS_BASE = "https://upass.10jqka.com.cn"
+    _QR_GENERATE_URL = f"{_UPASS_BASE}/scan/creatCode"
+    _QR_IMG_URL = f"{_UPASS_BASE}/scan/creatImg"
+    _QR_POLL_URL = f"{_UPASS_BASE}/scan/getInfoNew"
 
     def __init__(self):
         self._qrcode_id: Optional[str] = None
-        self._qr_url: Optional[str] = None
-        self._session = requests.Session()
-        self._session.trust_env = False  # 绕过系统代理，直连同花顺服务器
-        self._session.headers.update({
+        self._qr_state: int = 1
+        self._session = self._create_session()
+
+    def _create_session(self) -> requests.Session:
+        s = requests.Session()
+        s.trust_env = False  # 绕过系统代理，直连同花顺服务器
+        s.headers.update({
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                           "(KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
-            "Referer": "https://mncg.10jqka.com.cn/",
+            "Referer": "https://upass.10jqka.com.cn/login?redir=https%3A%2F%2Fmncg.10jqka.com.cn%2Fcgiwt%2Findex%2Findex",
+            "Origin": "https://upass.10jqka.com.cn",
         })
+        s.cookies.set("vvvv", "1", domain="upass.10jqka.com.cn")
+        return s
 
     def generate_qrcode(self) -> Dict:
         """
-        生成登录二维码
-        Returns: {success, qrcode_id, qr_url, qr_image_base64}
+        生成同花顺官方登录二维码
+        Returns: {success, qrcode_id, qr_image_base64}
         """
         try:
-            # 请求二维码 — 带remember=1获取30天免登录
-            resp = self._session.get(
-                self._QR_GENERATE_URL,
-                params={"remember": "1"},
-                timeout=10
-            )
+            import base64
+            self._session = self._create_session()
+            self._qr_state = 1
 
+            resp = self._session.get(self._QR_GENERATE_URL, timeout=10)
             if resp.status_code != 200:
-                return {"success": False, "message": f"请求失败: HTTP {resp.status_code}"}
+                return {"success": False, "message": f"请求二维码失败: HTTP {resp.status_code}"}
 
             data = resp.json()
-            qr_data = data.get("data", {})
-            qr_url = qr_data.get("qrurl", "")
-            qrcode_id = qr_data.get("qrcode_id", "") or qr_data.get("id", "")
-
-            if not qr_url or not qrcode_id:
-                return {"success": False, "message": "未获取到二维码数据", "raw": data}
+            qrcode_id = data.get("qrid", "")
+            if not qrcode_id:
+                return {"success": False, "message": "未获取到二维码ID", "raw": data}
 
             self._qrcode_id = qrcode_id
-            self._qr_url = qr_url
 
-            # 生成二维码图片（base64）
-            qr_image_base64 = self._url_to_qr_base64(qr_url)
+            # 直接拉取同花顺官方生成的二维码 PNG 图片
+            img_resp = self._session.get(
+                self._QR_IMG_URL,
+                params={"qrid": qrcode_id},
+                timeout=10
+            )
+            if img_resp.status_code != 200 or not img_resp.content:
+                return {"success": False, "message": "获取二维码图片失败"}
 
-            logger.info(f"二维码已生成: id={qrcode_id}")
+            qr_image_base64 = base64.b64encode(img_resp.content).decode("ascii")
+            logger.info(f"同花顺扫码二维码已生成: qrid={qrcode_id}")
             return {
                 "success": True,
                 "qrcode_id": qrcode_id,
-                "qr_url": qr_url,
                 "qr_image_base64": qr_image_base64,
             }
 
         except requests.exceptions.Timeout:
-            return {"success": False, "message": "请求超时，请检查网络"}
+            return {"success": False, "message": "请求同花顺认证中心超时"}
         except requests.exceptions.ConnectionError:
-            return {"success": False, "message": "网络连接失败"}
+            return {"success": False, "message": "连接同花顺认证中心失败"}
         except Exception as e:
             logger.error(f"生成二维码失败: {e}")
             return {"success": False, "message": str(e)}
 
+    def _extract_full_cookie_str(self) -> str:
+        """从当前会话提取完整 Cookie 并补充 chameleon v 令牌"""
+        cookie_map = {}
+        for c in self._session.cookies:
+            cookie_map[c.name] = c.value
+
+        # 若缺少同花顺前端 chameleon 生成的 v 令牌，从现有已绑定账户借用有效 v 令牌
+        if "v" not in cookie_map:
+            try:
+                from db_store import db_store
+                for acc in db_store.list_accounts():
+                    raw_c = db_store.get_account_cookie(acc["id"]) or ""
+                    for part in raw_c.split(";"):
+                        if "=" in part:
+                            k, val = part.split("=", 1)
+                            if k.strip() == "v" and val.strip():
+                                cookie_map["v"] = val.strip()
+                                break
+                    if "v" in cookie_map:
+                        break
+            except Exception:
+                pass
+
+        return "; ".join(f"{k}={v}" for k, v in cookie_map.items())
+
     def poll_status(self, qrcode_id: str = None) -> Dict:
         """
-        轮询扫码状态
-        Returns: {success, status, message, cookie?}
-        status: "waiting" / "scanned" / "confirmed" / "expired" / "error"
+        轮询同花顺扫码状态 (upass.10jqka.com.cn/scan/getInfoNew)
+        status 返回码定义:
+          1 = 等待扫码 (waiting)
+          2 = 已扫码，等待手机端点击确认 (scanned)，后续需将 state 置为 2
+          3 = 手机端已确认登录 (confirmed)，Set-Cookie 下发完整通行证
+          0 = 二维码已过期 (expired)
         """
         qid = qrcode_id or self._qrcode_id
         if not qid:
             return {"success": False, "status": "error", "message": "无二维码ID"}
 
         try:
-            resp = self._session.get(
+            resp = self._session.post(
                 self._QR_POLL_URL,
-                params={"id": qid},
+                data={
+                    "qrid": qid,
+                    "state": self._qr_state,
+                    "source": "pc_web",
+                    "page_source": "web_screen",
+                    "request_type": "login",
+                },
                 timeout=10
             )
 
@@ -1154,41 +1232,37 @@ class QRLoginManager:
                 return {"success": False, "status": "error", "message": f"HTTP {resp.status_code}"}
 
             data = resp.json()
-            qr_status = data.get("data", {}).get("status", -1)
-            # status: 0=等待扫码, 1=已扫码等待确认, 2=确认成功, -1=已过期
+            qr_status = int(data.get("status", -1))
 
-            if qr_status == 2 or qr_status == 1:
-                # 扫码成功或已确认 — 提取Cookie
-                # Cookie在response headers的Set-Cookie中
-                cookies_dict = dict(self._session.cookies)
-                cookie_str = "; ".join(f"{k}={v}" for k, v in cookies_dict.items())
+            if qr_status == 1:
+                return {"success": True, "status": "waiting", "message": "请打开同花顺手机App扫描二维码..."}
+            elif qr_status == 2:
+                self._qr_state = 2
+                return {"success": True, "status": "scanned", "message": "📱 已扫码！请在手机同花顺App上点击【确认登录】"}
+            elif qr_status == 3:
+                # 手机已确认，访问一次模拟交易主页激活 PHPSESSID
+                try:
+                    self._session.get(
+                        "https://mncg.10jqka.com.cn/cgiwt/index/index",
+                        headers={"Referer": "https://upass.10jqka.com.cn/"},
+                        timeout=10
+                    )
+                except Exception as e:
+                    logger.debug(f"激活 mncg 主页会话提示: {e}")
 
+                cookie_str = self._extract_full_cookie_str()
                 if cookie_str:
                     return {
                         "success": True,
                         "status": "confirmed",
                         "cookie": cookie_str,
-                        "cookies_dict": cookies_dict,
-                        "message": "扫码成功",
+                        "message": "扫码确认成功，正在同步账户...",
                     }
-                else:
-                    # 尝试从redirect URL获取
-                    redirect_url = data.get("data", {}).get("url", "")
-                    if redirect_url:
-                        return {
-                            "success": True,
-                            "status": "confirmed",
-                            "redirect_url": redirect_url,
-                            "message": "扫码成功，需要跳转获取Cookie",
-                        }
-                    return {"success": False, "status": "scanned", "message": "已扫码，等待Cookie"}
-
+                return {"success": False, "status": "error", "message": "扫码成功但未提取到Cookie"}
             elif qr_status == 0:
-                return {"success": True, "status": "waiting", "message": "等待扫码..."}
-            elif qr_status == -1:
-                return {"success": True, "status": "expired", "message": "二维码已过期，请重新生成"}
+                return {"success": True, "status": "expired", "message": "二维码已过期，请点击刷新"}
             else:
-                return {"success": True, "status": "waiting", "message": f"状态: {qr_status}"}
+                return {"success": True, "status": "waiting", "message": f"等待扫码 (状态:{qr_status})"}
 
         except Exception as e:
             logger.error(f"轮询二维码状态失败: {e}")
@@ -1196,13 +1270,20 @@ class QRLoginManager:
 
     def validate_and_save_cookie(self, cookie: str) -> Dict:
         """
-        验证Cookie并保存（调用web_connector）
+        验证扫码获得的Cookie并自动入库/续签多账户管理器 (按 1, 2, 3... 命名或原地更新)
         """
+        try:
+            from account_manager import account_manager
+            bind_res = account_manager.add_account("", cookie)
+            if bind_res.get("success"):
+                self._save_qr_cookie_record(cookie)
+                return bind_res
+        except Exception as e:
+            logger.warning(f"account_manager 绑定扫码Cookie异常: {e}")
+
         result = web_connector.save_cookie(cookie)
-        if result["success"]:
-            # 额外保存到扫码登录专用文件（带时间戳）
+        if result.get("success"):
             self._save_qr_cookie_record(cookie)
-            logger.info("扫码登录Cookie验证并保存成功")
         return result
 
     def _save_qr_cookie_record(self, cookie: str):
@@ -1259,15 +1340,8 @@ class QRLoginManager:
 
     def cancel_qrcode(self, qrcode_id: str = None):
         """取消二维码（用户关闭弹窗时调用）"""
-        qid = qrcode_id or self._qrcode_id
-        if not qid:
-            return
-        try:
-            self._session.get(self._QR_CANCEL_URL, params={"id": qid}, timeout=5)
-        except Exception:
-            pass
         self._qrcode_id = None
-        self._qr_url = None
+        self._qr_state = 1
 
     @staticmethod
     def _url_to_qr_base64(url: str) -> str:

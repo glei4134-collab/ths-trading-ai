@@ -61,11 +61,12 @@ if not API_TOKEN and _token_file.exists():
     except Exception:
         pass
 
-# 免认证路径（静态资源、健康检查、认证本身、SSE流）
+# 免认证路径（静态资源、健康检查、认证本身、SSE流、书签一键绑定）
 _PUBLIC_PATHS = {'/', '/api/health', '/api/auth/login',
                  '/api/mobile/notifications/stream',
                  '/api/mobile/bind/claim',
-                 '/api/device/bind/claim'}
+                 '/api/device/bind/claim',
+                 '/api/accounts/quick-bind'}
 
 def require_auth():
     """检查 API 认证，未启用认证时直接放行"""
@@ -2141,6 +2142,36 @@ def system_fix():
         return jsonify(res)
     except Exception as e:
         logger.error(f"执行自动修复异常: {e}")
+        return jsonify({"success": False, "message": str(e)})
+
+
+
+@app.route('/api/system/performance', methods=['GET'])
+def system_performance():
+    """获取API网络性能统计与延迟分析"""
+    try:
+        from db_store import db_store
+        limit = request.args.get('limit', default=100, type=int)
+        stats = db_store.get_api_performance_stats(limit=limit)
+        return jsonify({"success": True, "data": stats})
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)})
+
+
+@app.route('/api/system/db-maintenance', methods=['POST'])
+def system_db_maintenance():
+    """手动触发SQLite维护（WAL截断与碎片整理）"""
+    try:
+        from db_store import db_store
+        checkpoint_res = db_store.checkpoint_wal(mode="TRUNCATE")
+        vacuum_res = db_store.vacuum_and_optimize()
+        return jsonify({
+            "success": True,
+            "message": "SQLite维护执行成功",
+            "checkpoint": checkpoint_res,
+            "vacuum": vacuum_res
+        })
+    except Exception as e:
         return jsonify({"success": False, "message": str(e)})
 
 
@@ -4342,6 +4373,97 @@ def list_accounts():
         })
     except Exception as e:
         return jsonify({"success": False, "message": str(e)})
+
+
+@app.route('/api/Accounts/quick-bind', methods=['GET', 'POST', 'OPTIONS'])
+@app.route('/api/accounts/quick-bind', methods=['GET', 'POST', 'OPTIONS'])
+def quick_bind_ths_account():
+    """
+    方案 B: 浏览器书签栏 (Bookmarklet) / 控制台单行命令一键免粘贴同步 Cookie 接口
+    支持从 https://mncg.10jqka.com.cn 通过 window.open GET 或 POST 跨站直传 Cookie，
+    自动识别新账号（按 1, 2, 3 顺序命名）或已有账号（按 gdzh 原地无缝续签同步）
+    """
+    if request.method == 'OPTIONS':
+        resp = Response("", status=200)
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+        return resp
+
+    try:
+        cookie = ""
+        if request.method == 'GET':
+            cookie = (request.args.get("cookie") or "").strip()
+        else:
+            data = request.get_json(silent=True) or request.form or {}
+            cookie = (data.get("cookie") or request.args.get("cookie") or "").strip()
+
+        if not cookie or len(cookie) < 15:
+            msg = "未检测到有效同花顺 Cookie，请确认已在 mncg.10jqka.com.cn 登录"
+            if request.method == 'GET':
+                return Response(_render_quick_bind_html(False, msg), mimetype='text/html')
+            resp = jsonify({"success": False, "message": msg})
+            resp.headers["Access-Control-Allow-Origin"] = "*"
+            return resp
+
+        result = account_manager.add_account("", cookie)
+        if request.method == 'GET' and request.args.get("format") != "json":
+            return Response(
+                _render_quick_bind_html(result.get("success", False), result.get("message", ""), result.get("data")),
+                mimetype='text/html'
+            )
+
+        resp = jsonify(result)
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        return resp
+    except Exception as e:
+        if request.method == 'GET' and request.args.get("format") != "json":
+            return Response(_render_quick_bind_html(False, f"同步异常: {e}"), mimetype='text/html')
+        resp = jsonify({"success": False, "message": str(e)})
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        return resp
+
+
+def _render_quick_bind_html(success: bool, message: str, acc_data: dict = None) -> str:
+    """渲染书签栏一键同步弹出小窗的自动关闭反馈页"""
+    icon = "✅" if success else "❌"
+    color = "#3fb950" if success else "#f85149"
+    title = "同花顺 Cookie 同步成功" if success else "Cookie 同步失败"
+    payload_json = json.dumps({"type": "THS_COOKIE_BOUND", "success": success, "message": message, "account": acc_data or {}}, ensure_ascii=False)
+    return f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{title}</title>
+<style>
+body {{ background:#0d1117; color:#f0f6fc; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; display:flex; align-items:center; justify-content:center; height:100vh; margin:0; text-align:center; }}
+.card {{ background:#161b22; border:1px solid {color}; border-radius:12px; padding:24px 28px; max-width:360px; box-shadow:0 12px 32px rgba(0,0,0,0.6); }}
+.icon {{ font-size:40px; margin-bottom:10px; }}
+.title {{ font-size:16px; font-weight:700; color:{color}; margin-bottom:8px; }}
+.msg {{ font-size:13px; color:#c9d1d9; line-height:1.6; margin-bottom:16px; word-break:break-all; }}
+.sub {{ font-size:11px; color:#8b949e; }}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="icon">{icon}</div>
+  <div class="title">{title}</div>
+  <div class="msg">{message}</div>
+  <div class="sub">{'窗口将在 2 秒后自动关闭...' if success else '请登录同花顺模拟炒股页面后重试'}</div>
+</div>
+<script>
+try {{
+  if (window.opener) {{
+    window.opener.postMessage({payload_json}, '*');
+  }}
+}} catch(e) {{}}
+if ({'true' if success else 'false'}) {{
+  setTimeout(function() {{ window.close(); }}, 2000);
+}}
+</script>
+</body>
+</html>"""
 
 
 @app.route('/api/accounts', methods=['POST'])

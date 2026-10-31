@@ -39,11 +39,14 @@ ame)
   - **d_2124 = 当前最新价 (current_price)**（此前漏提取）
   - **d_2125 = 最新市值 (market_value)**（此前误用 d_2117 股数当作市值，且 uto_trader.py 用 market_value / amount 导致算出 1.0 元异常现价，现已彻底根除）。
 
-### 4. 前端全自动量化座舱升级 (static/index.html)
+### 4. 前端全自动量化座舱升级与手机端适配 (static/index.html, api.py, src/ths_connector.py)
 - 采用黑曜极光量化 HUD 视觉体系（#premium-quant-hud-styles），严格遵循 **A 股红涨（#ff4d4f）绿跌（#00e676）** 标准及正负号显式保留。
-- 修复顶栏 .header（z-index: 99999）与多账号下拉面板 #accountSelectorPanel（z-index: 100001）层级，解决被下方毛玻璃面板遮挡问题。
-- 隐藏顶栏 #aiSchedToggle 停止按钮，防止误触关停后台调度器。
-- 切换账号（switchAccount）时自动静默触发 /api/accounts/sync/<id> 并即时刷新右侧四宫格资产看板与持仓列表，无需手动点同步。
+- **彻底移除冗余“官方交易台 (mncg)”**：删除桌面端顶栏切换按钮、跨域 `iframe` 容器及手机底部导航栏中的“官方交易台”入口，消除后台跨域加载资源消耗。
+- **手机端响应式适配修复 (`≤768px`)**：修复 `.panel` 行内 `display:flex` 覆盖媒体查询的优先级问题；手机底部导航栏保留 **`时序流水` / `策略表决` / `资产风控`** 三大核心面板，初始化默认展示 `策略表决` 并支持候选池表格顺滑滑动。
+- **Cookie 自动化提取双方案（方案 A + 方案 B）**：
+  - **方案 A（云端二维码直扫绑定/续签）**：基于同花顺统一认证中心 `upass.10jqka.com.cn/scan` 接口（`creatCode` / `creatImg` / `getInfoNew`），在前端弹窗直接生成实时登录二维码，手机同花顺 App 扫码确认后自动提取 Cookie 并按 `gdzh` 自动新增（`1, 2, 3...`）或原地更新续签。
+  - **方案 B（浏览器书签栏一键同步 Bookmarklet + 控制台直传命令）**：新增 `/api/accounts/quick-bind` 免粘贴跨站接收接口，支持拖拽 `⚡ 一键同步同花顺Cookie` 到浏览器书签栏一键同步，或复制控制台单行直传命令回车即入库。
+- 切换账号（switchAccount）时自动静默触发 `/api/accounts/sync/<id>` 并即时刷新右侧四宫格资产看板与持仓列表，无需手动点同步。
 
 ---
 

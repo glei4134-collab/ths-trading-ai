@@ -5,6 +5,8 @@ AI统一管理所有账户，账户间数据完全隔离
 """
 
 import logging
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Optional
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -21,13 +23,14 @@ class THSAccountTrader:
         self.connected = False
         self._positions = {}  # 从THS同步的持仓
         self._fund_data = {}  # 资金数据
+        from ths_connector import THSWebConnector
+        self.connector = THSWebConnector(account_id=account_id)
 
     def connect(self, cookie: str) -> Dict:
         """用Cookie连接同花顺并验证"""
         self.cookie = cookie
-        from ths_connector import THSWebConnector
-        connector = THSWebConnector()
-        connector.cookie = cookie
+        self.connector.cookie = cookie
+        connector = self.connector
 
         # 验证Cookie
         fund_result = connector.get_fund()
@@ -51,41 +54,32 @@ class THSAccountTrader:
         }
 
     def get_fund(self) -> Dict:
-        """获取资金信息"""
+        """获取资金信息（复用长连接Session）"""
         if not self.cookie:
             return {"success": False, "message": "未连接"}
-        from ths_connector import THSWebConnector
-        connector = THSWebConnector()
-        connector.cookie = self.cookie
-        return connector.get_fund()
+        self.connector.cookie = self.cookie
+        return self.connector.get_fund()
 
     def get_positions(self) -> Dict:
-        """获取THS持仓"""
+        """获取THS持仓（复用长连接Session）"""
         if not self.cookie:
             return {"success": False, "message": "未连接"}
-        from ths_connector import THSWebConnector
-        connector = THSWebConnector()
-        connector.cookie = self.cookie
-        return connector.get_positions()
+        self.connector.cookie = self.cookie
+        return self.connector.get_positions()
 
     def buy(self, symbol: str, price: float, amount: int) -> Dict:
-        """买入"""
+        """买入（复用长连接Session）"""
         if not self.cookie:
             return {"success": False, "message": "未连接"}
-        from ths_connector import THSWebConnector
-        connector = THSWebConnector()
-        connector.cookie = self.cookie
-        return connector.buy(symbol, price, amount)
+        self.connector.cookie = self.cookie
+        return self.connector.buy(symbol, price, amount)
 
     def sell(self, symbol: str, price: float, amount: int) -> Dict:
-        """卖出"""
+        """卖出（复用长连接Session）"""
         if not self.cookie:
             return {"success": False, "message": "未连接"}
-        from ths_connector import THSWebConnector
-        connector = THSWebConnector()
-        connector.cookie = self.cookie
-        # 获取mkcode和gdzh
-        pos_result = connector.get_positions()
+        self.connector.cookie = self.cookie
+        pos_result = self.connector.get_positions()
         mkcode = ""
         gdzh = ""
         if pos_result["success"]:
@@ -94,7 +88,7 @@ class THSAccountTrader:
                     mkcode = p.get("mkcode", "")
                     gdzh = p.get("gdzh", "")
                     break
-        return connector.sell(symbol, price, amount, mkcode=mkcode, gdzh=gdzh)
+        return self.connector.sell(symbol, price, amount, mkcode=mkcode, gdzh=gdzh)
 
     def sync_from_ths(self) -> Dict:
         """从同花顺同步账户数据，返回同步结果"""
@@ -225,22 +219,41 @@ class AccountManager:
         gdzh = conn_result.get("gdzh", "")
         ky_fund = conn_result.get("ky_fund", 0)
 
-        # 2. 检测是否已绑定过同一账户（通过gdzh查重）
+        # 2. 检测是否已绑定过同一账户（通过gdzh或相同cookie查重 -> 自动原地更新Cookie并同步）
         existing = db_store.list_accounts()
+        matched_acc = None
         for acc in existing:
             if acc.get("ths_gdzh") and gdzh and acc["ths_gdzh"] == gdzh:
-                return {
-                    "success": False,
-                    "message": f"该账户已绑定过（{acc['name']}，账号{gdzh}），请勿重复绑定"
-                }
-        # 也检查cookie是否相同
-        for acc in existing:
-            old_cookie = db_store.get_account_cookie(acc["id"])
-            if old_cookie and old_cookie == cookie:
-                return {
-                    "success": False,
-                    "message": f"该Cookie已绑定过（{acc['name']}），请勿重复绑定"
-                }
+                matched_acc = acc
+                break
+        if not matched_acc:
+            for acc in existing:
+                old_cookie = db_store.get_account_cookie(acc["id"])
+                if old_cookie and old_cookie == cookie:
+                    matched_acc = acc
+                    break
+
+        if matched_acc:
+            acc_id = matched_acc["id"]
+            acc_name = matched_acc.get("name", str(acc_id))
+            db_store.update_account_cookie(acc_id, cookie)
+            db_store.set_active_account_id(acc_id)
+            from ths_connector import web_connector
+            web_connector.cookie = cookie
+            web_connector.connected = True
+            trader = THSAccountTrader(acc_id)
+            trader.cookie = cookie
+            trader.connected = True
+            self.traders[acc_id] = trader
+            sync_result = trader.sync_from_ths()
+            logger.info(f"自动更新已绑定账号 Cookie: {acc_name} (ID={acc_id}, gdzh={gdzh}, 资金={ky_fund})")
+            return {
+                "success": True,
+                "renewed": True,
+                "data": db_store.get_account(acc_id),
+                "sync": sync_result,
+                "message": f"账号 '{acc_name}' Cookie已自动续签同步，可用资金: {ky_fund:,.2f}",
+            }
 
         # 3. 创建账户 (初始开户本金硬约束标准 200,000 元，名称按存入Cookie顺序自动为 1, 2, 3...)
         seq_name = str(len(existing) + 1)
@@ -313,14 +326,36 @@ class AccountManager:
         return db_store.get_global_summary()
 
     def sync_all(self) -> Dict:
-        """同步所有账户"""
+        """并发同步所有账户（非阻塞线程池）"""
+        start_t = time.perf_counter()
         results = {}
         from db_store import db_store
-        for acc in db_store.list_accounts():
+        accounts = db_store.list_accounts()
+        connected_tasks = []
+        for acc in accounts:
             acc_id = acc["id"]
             trader = self.get_trader(acc_id)
             if trader and trader.connected:
-                results[acc_id] = trader.sync_from_ths()
+                connected_tasks.append((acc_id, trader))
+
+        if not connected_tasks:
+            return results
+
+        max_workers = min(len(connected_tasks), 10)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_acc = {
+                executor.submit(trader.sync_from_ths): acc_id
+                for acc_id, trader in connected_tasks
+            }
+            for future in as_completed(future_to_acc):
+                acc_id = future_to_acc[future]
+                try:
+                    results[acc_id] = future.result()
+                except Exception as e:
+                    results[acc_id] = {"success": False, "message": f"并发同步异常: {e}"}
+
+        total_cost_ms = round((time.perf_counter() - start_t) * 1000, 2)
+        logger.info(f"🔄 [CONCURRENT-SYNC] 并发完成 {len(results)} 个账户数据同步，耗时: {total_cost_ms}ms")
         return results
 
     def sync_one(self, account_id: int) -> Dict:
@@ -394,10 +429,28 @@ class AccountManager:
 
     def execute_for_all(self, symbol: str, action: str, price: float,
                         amount_per_account: int = 100) -> Dict:
-        """为所有账户执行交易"""
+        """并发为所有账户下发委托订单（毫秒级并发多路派发）"""
+        start_t = time.perf_counter()
         results = {}
-        for acc_id in self.traders:
-            results[acc_id] = self.execute_for_account(acc_id, symbol, action, price, amount_per_account)
+        acc_ids = list(self.traders.keys())
+        if not acc_ids:
+            return results
+
+        max_workers = min(len(acc_ids), 10)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_acc = {
+                executor.submit(self.execute_for_account, acc_id, symbol, action, price, amount_per_account): acc_id
+                for acc_id in acc_ids
+            }
+            for future in as_completed(future_to_acc):
+                acc_id = future_to_acc[future]
+                try:
+                    results[acc_id] = future.result()
+                except Exception as e:
+                    results[acc_id] = {"success": False, "message": f"并发下单异常: {e}"}
+
+        total_cost_ms = round((time.perf_counter() - start_t) * 1000, 2)
+        logger.info(f"🚀 [CONCURRENT-ORDER] {action} {symbol} 并发多账户下单完成: {len(results)}个账户, 总耗时: {total_cost_ms}ms")
         return results
 
 
