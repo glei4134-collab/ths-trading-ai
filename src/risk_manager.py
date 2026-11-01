@@ -402,6 +402,8 @@ class RiskManager:
         - 中1/3 (mid): 正常交易，攻守兼备
         - 后1/3 (late): 保守防守，保住排名
         """
+        from order_guard import TEAM_MAX_SINGLE_PCT
+
         progress = days_elapsed / total_days if total_days > 0 else 0
 
         if progress < 0.33:
@@ -409,7 +411,7 @@ class RiskManager:
             return {
                 "phase": "early",
                 "phase_name": "激进建仓期",
-                "max_single_position": 0.30,  # 单股30%（从50%降到30%）
+                "max_single_position": min(0.30, TEAM_MAX_SINGLE_PCT),
                 "max_total_position": 0.90,   # 总仓90%
                 "max_position_count": 4,       # 最多4只（集中）
                 "stop_loss": 0.06,             # 止损6%
@@ -422,7 +424,7 @@ class RiskManager:
             return {
                 "phase": "mid",
                 "phase_name": "攻守均衡期",
-                "max_single_position": 0.25,  # 单股25%
+                "max_single_position": min(0.25, TEAM_MAX_SINGLE_PCT),
                 "max_total_position": 0.75,   # 总仓75%
                 "max_position_count": 5,
                 "stop_loss": 0.05,
@@ -435,7 +437,7 @@ class RiskManager:
             return {
                 "phase": "late",
                 "phase_name": "防守保本期",
-                "max_single_position": 0.25,
+                "max_single_position": min(0.25, TEAM_MAX_SINGLE_PCT),
                 "max_total_position": 0.70,
                 "max_position_count": 6,
                 "stop_loss": 0.04,

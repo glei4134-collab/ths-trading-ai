@@ -1050,6 +1050,21 @@ def list_accounts():
         return jsonify({"success": False, "message": str(e)})
 
 
+@account_bp.route('/api/accounts/bind-ticket', methods=['POST'])
+def issue_account_bind_ticket():
+    """登录后签发 10 分钟一次性绑定票据，供书签栏 quick-bind 使用。"""
+    from bind_ticket import TTL_SECONDS, issue_bind_ticket
+    ticket = issue_bind_ticket()
+    return jsonify({
+        "success": True,
+        "data": {
+            "ticket": ticket,
+            "ttl_seconds": TTL_SECONDS,
+            "bind_url": f"/api/accounts/quick-bind?ticket={ticket}",
+        }
+    })
+
+
 @account_bp.route('/api/Accounts/quick-bind', methods=['GET', 'POST', 'OPTIONS'])
 @account_bp.route('/api/accounts/quick-bind', methods=['GET', 'POST', 'OPTIONS'])
 def quick_bind_ths_account():

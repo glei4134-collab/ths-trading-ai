@@ -329,10 +329,12 @@ class CompetitionManager:
         quantity = order.get("quantity", 0)
         price = order.get("price", 0)
 
-        # 1. 检查是否在交易时间
-        if not self.is_trading_hours():
+        from order_guard import is_order_session
+
+        # 1. 检查是否在可报单时段（含 09:15 集合竞价）
+        if not is_order_session():
             market_status = self.get_market_status()
-            return False, f"当前不在交易时间 ({market_status['status_text']})，下次开盘: {market_status['next_open']}"
+            return False, f"当前不在可报单时段 ({market_status['status_text']})，下次开盘: {market_status['next_open']}"
 
         # 2. 检查最小交易单位
         min_unit = rules.get("min_order_unit", 100)
@@ -354,12 +356,13 @@ class CompetitionManager:
                 # 停牌: 成交量为0
                 if quote.get("volume", 0) == 0:
                     return False, f"{symbol} 当前停牌，无法交易"
-                # 涨停: 无法买入
-                if action == "buy" and quote.get("change_pct", 0) >= 9.9:
-                    return False, f"{symbol} 涨停中，无法买入"
-                # 跌停: 无法卖出
-                if action == "sell" and quote.get("change_pct", 0) <= -9.9:
-                    return False, f"{symbol} 跌停中，无法卖出"
+                from order_guard import board_limit_pct
+                limit_pct = board_limit_pct(symbol) * 100.0
+                chg = float(quote.get("change_pct") or 0)
+                if action == "buy" and chg >= (limit_pct - 0.05):
+                    return False, f"{symbol} 涨停附近(+{chg:.2f}% / 板{limit_pct:.0f}%)，无法买入"
+                if action == "sell" and chg <= -(limit_pct - 0.05):
+                    return False, f"{symbol} 跌停附近({chg:.2f}% / 板{limit_pct:.0f}%)，无法卖出"
         except Exception:
             # 获取行情失败不阻塞交易，仅做基础验证
             pass

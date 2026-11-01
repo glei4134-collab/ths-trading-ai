@@ -22,6 +22,8 @@ deploy_railway.py
 
 config/cookies.json
 config/ai_config.local.json
+config/api_token.json
+legacy_api_monolith.py
 
 *.bak
 *.bak*

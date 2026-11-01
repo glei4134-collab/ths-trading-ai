@@ -3,7 +3,7 @@ builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
 
 [deploy]
-startCommand = "python api.py"
+startCommand = "python run_api.py"
 healthcheckPath = "/api/accounts/summary"
 healthcheckTimeout = 30
 restartPolicyType = "ON_FAILURE"

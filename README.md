@@ -83,6 +83,8 @@ pip install -r requirements.txt
 python desktop_app.py
 ```
 
+Web 服务请用 `python run_api.py`（不要再运行已冻结的 `api.py`）。生产：`gunicorn -c deploy/gunicorn_conf.py api:app`。
+
 ### 方式2: 打包版
 ```bash
 dist/THS_Trading_AI/THS_Trading_AI.exe

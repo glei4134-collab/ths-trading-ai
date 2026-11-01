@@ -317,34 +317,48 @@ class AutoTrader:
             max_single = self.config["max_position_ratio"]
             max_total = self.config["max_total_position"]
 
-        # 1. 检查交易时间
-        if self.config["trading_hours_only"]:
-            if not competition_manager.is_trading_hours():
-                market = competition_manager.get_market_status()
-                warnings.append(f"当前非交易时间 ({market['status_text']})")
+        from order_guard import TEAM_MAX_SINGLE_PCT, fetch_quote_silent, validate_pre_trade
+        max_single = min(float(max_single), TEAM_MAX_SINGLE_PCT)
 
-        # 2. 检查整手（100股整数倍）
-        if amount % 100 != 0:
-            warnings.append(f"买入数量必须是100的整数倍，当前{amount}股")
-            allowed = False
+        total_assets = self.balance + sum(p.market_value for p in self.positions.values())
+        existing_value = 0.0
+        existing_shares = 0
+        available_shares = None
+        if symbol in self.positions:
+            pos = self.positions[symbol]
+            existing_shares = int(pos.amount)
+            existing_value = pos.current_price * pos.amount
+            today = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d")
+            if action == "sell":
+                if pos.buy_date == today:
+                    available_shares = 0
+                else:
+                    available_shares = pos.amount
 
-        # 3. 检查涨跌停
-        try:
-            from fast_data import fetch_realtime_single
-            quote = fetch_realtime_single(symbol)
-            if quote:
-                current_price = float(quote.get("price", 0))
-                pre_close = float(quote.get("pre_close", 0))
-                if pre_close > 0:
-                    change_pct = (current_price / pre_close - 1) * 100
-                    if action == "buy" and change_pct >= 9.9:
-                        warnings.append(f"{symbol} 涨停中(+{change_pct:.1f}%)，无法买入")
-                        allowed = False
-                    elif action == "sell" and change_pct <= -9.9:
-                        warnings.append(f"{symbol} 跌停中({change_pct:.1f}%)，无法卖出")
-                        allowed = False
-        except Exception:
-            pass
+        quote = fetch_quote_silent(symbol)
+        skip_session = not self.config.get("trading_hours_only", True)
+        guard = validate_pre_trade(
+            symbol, action, price, amount,
+            total_assets=total_assets,
+            available_cash=self.balance,
+            existing_position_value=existing_value,
+            existing_shares=existing_shares,
+            available_shares=available_shares,
+            quote=quote,
+            skip_session_check=skip_session,
+            max_single_pct=max_single,
+        )
+        if not guard.allowed:
+            warnings.append(guard.message)
+            return {"allowed": False, "warnings": warnings, "amount": 0}
+        amount = guard.amount
+
+        # 1. 检查交易时间（闸门已拦截报单窗口外；此处保留文案兼容）
+        if self.config["trading_hours_only"] and not competition_manager.is_trading_hours():
+            if not skip_session:
+                pass
+
+        # 2-3. 整手 / 涨跌停已由 order_guard 处理
 
         # 4. 检查流动性（成交量过低警告）
         try:
@@ -376,12 +390,12 @@ class AutoTrader:
                 warnings.append(f"余额不足: 需要 {total_cost:.2f}，可用 {self.balance:.2f}")
                 allowed = False
 
-            # 检查单只股票仓位
+            # 检查单只股票仓位（order_guard 已按 35% 硬顶裁剪手数）
             if symbol in self.positions:
                 current_value = self.positions[symbol].current_price * self.positions[symbol].amount
                 new_value = current_value + trade_amount
                 total_assets = self.balance + sum(p.market_value for p in self.positions.values())
-                if total_assets > 0 and new_value / total_assets > max_single:
+                if total_assets > 0 and new_value / total_assets > max_single + 1e-9:
                     warnings.append(f"单只股票仓位将超过 {max_single*100:.0f}%（比赛阶段限制）")
                     allowed = False
 
@@ -402,14 +416,12 @@ class AutoTrader:
             elif amount > self.positions[symbol].amount:
                 warnings.append(f"持仓不足: 持有 {self.positions[symbol].amount}，卖出 {amount}")
                 allowed = False
-            # T+1 检查
-            elif self.positions[symbol].buy_date == datetime.now(ZoneInfo('Asia/Shanghai')).strftime("%Y-%m-%d"):
-                warnings.append(f"{symbol} 今日买入，T+1限制无法卖出")
-                allowed = False
+            # T+1 已由 order_guard 处理
 
         return {
             "allowed": allowed,
-            "warnings": warnings
+            "warnings": warnings,
+            "amount": amount,
         }
 
     def create_order(self, symbol: str, action: str, amount: int, price: float,
@@ -455,7 +467,7 @@ class AutoTrader:
             except Exception as opt_err:
                 logger.debug(f"AutoTrader 盘口优化跳过: {opt_err}")
 
-        # 风控检查
+        # 风控检查（含团队赛 35% 硬顶 / 整手 / 板块涨跌停 / T+1）
         risk_check = self.check_risk(order.symbol, order.action, order.price, order.amount)
         if not risk_check["allowed"]:
             order.status = OrderStatus.FAILED
@@ -464,6 +476,8 @@ class AutoTrader:
                 "success": False,
                 "message": order.notes
             }
+        if risk_check.get("amount"):
+            order.amount = int(risk_check["amount"])
 
         # ★ 尝试通过真实THS连接器执行交易 (支持TWAP微批次)
         real_executed = False

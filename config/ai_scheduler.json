@@ -2,6 +2,6 @@
   "enabled": true,
   "interval_minutes": 10,
   "max_trades_per_day": 999,
-  "position_limit_pct": 1.0,
+  "position_limit_pct": 0.35,
   "scan_top_n": 30
 }

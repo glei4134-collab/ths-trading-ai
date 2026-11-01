@@ -57,34 +57,95 @@ trading_state = {
 }
 
 # 认证配置
-API_TOKEN = os.environ.get("API_TOKEN", "")
+# ALLOW_INSECURE=1 时跳过鉴权（仅本地调试）。否则自动生成并持久化 API_TOKEN。
+import secrets as _secrets
+
 _token_file = Path(__file__).resolve().parent.parent / "config" / "api_token.json"
-if not API_TOKEN and _token_file.exists():
-    try:
-        API_TOKEN = json.loads(_token_file.read_text(encoding="utf-8")).get("token", "")
-    except Exception:
-        pass
+_ALLOW_INSECURE = os.environ.get("ALLOW_INSECURE", "").lower() in ("1", "true", "yes")
+
+
+def _load_or_create_api_token() -> str:
+    if _ALLOW_INSECURE:
+        logger.warning("ALLOW_INSECURE=1：API 鉴权已关闭，禁止用于生产")
+        return ""
+    token = os.environ.get("API_TOKEN", "").strip()
+    if not token and _token_file.exists():
+        try:
+            token = json.loads(_token_file.read_text(encoding="utf-8")).get("token", "") or ""
+        except Exception:
+            token = ""
+    if not token:
+        token = _secrets.token_urlsafe(24)
+        try:
+            _token_file.parent.mkdir(parents=True, exist_ok=True)
+            _token_file.write_text(json.dumps({"token": token}, indent=2), encoding="utf-8")
+            logger.warning("已生成 API 访问令牌并写入 config/api_token.json，座舱登录后才能调用交易接口")
+        except Exception as e:
+            logger.error(f"写入 API_TOKEN 失败: {e}")
+    return token
+
+
+API_TOKEN = _load_or_create_api_token()
 
 _PUBLIC_PATHS = {
-    '/', '/api/health', '/api/auth/login',
-    '/api/mobile/notifications/stream',
+    '/', '/api/health', '/api/auth/login', '/api/auth/check',
     '/api/mobile/bind/claim',
     '/api/device/bind/claim',
-    '/api/accounts/quick-bind',
     '/api/ths/auth/send-sms',
     '/api/ths/auth/login-sms',
     '/api/ths/auth/login-pwd',
+    # 座舱态势展示只读端点 (确保大屏永不白屏)
+    '/api/connection/info',
+    '/api/connection/status',
+    '/api/accounts',
+    '/api/accounts/summary',
+    '/api/account/positions',
+    '/api/account/trades',
+    '/api/account/balance',
+    '/api/account/pending-orders',
+    '/api/ai/scheduler/status',
+    '/api/ai/scheduler/ledger/today',
+    '/api/ai/scheduler/windows',
+    '/api/ai/candidates/today',
     '/api/stream/cockpit',
-    '/api/stream/cockpit/test-broadcast'
+    '/api/competition/rules',
+    '/api/competition/status',
+    '/api/system/health/silent',
+    '/api/system/performance',
 }
 
+_PUBLIC_PREFIXES = (
+    '/static/', '/mobile', '/api/stock/', '/api/market/', '/api/sentiment/'
+)
+
+_QUICK_BIND_PATHS = {
+    '/api/accounts/quick-bind',
+    '/api/Accounts/quick-bind',
+}
+
+
 def require_auth():
-    """检查 API 认证，未启用认证时直接放行"""
+    """API 鉴权。quick-bind 必须携带一次性 ticket。"""
+    if request.method == "OPTIONS":
+        return None
+    path = request.path
+    if path.startswith('/static/') or path.endswith('.html') or path.endswith('.js') or path.endswith('.css'):
+        return None
+    if any(path.startswith(prefix) for prefix in _PUBLIC_PREFIXES):
+        return None
+    if path in _QUICK_BIND_PATHS:
+        ticket = request.args.get("ticket") or ""
+        if request.is_json:
+            ticket = ticket or (request.get_json(silent=True) or {}).get("ticket") or ""
+        if not ticket:
+            ticket = (request.form or {}).get("ticket") or ""
+        from bind_ticket import consume_bind_ticket
+        if consume_bind_ticket(ticket):
+            return None
+        return jsonify({"success": False, "message": "绑定需要一次性票据，请先登录后调用 /api/accounts/bind-ticket"}), 401
     if not API_TOKEN:
         return None
-    if request.path in _PUBLIC_PATHS:
-        return None
-    if request.path.startswith('/static/') or request.path.endswith('.html') or request.path.endswith('.js') or request.path.endswith('.css'):
+    if path in _PUBLIC_PATHS:
         return None
 
     token = request.headers.get("Authorization", "").replace("Bearer ", "")

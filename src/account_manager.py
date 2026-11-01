@@ -569,12 +569,124 @@ class AccountManager:
         trader = self.get_trader(account_id)
         return trader._order_lock if trader else None
 
+    def place_order(self, account_id: int, symbol: str, action: str,
+                    price: float, amount: int, name: str = "",
+                    dry_run: bool = False, persist: bool = True,
+                    skip_optimizer: bool = False) -> Dict:
+        """
+        账户下单唯一入口：先过 order_guard，成功后才写 trades。
+        失败委托绝不落成交账。
+        """
+        from order_guard import fetch_quote_silent, validate_pre_trade
+        from db_store import db_store
+
+        trader = self.get_trader(account_id)
+        if not trader and not dry_run:
+            return {"success": False, "message": "账户未连接", "recorded": False}
+
+        acc = db_store.get_account(account_id) or {}
+        pos_dict = db_store.get_positions(account_id) or {}
+        tot_assets = float(acc.get("total_assets") or acc.get("balance") or 0)
+        cash = float(acc.get("ky_fund") or acc.get("balance") or 0)
+        pos = pos_dict.get(symbol) or {}
+        existing_shares = int(pos.get("amount") or 0)
+        existing_val = existing_shares * float(price or 0)
+        available_shares = None
+        if action == "sell" and trader:
+            try:
+                pos_res = trader.get_positions()
+                if pos_res.get("success"):
+                    for p in pos_res.get("data", {}).get("positions", []):
+                        if p.get("symbol") == symbol:
+                            available_shares = int(float(p.get("available") or 0))
+                            existing_shares = int(float(p.get("amount") or existing_shares))
+                            break
+            except Exception:
+                pass
+
+        quote = fetch_quote_silent(symbol)
+        guard = validate_pre_trade(
+            symbol, action, price, amount,
+            total_assets=tot_assets,
+            available_cash=cash,
+            existing_position_value=existing_val,
+            existing_shares=existing_shares,
+            available_shares=available_shares,
+            quote=quote,
+        )
+        if not guard.allowed:
+            logger.info(f"下单闸门拒绝 账户#{account_id} {action} {symbol}: {guard.message}")
+            return {"success": False, "message": guard.message, "code": guard.code, "recorded": False, "amount": 0}
+
+        amount = guard.amount
+        if dry_run:
+            return {
+                "success": True, "message": "演练通过闸门，未向券商发单",
+                "amount": amount, "recorded": False, "dry_run": True,
+            }
+
+        if skip_optimizer:
+            if action == "buy":
+                result = trader.buy(symbol, price, amount)
+            elif action == "sell":
+                result = trader.sell(symbol, price, amount)
+            else:
+                result = {"success": False, "message": f"不支持的动作 {action}"}
+        else:
+            result = self.execute_for_account(account_id, symbol, action, price, amount)
+
+        result = dict(result or {})
+        result["amount"] = amount
+        if result.get("success") and persist:
+            now_s = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S")
+            db_store.add_trade({
+                "time": now_s,
+                "action": action,
+                "symbol": symbol,
+                "name": name or symbol,
+                "amount": amount,
+                "price": price,
+                "total": round(float(price) * amount, 2),
+                "balance": round(cash - (price * amount if action == "buy" else -price * amount), 2),
+                "mode": "real" if trader and trader.connected else "simulated",
+            }, account_id=account_id)
+            result["recorded"] = True
+            try:
+                trader.sync_from_ths()
+            except Exception:
+                pass
+        else:
+            result["recorded"] = False
+        return result
+
     def execute_for_account(self, account_id: int, symbol: str, action: str,
                             price: float, amount: int) -> Dict:
         """为指定账户执行交易（经过单账户细粒度锁保护 + OBI/涨停跨档抢筹优化 + TWAP微批次）"""
+        from order_guard import fetch_quote_silent, validate_pre_trade
+        from db_store import db_store
+
         trader = self.get_trader(account_id)
         if not trader:
             return {"success": False, "message": "账户未连接"}
+
+        acc = db_store.get_account(account_id) or {}
+        pos_dict = db_store.get_positions(account_id) or {}
+        tot_assets = float(acc.get("total_assets") or acc.get("balance") or 0)
+        cash = float(acc.get("ky_fund") or acc.get("balance") or 0)
+        pos = pos_dict.get(symbol) or {}
+        existing_shares = int(pos.get("amount") or 0)
+        guard = validate_pre_trade(
+            symbol, action, price, amount,
+            total_assets=tot_assets,
+            available_cash=cash,
+            existing_position_value=existing_shares * float(price or 0),
+            existing_shares=existing_shares,
+            quote=fetch_quote_silent(symbol),
+        )
+        if not guard.allowed:
+            return {"success": False, "message": guard.message, "code": guard.code}
+        amount = guard.amount
+
         if action == "buy":
             # 盘口深度与 OBI / 涨停抢筹评估
             try:
@@ -753,13 +865,14 @@ class AccountManager:
                 trader = self.get_trader(acc_id)
                 if not trader or not trader.connected:
                     return {"success": False, "message": "账户已离线", "shares": 0}
-                if action == "buy":
-                    res = trader.buy(symbol, effective_price, sub_amt)
-                elif action == "sell":
-                    res = trader.sell(symbol, effective_price, sub_amt)
+                if action in ("buy", "sell"):
+                    res = self.place_order(
+                        acc_id, symbol, action, effective_price, sub_amt,
+                        skip_optimizer=True, persist=True,
+                    )
                 else:
                     res = trader.cancel_all_orders()
-                res["shares"] = sub_amt
+                res["shares"] = res.get("amount", sub_amt)
                 if is_pegged:
                     res["pegged"] = True
                     res["peg_notes"] = peg_notes

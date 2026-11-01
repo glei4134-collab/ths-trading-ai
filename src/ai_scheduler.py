@@ -52,7 +52,7 @@ _DEFAULT_CONFIG = {
     "enabled": True,
     "interval_minutes": 10,       # 分析间隔（分钟）— 更频繁
     "max_trades_per_day": 999,    # 无上限
-    "position_limit_pct": 1.0,    # 单股最大仓位100%（AI自主决定）
+    "position_limit_pct": 0.35,   # 单股硬顶 35%（团队赛红线）
     "scan_top_n": 30,             # 每次扫描前30只
 }
 
@@ -64,7 +64,7 @@ class AIScheduler:
         self.enabled = True
         self.interval_minutes = 10
         self.max_trades_per_day = 999
-        self.position_limit_pct = 1.0
+        self.position_limit_pct = 0.35
         self.scan_top_n = 30
 
         self._thread: Optional[threading.Thread] = None
@@ -845,27 +845,23 @@ class AIScheduler:
                             continue
 
                         if dry_run or not self.enabled:
-                            executed_orders.append(f"[{acc_name}] [模拟演练] 买入 {target_buy['name']}({sym}) {buy_amount}股 @ {px}元")
+                            order_res = account_manager.place_order(
+                                acc_id, sym, "buy", px, buy_amount,
+                                name=target_buy["name"], dry_run=True,
+                            )
+                            executed_orders.append(
+                                f"[{acc_name}] [模拟演练] 买入 {target_buy['name']}({sym}) "
+                                f"{order_res.get('amount', buy_amount)}股 @ {px}元 | {order_res.get('message')}"
+                            )
                         else:
-                            order_res = trader.buy(sym, px, buy_amount)
+                            order_res = account_manager.place_order(
+                                acc_id, sym, "buy", px, buy_amount, name=target_buy["name"],
+                            )
                             status_desc = "委托成功" if order_res.get("success") else order_res.get("message", "失败")
-                            executed_orders.append(f"[{acc_name}] [实盘委托] {target_buy['name']}({sym}) {buy_amount}股 @ {px}元 | {status_desc}")
-                            db_store.add_trade({
-                                "time": datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S"),
-                                "symbol": sym,
-                                "name": target_buy["name"],
-                                "action": "buy",
-                                "amount": buy_amount,
-                                "price": px,
-                                "total": round(px * buy_amount, 2),
-                                "balance": round(avail_fund - (px * buy_amount if order_res.get("success") else 0), 2),
-                                "mode": "real"
-                            }, account_id=acc_id)
-                            if order_res.get("success"):
-                                try:
-                                    trader.sync_from_ths()
-                                except Exception:
-                                    pass
+                            executed_orders.append(
+                                f"[{acc_name}] [实盘委托] {target_buy['name']}({sym}) "
+                                f"{order_res.get('amount', buy_amount)}股 @ {px}元 | {status_desc}"
+                            )
 
             self._call_auction_done = True
             duration_ms = int((_time.time() - t0) * 1000)
@@ -997,9 +993,7 @@ class AIScheduler:
             self._handle_pending_orders()
 
             risk_actions = []
-            # 今日（2026-10-30）尾盘止损保护性暂停：仅执行风控扫描与日志记录，暂停自动触发卖出委托，次日自动恢复
-            today_str = self.now().strftime("%Y-%m-%d")
-            pause_sell_today = (today_str == "2026-10-30")
+            pause_sell_today = False
             try:
                 from db_store import db_store
                 from account_manager import account_manager
@@ -1072,22 +1066,13 @@ class AIScheduler:
                                 if pause_sell_today:
                                     action_msg += " [今日保护性暂停卖出，次日恢复]"
                                 elif not dry_run and self.enabled:
-                                    trader.sell(sym, cur_p, amt)
-                                    action_msg += " [已卖出]"
-                                    db_store.add_trade({
-                                        "time": datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S"),
-                                        "action": "sell",
-                                        "symbol": sym,
-                                        "name": p_name,
-                                        "amount": amt,
-                                        "price": cur_p,
-                                        "total": round(cur_p * amt, 2),
-                                        "mode": "real"
-                                    }, account_id=acc_id)
-                                    try:
-                                        trader.sync_from_ths()
-                                    except Exception:
-                                        pass
+                                    sell_res = account_manager.place_order(
+                                        acc_id, sym, "sell", cur_p, amt, name=p_name,
+                                    )
+                                    if sell_res.get("success"):
+                                        action_msg += " [已卖出]"
+                                    else:
+                                        action_msg += f" [卖出失败:{sell_res.get('message')}]"
                                 else:
                                     action_msg += " [演练模拟卖出]"
                                 risk_actions.append(action_msg)
@@ -1104,22 +1089,13 @@ class AIScheduler:
                                         if pause_sell_today:
                                             action_msg += " [今日保护性暂停减仓，次日恢复]"
                                         elif not dry_run and self.enabled:
-                                            trader.sell(sym, cur_p, sell_shares)
-                                            action_msg += " [已减仓]"
-                                            db_store.add_trade({
-                                                "time": datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S"),
-                                                "action": "sell",
-                                                "symbol": sym,
-                                                "name": p_name,
-                                                "amount": sell_shares,
-                                                "price": cur_p,
-                                                "total": round(cur_p * sell_shares, 2),
-                                                "mode": "real"
-                                            }, account_id=acc_id)
-                                            try:
-                                                trader.sync_from_ths()
-                                            except Exception:
-                                                pass
+                                            sell_res = account_manager.place_order(
+                                                acc_id, sym, "sell", cur_p, sell_shares, name=p_name,
+                                            )
+                                            if sell_res.get("success"):
+                                                action_msg += " [已减仓]"
+                                            else:
+                                                action_msg += f" [减仓失败:{sell_res.get('message')}]"
                                         else:
                                             action_msg += " [演练模拟减仓]"
                                         risk_actions.append(action_msg)
@@ -2164,52 +2140,23 @@ A股交易时段: 上午9:30-11:30, 下午13:00-15:00
                     logger.warning(f"{symbol} 价格为0，跳过")
                     continue
 
-                # ===== 比赛规则校验 =====
-                # 涨停检查
-                change_pct = float(stock_data.get("change_pct", 0))
-                if action == "buy" and change_pct >= 9.9:
-                    logger.info(f"📊 {symbol} 涨停中(+{change_pct:.1f}%)，无法买入，跳过")
-                    continue
-                if action == "sell" and change_pct <= -9.9:
-                    logger.info(f"📊 {symbol} 跌停中({change_pct:.1f}%)，无法卖出，跳过")
-                    continue
+                # 涨跌停 / 整手 / 35% 仓位由 order_guard 统一拦截，此处不再用 9.9% 一刀切
 
-                # ===== CRIT-1: 多账户矩阵交易 (Mode B) / 单账户 AutoTrader 兜底 =====
                 from db_store import db_store
                 from account_manager import account_manager
+                from order_guard import TEAM_MAX_SINGLE_PCT, round_lot
                 accounts = db_store.list_accounts()
                 valid_accounts = [a for a in accounts if db_store.get_account_cookie(a["id"]) and not db_store.get_account_cookie(a["id"]).startswith("sandbox_")]
 
                 if not valid_accounts:
-                    # 单账户回退逻辑
-                    if action == "buy":
-                        try:
-                            from auto_trader import auto_trader as _at
-                            total_assets = _at.balance + sum(p.market_value for p in _at.positions.values())
-                            existing_value = 0
-                            if symbol in _at.positions:
-                                existing_value = _at.positions[symbol].market_value
-                            buy_value = price * amount
-                            if total_assets > 0 and (existing_value + buy_value) / total_assets > 0.30:
-                                max_buy = int((total_assets * 0.30 - existing_value) / price / 100) * 100
-                                if max_buy < 100:
-                                    logger.info(f"📊 {symbol} 仓位已达30%上限，跳过")
-                                    continue
-                                amount = max_buy
-                                logger.info(f"📊 {symbol} 调整买入数量为{amount}股（仓位限制30%）")
-                        except Exception:
-                            pass
-
                     from auto_trader import auto_trader
                     if not auto_trader.enabled:
                         auto_trader.enabled = True
-
                     order = auto_trader.create_order(symbol, action, amount, price)
                     result = auto_trader.execute_order(order, stock_data)
                     success = result.get("success", False)
                     result_msg = result.get("message", "")
                 else:
-                    # 多账户矩阵并发独立交易 (Mode B)
                     overall_success = False
                     exec_results = []
                     for acc in valid_accounts:
@@ -2219,52 +2166,27 @@ A股交易时段: 上午9:30-11:30, 下午13:00-15:00
                         if not trader or not trader.connected:
                             continue
 
-                        tot_assets = float(acc.get("total_assets") or acc.get("balance") or 100000.0)
+                        tot_assets = float(acc.get("total_assets") or acc.get("balance") or 200000.0)
                         avail_balance = float(acc.get("ky_fund") or acc.get("balance") or 0.0)
                         pos_dict = db_store.get_positions(acc_id)
+                        stock_name = stock_data.get("name", symbol)
 
                         if action == "buy":
-                            # 独立检查单账户 30% 仓位限额
                             existing_shares = pos_dict.get(symbol, {}).get("amount", 0)
                             existing_val = existing_shares * price
-                            max_allowed_val = tot_assets * 0.30
+                            max_allowed_val = tot_assets * TEAM_MAX_SINGLE_PCT
                             if existing_val >= max_allowed_val:
-                                logger.info(f"📊 [{acc_name}] {symbol} 已达30%上限(现持{existing_shares}股)，跳过")
+                                logger.info(f"📊 [{acc_name}] {symbol} 已达{TEAM_MAX_SINGLE_PCT:.0%}上限，跳过")
                                 continue
                             room_val = min(max_allowed_val - existing_val, avail_balance * 0.95)
-                            acc_amount = int((room_val / price) // 100 * 100)
+                            acc_amount = round_lot(int(room_val / price)) if price > 0 else 0
                             if acc_amount < 100:
                                 logger.info(f"📊 [{acc_name}] 资金或上限不足购买1手 {symbol}，跳过")
                                 continue
-
-                            if not self.enabled:
-                                acc_res = {"success": True, "message": "模拟演练成功"}
-                            else:
-                                acc_res = trader.buy(symbol, price, acc_amount)
-
-                            acc_ok = acc_res.get("success", False)
-                            if acc_ok:
-                                overall_success = True
-                            status_txt = '成功' if acc_ok else acc_res.get('message', '失败')
-                            exec_results.append(f"[{acc_name}:{acc_amount}股:{status_txt}]")
-
-                            db_store.add_trade({
-                                "time": datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%H:%M:%S"),
-                                "action": "buy",
-                                "symbol": symbol,
-                                "name": stock_data.get("name", symbol),
-                                "amount": acc_amount,
-                                "price": price,
-                                "total": round(price * acc_amount, 2),
-                                "balance": round(avail_balance - (price * acc_amount if acc_ok else 0), 2),
-                                "mode": "real" if trader.connected else "simulated"
-                            }, account_id=acc_id)
-                            if acc_ok:
-                                try:
-                                    trader.sync_from_ths()
-                                except Exception:
-                                    pass
-
+                            acc_res = account_manager.place_order(
+                                acc_id, symbol, "buy", price, acc_amount,
+                                name=stock_name, dry_run=not self.enabled,
+                            )
                         elif action == "sell":
                             pos = pos_dict.get(symbol)
                             if not pos or pos.get("amount", 0) <= 0:
@@ -2273,34 +2195,19 @@ A股交易时段: 上午9:30-11:30, 下午13:00-15:00
                             sell_shares = min(hold_shares, amount) if amount > 0 else hold_shares
                             if sell_shares <= 0:
                                 continue
+                            acc_res = account_manager.place_order(
+                                acc_id, symbol, "sell", price, sell_shares,
+                                name=stock_name, dry_run=not self.enabled,
+                            )
+                        else:
+                            continue
 
-                            if not self.enabled:
-                                acc_res = {"success": True, "message": "模拟演练成功"}
-                            else:
-                                acc_res = trader.sell(symbol, price, sell_shares)
-
-                            acc_ok = acc_res.get("success", False)
-                            if acc_ok:
-                                overall_success = True
-                            status_txt = '成功' if acc_ok else acc_res.get('message', '失败')
-                            exec_results.append(f"[{acc_name}:{sell_shares}股:{status_txt}]")
-
-                            db_store.add_trade({
-                                "time": datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%H:%M:%S"),
-                                "action": "sell",
-                                "symbol": symbol,
-                                "name": stock_data.get("name", symbol),
-                                "amount": sell_shares,
-                                "price": price,
-                                "total": round(price * sell_shares, 2),
-                                "balance": round(avail_balance + (price * sell_shares if acc_ok else 0), 2),
-                                "mode": "real" if trader.connected else "simulated"
-                            }, account_id=acc_id)
-                            if acc_ok:
-                                try:
-                                    trader.sync_from_ths()
-                                except Exception:
-                                    pass
+                        acc_ok = acc_res.get("success", False)
+                        if acc_ok:
+                            overall_success = True
+                        filled = acc_res.get("amount", 0)
+                        status_txt = "成功" if acc_ok else acc_res.get("message", "失败")
+                        exec_results.append(f"[{acc_name}:{filled}股:{status_txt}]")
 
                     success = overall_success
                     result_msg = "; ".join(exec_results) if exec_results else "无符合持仓/资金条件的账户"

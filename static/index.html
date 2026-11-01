@@ -13,6 +13,29 @@
     <title>同花顺模拟比赛AI交易系统</title>
     <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
+    <script>
+        // 自动注入 API Token 拦截器 (透明支持 Authorization: Bearer <token>)
+        (function() {
+            const origFetch = window.fetch;
+            window.fetch = function(url, options) {
+                try {
+                    options = options || {};
+                    const token = localStorage.getItem('api_token') || sessionStorage.getItem('api_token') || '';
+                    if (token && typeof url === 'string' && url.startsWith('/api/')) {
+                        options.headers = options.headers || {};
+                        if (options.headers instanceof Headers) {
+                            if (!options.headers.has('Authorization')) options.headers.set('Authorization', 'Bearer ' + token);
+                        } else if (Array.isArray(options.headers)) {
+                            options.headers.push(['Authorization', 'Bearer ' + token]);
+                        } else {
+                            if (!options.headers['Authorization']) options.headers['Authorization'] = 'Bearer ' + token;
+                        }
+                    }
+                } catch(e) {}
+                return origFetch.call(this, url, options);
+            };
+        })();
+    </script>
     <style>
 
         :root {

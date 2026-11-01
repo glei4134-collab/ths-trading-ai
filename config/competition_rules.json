@@ -13,7 +13,7 @@
     "award_start": "2026-12-01",
     "award_end": "2026-12-31"
   },
-  "initial_funds": 1000000,
+  "initial_funds": 200000,
   "trading_rules": {
     "market": ["SH", "SZ"],
     "trading_hours": [

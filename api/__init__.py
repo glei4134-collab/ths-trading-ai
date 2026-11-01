@@ -1,10 +1,13 @@
 """
 量化系统 Flask 核心应用初始化与蓝图注册中心
+生产入口：gunicorn -c deploy/gunicorn_conf.py api:app
+本地入口：python run_api.py
 """
 
 import os
 import sys
 import logging
+import threading
 from pathlib import Path
 from flask import Flask, send_from_directory, request
 from flask_cors import CORS
@@ -20,6 +23,62 @@ from api.routes import (
 
 logger = logging.getLogger(__name__)
 
+_boot_started = False
+_boot_lock = threading.Lock()
+
+
+def boot_runtime_services():
+    """调度器 / 保活 / 静默体检只启动一次。"""
+    global _boot_started
+    with _boot_lock:
+        if _boot_started:
+            return
+        _boot_started = True
+
+    try:
+        auto_login_service.start_keep_alive(600)
+    except Exception as e:
+        logger.debug(f"启动保活守护异常: {e}")
+
+    try:
+        from tools.auto_debugger import silent_health_daemon
+        silent_health_daemon.start(30)
+    except Exception as e:
+        logger.debug(f"启动静默健康自愈守护异常: {e}")
+
+    try:
+        from notification import daily_scheduler
+        daily_scheduler.start()
+    except Exception:
+        pass
+
+    try:
+        from ai_scheduler import ai_scheduler
+        if ai_scheduler.enabled:
+            ai_scheduler.start()
+            logger.info(f"AI自动交易调度器已启动 (间隔={ai_scheduler.interval_minutes}分钟)")
+    except Exception as e:
+        logger.error(f"AI调度器启动失败: {e}")
+
+    def _load_cookie_bg():
+        try:
+            from ths_connector import web_connector, decrypt_cookie
+            from db_store import db_store
+            active_id = db_store.get_active_account_id()
+            active_acc = db_store.get_account(active_id)
+            if active_acc and active_acc.get("cookie"):
+                raw_cookie = decrypt_cookie(active_acc["cookie"])
+                if raw_cookie:
+                    web_connector.cookie = raw_cookie
+                    test_result = web_connector.get_fund()
+                    if test_result.get("success"):
+                        web_connector.connected = True
+                        logger.info("网页API已连接")
+        except Exception as e:
+            logger.debug(f"Cookie加载: {e}")
+
+    threading.Thread(target=_load_cookie_bg, daemon=True, name="cookie-boot").start()
+
 
 def create_app() -> Flask:
     """应用工厂函数"""
@@ -27,18 +86,12 @@ def create_app() -> Flask:
     app = Flask(__name__, static_folder=str(static_folder))
     CORS(app)
 
-    # 启动同花顺 Session 保活心跳 (每10分钟唤醒保活一次)
-    try:
-        auto_login_service.start_keep_alive(600)
-    except Exception as e:
-        logger.debug(f"启动保活守护异常: {e}")
+    boot_runtime_services()
 
-    # 全局请求认证
     @app.before_request
     def _check_auth():
         return require_auth()
 
-    # 禁用缓存头
     @app.after_request
     def add_no_cache_headers(response):
         if request.path == '/' or request.path.endswith('.html') or request.path.endswith('.js'):
@@ -47,14 +100,12 @@ def create_app() -> Flask:
             response.headers['Expires'] = '0'
         return response
 
-    # 优先注册各大业务蓝图 (保持 100% 原始路径兼容)
     app.register_blueprint(account_bp)
     app.register_blueprint(trade_bp)
     app.register_blueprint(market_bp)
     app.register_blueprint(scheduler_bp)
     app.register_blueprint(system_bp)
 
-    # 静态前端页面托管 (放在蓝图注册之后，严禁拦截 /api/ 请求)
     @app.route('/')
     def index():
         return send_from_directory(app.static_folder, 'index.html')
@@ -68,7 +119,6 @@ def create_app() -> Flask:
     return app
 
 
-# 兼容 `from api import app` 单例懒加载导出
 _app_instance = None
 
 
