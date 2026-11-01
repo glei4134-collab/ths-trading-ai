@@ -168,11 +168,71 @@ def ai_ensemble_status():
 
 @system_bp.route('/api/ai/candidates/today', methods=['GET'])
 def ai_candidates_today():
-    """获取今日算法优选候选冲击池及多因子表决结果"""
+    """获取今日算法优选候选冲击池及多因子表决结果（支持指定账户资金/仓位/异构风格联动）"""
     try:
+        import math
+        import hashlib
         from strategies.team_ensemble import TeamEnsembleStrategy
         from ai_scheduler import ai_scheduler
         from fast_data import fetch_realtime_single
+        from db_store import db_store
+
+        # 1. 解析指定账户或当前活动账户
+        req_acc_id = request.args.get("account_id", type=int)
+        if req_acc_id is not None:
+            account_id = req_acc_id
+        else:
+            account_id = db_store.get_active_account_id() or 1
+
+        summary = db_store.get_account_summary(account_id) or {}
+        if not summary:
+            summary = db_store.get_account(account_id) or {}
+
+        acc_name = str(summary.get("name") or f"账户_{account_id}")
+        raw_bal = float(summary.get("balance") or 0.0)
+        raw_tot = float(summary.get("total_assets") or 0.0)
+        total_assets = raw_tot if raw_tot > 0 else (raw_bal if raw_bal > 0 else 1000000.0)
+
+        raw_ky = float(summary.get("ky_fund") or 0.0)
+        available_cash = raw_ky if raw_ky > 0 else (raw_bal if raw_bal > 0 else total_assets)
+
+        # 2. 匹配账户异构战术矩阵与风控基线
+        raw_style = str(summary.get("style", "")).lower()
+        if account_id == 1 or "先锋" in acc_name or "aggressive" in raw_style:
+            style = "aggressive"
+            style_name = "先锋进攻型"
+            max_single_pct = 0.33      # 建议上限 30%~35%
+            stop_loss_pct = 0.05       # 止损 -5.0%
+        elif account_id == 2 or "中军" in acc_name or "稳健" in acc_name or "balanced" in raw_style:
+            style = "balanced"
+            style_name = "稳健中军型"
+            max_single_pct = 0.25      # 建议上限 22%~26%
+            stop_loss_pct = 0.04       # 止损 -4.0%
+        elif account_id == 3 or "防守" in acc_name or "尾盘" in acc_name or "defensive" in raw_style:
+            style = "defensive"
+            style_name = "尾盘防守型"
+            max_single_pct = 0.18      # 建议上限 15%~20%
+            stop_loss_pct = 0.03       # 止损 -3.0%
+        else:
+            mod = account_id % 3
+            if mod == 1:
+                style = "aggressive"
+                style_name = "先锋进攻型"
+                max_single_pct = 0.33
+                stop_loss_pct = 0.05
+            elif mod == 2:
+                style = "balanced"
+                style_name = "稳健中军型"
+                max_single_pct = 0.25
+                stop_loss_pct = 0.04
+            else:
+                style = "defensive"
+                style_name = "尾盘防守型"
+                max_single_pct = 0.18
+                stop_loss_pct = 0.03
+
+        # 读取该账户当前实际持仓以进行 35% 红线核验
+        held_positions = db_store.get_positions(account_id) or {}
 
         candidate_pool = [
             {"code": "002466", "name": "赣锋锂业", "industry": "新能源/锂电"},
@@ -192,13 +252,74 @@ def ai_candidates_today():
             price = float(q.get("price") or 28.5)
             change_pct = float(q.get("change_pct") or 2.15)
 
-            import hashlib
             seed = int(hashlib.md5(f"{code}_{ai_scheduler.now().strftime('%Y-%m-%d')}".encode()).hexdigest()[:6], 16)
             base_score = 65 + (seed % 28)
             conf = 0.55 + ((seed % 35) / 100.0)
             votes = 2 if base_score >= 70 else 1
             if base_score >= 82:
                 votes = 3
+
+            is_buy = (votes >= 2 and conf >= 0.60)
+            decision = "BUY" if is_buy else "HOLD"
+
+            # 动态计算目标权重 (根据异构账户风格上限与投票权重)
+            if is_buy:
+                target_weight_val = round((max_single_pct if votes >= 3 else max_single_pct * 0.85) * 100.0, 1)
+            else:
+                target_weight_val = 0.0
+
+            # 动态止损价 (结合账户风格)
+            stop_loss_price = round(price * (1.0 - stop_loss_pct), 2)
+
+            # 结合该账户的持仓及可用现金计算执行指标
+            pos_info = held_positions.get(code, {})
+            held_shares = int(pos_info.get("amount", 0) or 0)
+            held_mv = float(pos_info.get("market_value", 0) or (held_shares * price))
+            held_ratio = held_mv / total_assets if total_assets > 0 else 0.0
+
+            one_lot_cost = price * 100.0
+            suggested_amount = 0.0
+            suggested_shares = 0
+            affordable = True
+            reason = "建议观望 (HOLD)"
+
+            if is_buy:
+                # 规则 1: 检查是否已达或接近单票 35% 违规红线
+                if held_ratio >= 0.345:
+                    affordable = False
+                    suggested_shares = 0
+                    suggested_amount = 0.0
+                    reason = f"单票仓位超限: 已持仓{held_ratio*100:.1f}%，触及团队赛35%硬红线"
+                # 规则 2: 检查可用现金是否满足 1 手最低建仓
+                elif available_cash < one_lot_cost:
+                    affordable = False
+                    suggested_shares = 0
+                    suggested_amount = 0.0
+                    reason = f"可用现金不足1手: 账户可用¥{available_cash:,.2f}，买入1手需¥{one_lot_cost:,.2f}"
+                else:
+                    # 规则 3: 动态计算建议买入金额与整手数
+                    ideal_amount = total_assets * (target_weight_val / 100.0)
+                    room_amount = max(0.0, total_assets * 0.35 - held_mv)
+                    budget = min(ideal_amount, room_amount, available_cash)
+
+                    shares = int(budget // one_lot_cost) * 100
+                    if shares >= 100:
+                        suggested_shares = shares
+                        suggested_amount = round(suggested_shares * price, 2)
+                        affordable = True
+                        reason = f"可执行建仓 {suggested_shares} 股 (约 ¥{suggested_amount:,.2f})"
+                    else:
+                        # 兜底：若现金充裕且有额度，至少允许建仓 1 手底仓
+                        if available_cash >= one_lot_cost and room_amount >= one_lot_cost:
+                            suggested_shares = 100
+                            suggested_amount = round(100 * price, 2)
+                            affordable = True
+                            reason = f"按底仓买入 100 股 (约 ¥{suggested_amount:,.2f})"
+                        else:
+                            affordable = False
+                            suggested_shares = 0
+                            suggested_amount = 0.0
+                            reason = "可用现金或额度不足买入1手"
 
             results.append({
                 "code": code,
@@ -213,23 +334,44 @@ def ai_candidates_today():
                 "votes_approved": votes,
                 "total_voters": 5,
                 "ensemble_votes": f"{votes}/5 赞成",
-                "decision": "BUY" if votes >= 2 and conf >= 0.60 else "HOLD",
-                "action": "BUY" if votes >= 2 and conf >= 0.60 else "HOLD",
-                "recommended_weight": 26.5 if votes >= 2 else 0.0,
-                "target_weight": f"{26.5 if votes >= 2 else 0.0:.1f}%",
-                "stop_loss_price": round(price * 0.955, 2),
-                "stop_loss": round(price * 0.955, 2),
+                "decision": decision,
+                "action": decision,
+                "recommended_weight": target_weight_val,
+                "target_weight": f"{target_weight_val:.1f}%",
+                "stop_loss_price": stop_loss_price,
+                "stop_loss": stop_loss_price,
+                "stop_loss_pct": f"-{stop_loss_pct * 100:.1f}%",
+                "suggested_amount": suggested_amount,
+                "suggested_shares": suggested_shares,
+                "affordable": affordable,
+                "reason": reason,
+                "held_shares": held_shares,
+                "held_ratio_pct": round(held_ratio * 100, 2),
+                "account_id": account_id,
+                "account_name": acc_name,
+                "account_style": style,
                 "matched_strategies": ["强势回调", "放量突破"] if votes >= 2 else ["缩量企稳"]
             })
 
-        results.sort(key=lambda x: (x["decision"] == "BUY", x["ensemble_score"]), reverse=True)
+        results.sort(key=lambda x: (x["decision"] == "BUY", x["affordable"], x["ensemble_score"]), reverse=True)
         return jsonify({
             "success": True,
             "data": results,
             "candidates": results,
-            "total": len(results)
+            "total": len(results),
+            "account": {
+                "account_id": account_id,
+                "name": acc_name,
+                "style": style,
+                "style_name": style_name,
+                "total_assets": round(total_assets, 2),
+                "available_cash": round(available_cash, 2),
+                "max_single_pct": round(max_single_pct * 100, 1),
+                "stop_loss_pct": round(stop_loss_pct * 100, 1),
+            }
         })
     except Exception as e:
+        logger.exception(f"获取今日优选候选池异常: {e}")
         return jsonify({"success": False, "message": str(e)})
 
 
