@@ -613,6 +613,7 @@ class AccountManager:
             existing_shares=existing_shares,
             available_shares=available_shares,
             quote=quote,
+            skip_session_check=dry_run,
         )
         if not guard.allowed:
             logger.info(f"下单闸门拒绝 账户#{account_id} {action} {symbol}: {guard.message}")

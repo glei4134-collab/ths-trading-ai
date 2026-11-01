@@ -31,9 +31,9 @@ logger = logging.getLogger(__name__)
 
 trade_bp = Blueprint('trade', __name__)
 
-def _validate_order(symbol: str, action: str, amount: int, price: float) -> dict:
+def _validate_order(symbol: str, action: str, amount: int, price: float, account_id: Optional[int] = None) -> dict:
     """
-    下单前统一校验（防止平台报错）
+    下单前基础参数校验（账户级资金验资、仓位红线与风控硬门禁由 account_manager.place_order 权威执行）
 
     Returns: {"valid": True} 或 {"valid": False, "message": "错误原因"}
     """
@@ -51,68 +51,14 @@ def _validate_order(symbol: str, action: str, amount: int, price: float) -> dict
     if amount % 100 != 0:
         return {"valid": False, "message": "买入数量必须是100的整数倍"}
 
-    # 3. 连接检查
-    connector, conn_type = get_active_connector()
-    if not connector or not connector.connected:
-        return {"valid": False, "message": "未连接交易系统，请先同步账户"}
-
-    # 4. 获取账户信息
+    # 3. 比赛股票池检查
     try:
-        fund_result = connector.get_fund()
-        balance = fund_result.get("data", 0) if fund_result.get("success") else 0
-
-        pos_result = connector.get_positions()
-        positions = []
-        total_market_value = 0
-        if pos_result.get("success"):
-            data = pos_result.get("data", {})
-            if isinstance(data, dict):
-                positions = data.get("positions", [])
-                balance = data.get("balance", balance)
-            elif isinstance(data, list):
-                positions = data
-            for p in positions:
-                total_market_value += p.get("market_value", 0)
-
-        total_assets = balance + total_market_value
+        if not competition_manager.is_tradable(symbol):
+            return {"valid": False, "message": f"{symbol} 不在比赛允许的交易范围内"}
     except Exception:
-        total_assets = 1000000  # 默认值
-        balance = 1000000
+        pass
 
-    # 5. 余额检查 (买入时)
-    if action == "buy" and price:
-        required = price * amount * 1.001  # 含佣金
-        if required > balance:
-            max_shares = int(balance / price / 1.001 / 100) * 100
-            return {"valid": False, "message": f"余额不足。需要{required:.0f}元，可用{balance:.0f}元，最多买{max_shares}股"}
-
-    # 6. 持仓检查 (卖出时)
-    if action == "sell":
-        held = 0
-        for p in positions:
-            if p.get("symbol") == symbol:
-                held = p.get("amount", 0)
-                break
-        if amount > held:
-            return {"valid": False, "message": f"持仓不足。持有{held}股，想卖{amount}股"}
-
-    # 7. 比赛仓位限制 (单只不超过30%)
-    if action == "buy" and price and total_assets > 0:
-        buy_value = price * amount
-        # 加上该股票已有持仓
-        existing_value = 0
-        for p in positions:
-            if p.get("symbol") == symbol:
-                existing_value = p.get("market_value", 0)
-                break
-        new_ratio = (existing_value + buy_value) / total_assets
-        if new_ratio > 0.30:
-            max_buy = int((total_assets * 0.30 - existing_value) / price / 100) * 100
-            if max_buy < 100:
-                return {"valid": False, "message": f"该股票仓位已达30%上限，无法继续买入"}
-            return {"valid": False, "message": f"超过仓位限制30%。当前占比{new_ratio:.1%}，最多可再买{max_buy}股"}
-
-    # 8. 涨跌停检查
+    # 4. 涨跌停检查
     try:
         from fast_data import fetch_realtime_single
         quote = fetch_realtime_single(symbol)
@@ -125,13 +71,6 @@ def _validate_order(symbol: str, action: str, amount: int, price: float) -> dict
                     return {"valid": False, "message": f"涨停中(+{change_pct:.1f}%)，无法买入"}
                 if action == "sell" and change_pct <= -9.9:
                     return {"valid": False, "message": f"跌停中({change_pct:.1f}%)，无法卖出"}
-    except Exception:
-        pass
-
-    # 9. 比赛股票池检查
-    try:
-        if not competition_manager.is_tradable(symbol):
-            return {"valid": False, "message": f"{symbol} 不在比赛允许的交易范围内"}
     except Exception:
         pass
 
@@ -157,6 +96,7 @@ def trade_buy():
 
         # 明确单账户单买：优先使用前端指定的 account_id，若未指定则取当前活跃主账户
         target_acc_id = int(data.get('account_id') or db_store.get_active_account_id() or 1)
+        dry_run = bool(data.get('dry_run', False))
         stock = get_stock_data(symbol)
         name = stock.get('name', symbol) if stock else symbol
 
@@ -170,7 +110,8 @@ def trade_buy():
                 action="buy",
                 price=float(price or 0.0),
                 amount=int(amount or 0),
-                name=name
+                name=name,
+                dry_run=dry_run
             )
             if not order_res.get("success"):
                 return jsonify({"success": False, "message": order_res.get("message", "发单被风控硬门禁拦截")}), 400
@@ -277,59 +218,41 @@ def trade_sell():
         if not validation["valid"]:
             return jsonify({"success": False, "message": validation["message"]})
 
-        # 如果已连接同花顺网页版，使用真实API交易
-        connector, conn_type = get_active_connector()
-        if conn_type == "web" and connector.connected:
-            # 从THS获取持仓以获取mkcode和gdzh
-            pos_result = connector.get_positions()
-            mkcode = ""
-            gdzh = ""
-            if pos_result["success"]:
-                for p in pos_result["data"].get("positions", []):
-                    if p["symbol"] == symbol:
-                        mkcode = p.get("mkcode", "")
-                        gdzh = p.get("gdzh", "")
-                        break
+        # 明确单账户单卖：优先使用前端指定的 account_id，若未指定则取当前活跃主账户
+        target_acc_id = int(data.get('account_id') or db_store.get_active_account_id() or 1)
+        dry_run = bool(data.get('dry_run', False))
+        stock = get_stock_data(symbol)
+        name = stock.get('name', symbol) if stock else symbol
 
-            result = connector.sell(symbol, price, amount, mkcode=mkcode, gdzh=gdzh)
-            if result["success"]:
-                fund_result = connector.get_fund()
-                balance = fund_result["data"] if fund_result["success"] else 0
-                stock = get_stock_data(symbol)
-                name = stock['name'] if stock else symbol
-                trade = {
-                    'time': datetime.now(ZoneInfo('Asia/Shanghai')).strftime("%Y-%m-%d %H:%M:%S"),
-                    'symbol': symbol,
-                    'name': name,
-                    'action': 'sell',
-                    'amount': amount,
-                    'price': price or 0,
-                    'total': (price or 0) * amount,
-                    'balance': balance,
-                    'mode': 'ths_competition'
-                }
-                data_store.add_trade(trade)
-                # 活动日志: 用户手动卖出 (同花顺)
-                try:
-                    from activity_log import activity_log as _alog
-                    _alog.log(action="sell", actor="user", symbol=symbol, name=name,
-                              details={"price": price, "amount": amount, "total": (price or 0) * amount})
-                except Exception:
-                    pass
-                try:
-                    active_id = db_store.get_active_account_id() or 1
-                    acc_obj = db_store.get_account(active_id) or {}
-                    acc_name = acc_obj.get("name") or f"账户-{active_id}"
-                    cockpit_hub.broadcast_trade(
-                        action="sell", symbol=symbol, name=name,
-                        price=float(price or 0), amount=int(amount),
-                        total=float((price or 0) * amount),
-                        account_id=active_id, account_name=acc_name,
-                        order_id=str(result.get("data", {}).get("order_id", result.get("order_id", "")))
-                    )
-                except Exception:
-                    pass
-            return jsonify(result)
+        # 通过 account_manager.place_order 发起单账户专属交易（经由 order_guard 严格校验持仓与T+1）
+        from account_manager import account_manager
+        trader_inst = account_manager.get_trader(target_acc_id)
+        if trader_inst and trader_inst.connected:
+            order_res = account_manager.place_order(
+                account_id=target_acc_id,
+                symbol=symbol,
+                action="sell",
+                price=float(price or 0.0),
+                amount=int(amount or 0),
+                name=name,
+                dry_run=dry_run
+            )
+            if not order_res.get("success"):
+                return jsonify({"success": False, "message": order_res.get("message", "发单被风控拦截")}), 400
+
+            try:
+                acc_obj = db_store.get_account(target_acc_id) or {}
+                acc_name = acc_obj.get("name") or f"账户-{target_acc_id}"
+                cockpit_hub.broadcast_trade(
+                    action="sell", symbol=symbol, name=name,
+                    price=float(price or 0), amount=int(amount),
+                    total=float((price or 0) * amount),
+                    account_id=target_acc_id, account_name=acc_name,
+                    order_id=str(order_res.get("data", {}).get("order_id", order_res.get("order_id", "")))
+                )
+            except Exception:
+                pass
+            return jsonify(order_res)
 
         # 本地模拟交易
         positions = data_store.positions
@@ -1121,6 +1044,7 @@ def trade_batch_order():
         symbol = str(data.get('symbol', '')).strip()
         price = float(data.get('price', 0))
         amount = int(data.get('amount', 0))
+        dry_run = bool(data.get('dry_run', False))
         target_account_ids = data.get('account_ids', [])
 
         if not symbol or len(symbol) != 6:
@@ -1182,7 +1106,8 @@ def trade_batch_order():
                     action=action,
                     price=price,
                     amount=amount,
-                    name=stock_name
+                    name=stock_name,
+                    dry_run=dry_run
                 )
             except Exception as e:
                 order_res = {"success": False, "message": f"委托异常: {str(e)}"}
