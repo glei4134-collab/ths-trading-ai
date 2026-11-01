@@ -74,7 +74,7 @@ class FrontendVerificationSuite:
     def test_1_remote_html_availability(self):
         print("\n[测试阶段 1] 生产环境 HTTP 200 与 HTML 主文档拉取")
         try:
-            req = urllib.request.Request(self.target_url, headers={"User-Agent": "THS-E2E-Tester/1.0"})
+            req = urllib.request.Request(self.target_url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36"})
             with urllib.request.urlopen(req, timeout=5) as res:
                 self.html_content = res.read().decode("utf-8")
                 self.assert_test("生产页面响应 HTTP 200", res.status == 200)
@@ -153,7 +153,7 @@ class FrontendVerificationSuite:
         for ep, validator, desc in api_checks:
             try:
                 url = self.target_url + ep
-                headers = {"User-Agent": "THS-E2E-Tester/1.0"}
+                headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36"}
                 if getattr(self, "api_token", ""):
                     headers["Authorization"] = f"Bearer {self.api_token}"
                 req = urllib.request.Request(url, headers=headers)
