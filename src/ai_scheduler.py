@@ -2193,7 +2193,9 @@ A股交易时段: 上午9:30-11:30, 下午13:00-15:00
                             if existing_val >= max_allowed_val:
                                 logger.info(f"📊 [{acc_name}] {symbol} 已达{TEAM_MAX_SINGLE_PCT:.0%}上限，跳过")
                                 continue
-                            room_val = min(max_allowed_val - existing_val, avail_balance * 0.95)
+                            # 团队赛分散度合规：单只标的建仓不超过总资产的 25%，确保全盘至少分散持有 >= 3 只标的
+                            target_alloc = tot_assets * 0.25
+                            room_val = min(max_allowed_val - existing_val, avail_balance * 0.95, target_alloc)
                             acc_amount = round_lot(int(room_val / price)) if price > 0 else 0
                             if acc_amount < 100:
                                 logger.info(f"📊 [{acc_name}] 资金或上限不足购买1手 {symbol}，跳过")

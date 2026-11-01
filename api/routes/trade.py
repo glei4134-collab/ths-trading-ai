@@ -155,49 +155,39 @@ def trade_buy():
         if not validation["valid"]:
             return jsonify({"success": False, "message": validation["message"]})
 
-        # 如果已连接同花顺网页版，使用真实API交易
-        connector, conn_type = get_active_connector()
-        if conn_type == "web" and connector.connected:
-            result = connector.buy(symbol, price, amount)
-            if result["success"]:
-                # 同时保存到本地记录
-                fund_result = connector.get_fund()
-                balance = fund_result["data"] if fund_result["success"] else 0
-                stock = get_stock_data(symbol)
-                name = stock['name'] if stock else symbol
-                trade = {
-                    'time': datetime.now(ZoneInfo('Asia/Shanghai')).strftime("%Y-%m-%d %H:%M:%S"),
-                    'symbol': symbol,
-                    'name': name,
-                    'action': 'buy',
-                    'amount': amount,
-                    'price': price or 0,
-                    'total': (price or 0) * amount,
-                    'balance': balance,
-                    'mode': 'ths_competition'
-                }
-                data_store.add_trade(trade)
-                # 活动日志: 用户手动买入 (同花顺)
-                try:
-                    from activity_log import activity_log as _alog
-                    _alog.log(action="buy", actor="user", symbol=symbol, name=name,
-                              details={"price": price, "amount": amount, "total": (price or 0) * amount})
-                except Exception:
-                    pass
-                try:
-                    active_id = db_store.get_active_account_id() or 1
-                    acc_obj = db_store.get_account(active_id) or {}
-                    acc_name = acc_obj.get("name") or f"账户-{active_id}"
-                    cockpit_hub.broadcast_trade(
-                        action="buy", symbol=symbol, name=name,
-                        price=float(price or 0), amount=int(amount),
-                        total=float((price or 0) * amount),
-                        account_id=active_id, account_name=acc_name,
-                        order_id=str(result.get("data", {}).get("order_id", result.get("order_id", "")))
-                    )
-                except Exception:
-                    pass
-            return jsonify(result)
+        # 明确单账户单买：优先使用前端指定的 account_id，若未指定则取当前活跃主账户
+        target_acc_id = int(data.get('account_id') or db_store.get_active_account_id() or 1)
+        stock = get_stock_data(symbol)
+        name = stock.get('name', symbol) if stock else symbol
+
+        # 通过 account_manager.place_order 发起单账户专属交易（经由 order_guard 严格独立验资与35%仓位门禁）
+        from account_manager import account_manager
+        trader_inst = account_manager.get_trader(target_acc_id)
+        if trader_inst and trader_inst.connected:
+            order_res = account_manager.place_order(
+                account_id=target_acc_id,
+                symbol=symbol,
+                action="buy",
+                price=float(price or 0.0),
+                amount=int(amount or 0),
+                name=name
+            )
+            if not order_res.get("success"):
+                return jsonify({"success": False, "message": order_res.get("message", "发单被风控硬门禁拦截")}), 400
+
+            try:
+                acc_obj = db_store.get_account(target_acc_id) or {}
+                acc_name = acc_obj.get("name") or f"账户-{target_acc_id}"
+                cockpit_hub.broadcast_trade(
+                    action="buy", symbol=symbol, name=name,
+                    price=float(price or 0), amount=int(amount),
+                    total=float((price or 0) * amount),
+                    account_id=target_acc_id, account_name=acc_name,
+                    order_id=str(order_res.get("data", {}).get("order_id", order_res.get("order_id", "")))
+                )
+            except Exception:
+                pass
+            return jsonify(order_res)
 
         # 本地模拟交易
         if price is None:
@@ -1183,21 +1173,17 @@ def trade_batch_order():
             order_res = {"success": False, "message": "未连接"}
 
             try:
-                if trader_inst and trader_inst.cookie:
-                    if action == "buy":
-                        order_res = trader_inst.buy(symbol, price, amount)
-                    else:
-                        order_res = trader_inst.sell(symbol, price, amount)
-                else:
-                    cookie = db_store.get_account_cookie(acc_id)
-                    if cookie:
-                        trader_inst = account_manager.register_account(acc_id, cookie)
-                        if action == "buy":
-                            order_res = trader_inst.buy(symbol, price, amount)
-                        else:
-                            order_res = trader_inst.sell(symbol, price, amount)
-                    else:
-                        order_res = {"success": False, "message": "账号Cookie未就绪"}
+                stock = get_stock_data(symbol)
+                stock_name = stock.get("name", symbol) if stock else symbol
+                # 多账户联动批量买入：每个账户都通过 place_order 严格独立验资、35%红线门禁与100股整倍校验
+                order_res = account_manager.place_order(
+                    account_id=acc_id,
+                    symbol=symbol,
+                    action=action,
+                    price=price,
+                    amount=amount,
+                    name=stock_name
+                )
             except Exception as e:
                 order_res = {"success": False, "message": f"委托异常: {str(e)}"}
 
