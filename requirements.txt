@@ -31,5 +31,8 @@ apscheduler>=3.10.0
 # JWT
 pyjwt>=2.0.0
 
+# Cookie/凭证对称加密 (Fernet)
+cryptography>=41.0.0
+
 # NLP Sentiment (lightweight)
 snownlp>=0.12.3

@@ -153,7 +153,8 @@ class AIScheduler:
             from competition import competition_manager
             d = target_date or self.now().date()
             return competition_manager.is_trading_day(d)
-        except Exception:
+        except Exception as e:
+            logger.debug(f"使用 competition_manager 判断交易日失败，回退到工作日判断: {e}")
             return self.now().weekday() < 5
 
     # ========== Config ==========
@@ -256,8 +257,8 @@ class AIScheduler:
                         "title": "THS网页API已连接",
                         "message": f"自动交易: {'开' if self.enabled else '关'}",
                     })
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"推送 THS 已连接通知失败: {e}")
                 auto_trader.sync_from_ths()
             else:
                 logger.warning("THS未连接")
@@ -269,10 +270,10 @@ class AIScheduler:
                         "message": "请启动同花顺客户端并登录\n"
                                    "调度器将在检测到连接后自动恢复",
                     })
-                except Exception:
-                    pass
-        except Exception:
-            logger.warning("THS连接检查异常")
+                except Exception as e:
+                    logger.debug(f"推送 THS 未连接通知失败: {e}")
+        except Exception as e:
+            logger.warning(f"THS连接检查异常: {e}")
 
         # ===== 启动时初始化今日账本并执行自愈审计 (非阻塞后台执行) =====
         try:
@@ -406,15 +407,16 @@ class AIScheduler:
                         from auto_trader import auto_trader
                         if auto_trader.enabled and not auto_trader._monitor_running:
                             auto_trader.check_stop_loss()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"动态止损止盈监控失败: {e}")
 
                     # 周期性 AI/规则 策略分析
                     if self._last_analysis_time:
                         try:
                             last_dt = datetime.fromisoformat(self._last_analysis_time)
                             elapsed_sec = (curr_wall - last_dt).total_seconds()
-                        except Exception:
+                        except Exception as e:
+                            logger.debug(f"解析上次分析时间失败: {e}")
                             elapsed_sec = 9999
                     else:
                         elapsed_sec = 9999
@@ -513,11 +515,12 @@ class AIScheduler:
                             "title": "❌ THS连接断开",
                             "message": "自动交易暂停\n请检查同花顺客户端或Cookie",
                         })
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"推送 THS 连接状态变化通知失败: {e}")
 
             self._ths_connected = connected
-        except Exception:
+        except Exception as e:
+            logger.debug(f"检查 THS 连接状态失败: {e}")
             self._ths_connected = False
 
     # ========== 启动与断点自愈补偿审计 ==========
@@ -548,8 +551,8 @@ class AIScheduler:
                     "title": "🛡️ 时效步骤安全跳过",
                     "message": f"开机晚于设定时限，已自动安全放弃以规避追高风险:\n{skipped_names}",
                 })
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"推送时效步骤安全跳过通知失败: {e}")
 
         if needs_catchup:
             catchup_names = ", ".join(s.name for s in needs_catchup)
@@ -636,8 +639,8 @@ class AIScheduler:
                 from auto_trader import auto_trader
                 for symbol, pos in auto_trader.positions.items():
                     held_map[symbol] = getattr(pos, 'name', symbol)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"从 auto_trader 获取持仓失败: {e}")
 
             try:
                 for acc in db_store.list_accounts():
@@ -645,8 +648,8 @@ class AIScheduler:
                     for sym, pinfo in acc_pos.items():
                         if pinfo.get("amount", 0) > 0:
                             held_map[sym] = pinfo.get("name") or held_map.get(sym, sym)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"从数据库获取持仓失败: {e}")
 
             for symbol, name in held_map.items():
                 try:
@@ -660,8 +663,8 @@ class AIScheduler:
                         keywords=sent.get("keywords", [])[:5],
                         regime="pre_market",
                     )
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"保存 {symbol} 盘前情绪数据失败: {e}")
 
             self._pre_market_result = {
                 "date": self.now().date().isoformat(),
@@ -702,8 +705,8 @@ class AIScheduler:
                     "title": "📰 盘前新闻分析完成" if not is_catchup else "🔄 盘前新闻分析(补偿完成)",
                     "message": f"情绪: {score}/100 ({sentiment_desc})\n新闻: {count}条\n持仓情绪: {len(stock_sentiments)}只",
                 })
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"推送盘前新闻分析通知失败: {e}")
 
             return {"success": True, "step_id": step_id, "score": score, "news_count": count, "summary": summary}
 
@@ -896,8 +899,8 @@ class AIScheduler:
             try:
                 from auto_trader import auto_trader
                 auto_trader.sync_from_ths()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"早盘同步同花顺持仓失败: {e}")
 
             duration_ms = int((_time.time() - t0) * 1000)
             status = StepStatus.CATCHUP_SUCCESS if is_catchup else StepStatus.SUCCESS
@@ -944,10 +947,10 @@ class AIScheduler:
                                 loss_pct = (avg_price - current_price) / avg_price
                                 if loss_pct > 0.03:
                                     risk_alerts.append(f"{pos.name}({symbol}) 亏损{loss_pct:.1%}")
-                    except Exception:
-                        pass
-            except Exception:
-                pass
+                    except Exception as e:
+                        logger.debug(f"获取 {symbol} 午间实时行情失败: {e}")
+            except Exception as e:
+                logger.debug(f"遍历 auto_trader 持仓进行午间风控检查失败: {e}")
 
             self._lunch_done = True
             self._save_daily_flags(self.now().date().isoformat(), lunch=True)
@@ -969,8 +972,8 @@ class AIScheduler:
                     "title": "🕐 午间分析完成" if not is_catchup else "🔄 午间分析(补偿完成)",
                     "message": "\n".join(msg_parts),
                 })
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"推送午间分析通知失败: {e}")
 
             return {"success": True, "step_id": step_id, "score": score, "risk_alerts": risk_alerts, "summary": summary}
 
@@ -1144,8 +1147,8 @@ class AIScheduler:
                         "current_price": pos.current_price,
                         "pnl_pct": ((pos.current_price / pos.avg_price - 1) * 100) if pos.avg_price > 0 else 0,
                     })
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"获取收盘持仓摘要失败: {e}")
 
             summary_data = {
                 "date": self.now().date().isoformat(),
@@ -1176,8 +1179,8 @@ class AIScheduler:
                 DATA_DIR.mkdir(parents=True, exist_ok=True)
                 with open(summary_file, "w", encoding="utf-8") as f:
                     json.dump(summary_data, f, ensure_ascii=False, indent=2)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"保存收盘总结文件失败: {e}")
 
             score = market_sentiment.get("score", 50)
             duration_ms = int((_time.time() - t0) * 1000)
@@ -1211,8 +1214,8 @@ class AIScheduler:
             try:
                 from sentiment_analyzer import sentiment_analyzer
                 sentiment = sentiment_analyzer.get_market_sentiment()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"夜间复盘获取市场情绪失败: {e}")
             mkt_score = sentiment.get("score", 50)
             regime = "bull" if mkt_score > 60 else "bear" if mkt_score < 40 else "neutral"
 
@@ -1310,8 +1313,8 @@ class AIScheduler:
 
             with open(flags_file, "w", encoding="utf-8") as f:
                 json.dump(existing, f, ensure_ascii=False, indent=2)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"保存每日阶段标志失败: {e}")
 
     def _load_daily_flags(self, today: str) -> Dict:
         """加载每日阶段完成标志"""
@@ -1321,8 +1324,8 @@ class AIScheduler:
             if flags_file.exists():
                 with open(flags_file, "r", encoding="utf-8") as f:
                     return json.load(f)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"加载每日阶段标志失败: {e}")
         return {}
 
     # ========== 盘前分析结果持久化 ==========
@@ -1337,8 +1340,8 @@ class AIScheduler:
             DATA_DIR.mkdir(parents=True, exist_ok=True)
             with open(result_file, "w", encoding="utf-8") as f:
                 json.dump(self._pre_market_result, f, ensure_ascii=False, indent=2)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"保存盘前分析结果失败: {e}")
 
     def load_pre_market_result(self, target_date: str = None) -> Optional[Dict]:
         """
@@ -1353,8 +1356,8 @@ class AIScheduler:
             if result_file.exists():
                 with open(result_file, "r", encoding="utf-8") as f:
                     return json.load(f)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"加载盘前分析结果失败: {e}")
         return None
 
     def _track_daily_sentiment(self, stocks: List[Dict]):
@@ -1369,7 +1372,8 @@ class AIScheduler:
             try:
                 regime = market_regime_detector.detect()
                 regime_str = regime.get("regime", "unknown")
-            except:
+            except Exception as e:
+                logger.debug(f"识别市场状态失败: {e}")
                 regime_str = "unknown"
 
             tracked = 0
@@ -1381,8 +1385,8 @@ class AIScheduler:
                     for sym, pinfo in db_store.get_positions(acc["id"]).items():
                         if pinfo.get("amount", 0) > 0:
                             held_symbols.add(sym)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"从数据库汇总持仓股票失败: {e}")
 
             for symbol in held_symbols:
                 try:
@@ -1399,13 +1403,13 @@ class AIScheduler:
                         regime=regime_str,
                     )
                     tracked += 1
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"记录 {symbol} 每日情绪失败: {e}")
 
             if tracked:
                 logger.info(f"📈 每日情绪跟踪: 记录了 {tracked} 只持仓股票的情绪")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"每日情绪跟踪整体失败: {e}")
 
     def _handle_pending_orders(self):
         """检查未成交委托，智能撤单（考虑时间紧迫度 + 持仓盈亏）"""
@@ -1446,7 +1450,8 @@ class AIScheduler:
                         elapsed_min = (now_dt.hour * 60 + now_dt.minute) - (order_dt.hour * 60 + order_dt.minute)
                     else:
                         elapsed_min = 999
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"解析挂单时间失败: {e}")
                     elapsed_min = 999
 
                 # ===== 获取当前价格 =====
@@ -1454,7 +1459,8 @@ class AIScheduler:
                     from data_cache import get_realtime_quote
                     stock_data = get_realtime_quote(symbol)
                     current_price = float(stock_data.get("price", 0)) if stock_data else 0
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"获取 {symbol} 当前价格失败: {e}")
                     current_price = 0
 
                 if not current_price:
@@ -1477,8 +1483,8 @@ class AIScheduler:
                             avg = pos.avg_price
                             if avg > 0 and current_price < avg:
                                 is_loss_position = True
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"获取 {symbol} 持仓盈亏状态失败: {e}")
 
                     if is_loss_position and elapsed_min >= 3:
                         # 亏损持仓的卖单：3分钟没成交就撤（止损要快）
@@ -1529,8 +1535,8 @@ class AIScheduler:
                                     "message": f"{symbol} {'卖出' if action == 'sell' else '买入'}{order_amount}股\n"
                                                f"{cancel_reason}\n当前价¥{current_price}",
                                 })
-                            except Exception:
-                                pass
+                            except Exception as e:
+                                logger.debug(f"推送智能撤单通知失败: {e}")
                     except Exception as e:
                         logger.warning(f"撤单失败: {e}")
                 else:
@@ -1574,7 +1580,8 @@ class AIScheduler:
                 parts.append("当前持仓:\n" + "\n".join(pos_lines))
             else:
                 parts.append("当前持仓: 空仓")
-        except Exception:
+        except Exception as e:
+            logger.debug(f"构建账户状态上下文失败: {e}")
             parts.append("账户状态: 未知")
 
         # 2. 大盘概况
@@ -1586,8 +1593,8 @@ class AIScheduler:
                     f"大盘情绪: 加权涨跌{basket.get('weighted_change', 0):+.2f}% "
                     f"(上涨{basket.get('up_count', 0)}/下跌{basket.get('down_count', 0)})"
                 )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"获取大盘概况失败: {e}")
 
         # 3. 市场环境识别
         try:
@@ -1610,8 +1617,8 @@ class AIScheduler:
                         f"  策略建议: 推荐[{prefer}] 避免[{avoid}] "
                         f"仓位系数{adj['position_factor']:.1f}x 止损系数{adj['stop_loss_factor']:.1f}x"
                     )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"识别市场环境失败: {e}")
 
         # 4. 未成交委托（使用 _handle_pending_orders 的缓存，避免重复请求）
         try:
@@ -1643,9 +1650,10 @@ class AIScheduler:
                                         cp = float(q.get("price", 0)) if q else 0
                                         if cp > 0 and cp < pos.avg_price:
                                             urgency += " ⚠️亏损中,需尽快处理"
-                                    except Exception:
-                                        pass
-                    except Exception:
+                                    except Exception as e:
+                                        logger.debug(f"获取 {symbol} 亏损状态失败: {e}")
+                    except Exception as e:
+                        logger.debug(f"计算挂单时长失败: {e}")
                         urgency = ""
                     label = "卖出" if action == "sell" else "买入"
                     lines.append(
@@ -1656,8 +1664,8 @@ class AIScheduler:
                 parts.append(f"⚠️ 未成交委托({len(pending)}笔)【请优先处理】:\n" + "\n".join(lines))
             else:
                 parts.append("未成交委托: 无")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"构建未成交委托上下文失败: {e}")
 
         # 5. 多维度股票排行（OPT-5: 只获取1次，Python内多维排序）
         try:
@@ -1699,8 +1707,8 @@ class AIScheduler:
                     )
                 parts.append(f"换手率TOP10（资金活跃）:\n" + "\n".join(lines))
 
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"获取多维度股票排行失败: {e}")
 
         # 6. 策略信号摘要
         try:
@@ -1757,8 +1765,8 @@ class AIScheduler:
                     f"🕐 午间情绪({lt}): {score}/100({sentiment_desc}) "
                     f"新闻{count}条"
                 )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"加载盘前/午间情绪缓存失败: {e}")
 
         return "\n\n".join(parts)
 
@@ -1828,7 +1836,8 @@ A股交易时段: 上午9:30-11:30, 下午13:00-15:00
             try:
                 regime = market_regime_detector.detect()
                 regime_desc = regime.get("description", "未知")
-            except:
+            except Exception as e:
+                logger.debug(f"获取市场环境描述失败: {e}")
                 regime_desc = "未知"
 
             # ★ Step 1: 策略引擎先筛选，找出有信号的股票
@@ -1856,8 +1865,8 @@ A股交易时段: 上午9:30-11:30, 下午13:00-15:00
                             "indicators": indicators,
                             "decision": decision,
                         })
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"策略筛选 {symbol} 失败: {e}")
 
             logger.info(f"策略筛选: {len(stocks)}只 → {len(flagged_stocks)}只有信号")
 
@@ -1868,7 +1877,8 @@ A股交易时段: 上午9:30-11:30, 下午13:00-15:00
                 try:
                     regime = market_regime_detector.detect()
                     regime_str = regime.get("regime", "unknown")
-                except:
+                except Exception as e:
+                    logger.debug(f"识别市场状态失败: {e}")
                     regime_str = "unknown"
                 for item in flagged_stocks:
                     db_store.save_sentiment_regret(
@@ -1880,8 +1890,8 @@ A股交易时段: 上午9:30-11:30, 下午13:00-15:00
                         price=item["stock_data"].get("price", 0),
                         regime=regime_str,
                     )
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"保存策略信号后悔数据失败: {e}")
 
             # ★ Step 2: AI深度分析有信号的股票（新闻+完整上下文）
             stock_analyses = []
@@ -1895,7 +1905,8 @@ A股交易时段: 上午9:30-11:30, 下午13:00-15:00
                 try:
                     news = sentiment_analyzer.get_stock_sentiment(symbol, name)
                     news_desc = f"{news.get('score', 50)}分 ({news.get('description', '')})"
-                except:
+                except Exception as e:
+                    logger.debug(f"获取 {symbol} 新闻情绪失败: {e}")
                     news_desc = "无数据"
 
                 # ★ 历史情绪准确率
@@ -1906,7 +1917,8 @@ A股交易时段: 上午9:30-11:30, 下午13:00-15:00
                         hist_desc = f"历史准确率{accuracy['win_rate']}% 平均盈利{accuracy['avg_profit']}% ({accuracy['count']}次)"
                     else:
                         hist_desc = "无历史数据"
-                except:
+                except Exception as e:
+                    logger.debug(f"获取 {symbol} 历史情绪准确率失败: {e}")
                     hist_desc = "无历史数据"
 
                 stock_analyses.append(
@@ -1925,7 +1937,8 @@ A股交易时段: 上午9:30-11:30, 下午13:00-15:00
                     from db_store import db_store
                     regime_acc = db_store.get_sentiment_by_regime(regime_str, days=30)
                     regime_hist = f" ({regime_str}下历史胜率{regime_acc['win_rate']}%, 平均盈利{regime_acc['avg_profit']}%, {regime_acc['count']}次)" if regime_acc["count"] > 0 else ""
-                except:
+                except Exception as e:
+                    logger.debug(f"获取市场环境历史情绪准确率失败: {e}")
                     regime_hist = ""
                 context += f"\n\n## 市场环境: {regime_desc}{regime_hist}\n"
                 context += f"## 筛选出 {len(flagged_stocks)} 只有策略信号的股票，AI深度分析:\n"
@@ -1934,8 +1947,8 @@ A股交易时段: 上午9:30-11:30, 下午13:00-15:00
             else:
                 context += "\n\n## 策略筛选结果: 本轮无股票触发策略信号"
                 context += "\n请根据市场环境和你的判断，决定是否需要主动寻找机会。"
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"AI 深度分析有信号股票失败: {e}")
 
         # 彻底去除外部大模型决策，统一由纯量化规则与策略矩阵执行
         return self._decide_with_rules(stocks)
@@ -1956,7 +1969,8 @@ A股交易时段: 上午9:30-11:30, 下午13:00-15:00
             total = risk_manager.get_total_competition_days()
             phase = risk_manager.get_phase_config(days, total)
             target_positions = phase.get("max_position_count", 5)
-        except Exception:
+        except Exception as e:
+            logger.debug(f"获取比赛阶段配置失败，使用默认目标持仓数: {e}")
             target_positions = 5
 
         # 3. 计算需要新建仓的数量
@@ -2073,7 +2087,8 @@ A股交易时段: 上午9:30-11:30, 下午13:00-15:00
                     for s, p in auto_trader.positions.items()
                 }
             }
-        except Exception:
+        except Exception as e:
+            logger.debug(f"获取账户信息失败，使用默认值: {e}")
             return {"balance": 1000000, "total_assets": 1000000, "positions": {}}
 
     def _parse_trade_tags(self, ai_response: str) -> List[Dict]:
@@ -2235,7 +2250,8 @@ A股交易时段: 上午9:30-11:30, 下午13:00-15:00
                         try:
                             regime = market_regime_detector.detect()
                             regime_str = regime.get("regime", "unknown")
-                        except:
+                        except Exception as e:
+                            logger.debug(f"获取市场regime失败: {e}")
                             regime_str = "unknown"
                         from db_store import db_store
                         db_store.save_sentiment_snapshot(
@@ -2250,8 +2266,8 @@ A股交易时段: 上午9:30-11:30, 下午13:00-15:00
                             strategy=trade.get("strategy", ""),
                             regime=regime_str,
                         )
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"保存 {symbol} 情绪快照失败: {e}")
 
                 status = "✅" if success else "❌"
                 logger.info(f"🤖 AI调度器 {label} {symbol} {amount}股 → {status}")
@@ -2266,8 +2282,8 @@ A股交易时段: 上午9:30-11:30, 下午13:00-15:00
                             "title": f"🤖 AI自动{'买入' if action == 'buy' else '卖出'}",
                             "message": f"{symbol} {amount}股 @ ¥{price}\n分析轮次: #{self._analysis_count}",
                         })
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"推送交易通知失败: {e}")
 
                 # 记录交易冷却时间
                 if action == "buy" and success:
@@ -2286,8 +2302,8 @@ A股交易时段: 上午9:30-11:30, 下午13:00-15:00
                             confidence=0.5,
                             price=price
                         )
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"记录策略信号失败: {e}")
 
             except Exception as e:
                 logger.error(f"AI调度器执行交易失败: {e}")
@@ -2313,8 +2329,8 @@ A股交易时段: 上午9:30-11:30, 下午13:00-15:00
                     q = get_realtime_quote(sym)
                     if q and q.get("price"):
                         prices[sym] = float(q["price"])
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"获取 {sym} 实时行情失败: {e}")
 
             if prices:
                 auto_trader.evaluate_signals(prices)

@@ -29,6 +29,20 @@ class FrontendVerificationSuite:
         self.passed = 0
         self.failed = 0
         self.warnings = 0
+        import os
+        from pathlib import Path
+        token = os.environ.get("API_TOKEN", "")
+        if not token:
+            for p in (Path(__file__).resolve().parent.parent / "config" / "api_token.json", Path("/opt/ths-trading-ai/config/api_token.json")):
+                if p.exists():
+                    try:
+                        d = json.loads(p.read_text(encoding="utf-8"))
+                        token = d.get("token") or d.get("api_token") or ""
+                        if token:
+                            break
+                    except Exception:
+                        pass
+        self.api_token = token
 
     def assert_test(self, name: str, condition: bool, err_msg: str = ""):
         if condition:
@@ -139,7 +153,10 @@ class FrontendVerificationSuite:
         for ep, validator, desc in api_checks:
             try:
                 url = self.target_url + ep
-                req = urllib.request.Request(url, headers={"User-Agent": "THS-E2E-Tester/1.0"})
+                headers = {"User-Agent": "THS-E2E-Tester/1.0"}
+                if getattr(self, "api_token", ""):
+                    headers["Authorization"] = f"Bearer {self.api_token}"
+                req = urllib.request.Request(url, headers=headers)
                 with urllib.request.urlopen(req, timeout=4) as res:
                     data = json.loads(res.read().decode("utf-8"))
                     is_valid = validator(data)

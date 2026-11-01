@@ -1,0 +1,43 @@
+# ==============================================================================
+# 依赖锁定文件 (Dependency Lock File)
+# ==============================================================================
+# 本文件将 requirements.txt 中的 >= 约束固定为具体版本，用于生产环境的可复现构建。
+# 安装方式：
+#     pip install -r requirements.lock
+#
+# 注意：修改依赖时请同步更新 requirements.txt，并重新生成此锁定文件。
+# ==============================================================================
+
+# Web framework & WSGI production server
+flask==3.0.3
+flask-cors==4.0.1
+gunicorn==22.0.0
+gevent==24.2.1
+
+# Financial data
+akshare==1.14.72
+
+# Data processing
+pandas==2.2.3
+numpy==1.26.4
+
+# Strategy optimization
+optuna==4.0.0
+
+# Auto trading (optional)
+easytrader==0.33.0
+
+# Browser automation (optional)
+playwright==1.48.0
+
+# Scheduler (for Railway)
+apscheduler==3.10.4
+
+# JWT
+pyjwt==2.9.0
+
+# NLP Sentiment (lightweight)
+snownlp==0.12.3
+
+# 加密（传递依赖，安全敏感，显式锁定）
+cryptography==43.0.1

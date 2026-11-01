@@ -11,3 +11,24 @@ data/
 venv/
 .venv/
 node_modules/
+
+# ===== 密钥与敏感配置（禁止打入镜像） =====
+config/ai_config.json
+config/api_token.json
+config/jwt_secret.json
+config/ths_cookie.json
+config/desktop_config.json
+config/cookies.json
+config/cookie_key.json
+
+# ===== 备份文件 =====
+*.bak
+*.bak*
+
+# ===== 旧版单体入口 =====
+legacy_api_monolith.py
+
+# ===== 非生产目录 =====
+tests/
+docs/
+.github/

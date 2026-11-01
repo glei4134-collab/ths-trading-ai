@@ -19,40 +19,132 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from typing import Optional, Dict, List, Callable
 
+from paths import CONFIG_DIR as COOKIE_DIR
+
 logger = logging.getLogger(__name__)
 
 
 def _obfuscate_key() -> bytes:
-    """基于机器标识生成混淆密钥（非强加密，防止明文泄露）"""
+    """基于机器标识生成混淆密钥（旧版 XOR 混淆，仅用于向后兼容解密）"""
     seed = socket.gethostname() + "ths_trading_2026"
     return hashlib.sha256(seed.encode()).digest()[:16]
 
 
-def encrypt_cookie(plain: str) -> str:
-    """混淆加密 Cookie"""
-    if not plain:
-        return ""
+# Fernet 密钥文件路径（优先持久化到 DATA_DIR 挂载卷，兼顾 CONFIG_DIR）
+from paths import DATA_DIR
+_COOKIE_KEY_FILE_DATA = DATA_DIR / "cookie_key.json"
+_COOKIE_KEY_FILE_CONFIG = COOKIE_DIR / "cookie_key.json"
+# 运行时密钥缓存
+_fernet_key_cache: Optional[bytes] = None
+
+
+def _get_fernet_key() -> Optional[bytes]:
+    """
+    获取 Fernet 对称加密密钥。
+    优先级 1: 环境变量 COOKIE_KEY / FERNET_KEY
+    优先级 2: data/cookie_key.json（持久化卷）或 config/cookie_key.json
+    优先级 3: 自动生成并持久化到 data/ 与 config/
+    若 cryptography 库不可用则返回 None（调用方回退到 XOR 混淆）。
+    """
+    global _fernet_key_cache
+    if _fernet_key_cache is not None:
+        return _fernet_key_cache
+
+    # 1. 优先环境变量注入（生产容器推荐）
+    env_key = (os.environ.get("COOKIE_KEY") or os.environ.get("FERNET_KEY") or "").strip()
+    if env_key:
+        try:
+            _fernet_key_cache = env_key.encode("utf-8")
+            return _fernet_key_cache
+        except Exception as e:
+            logger.warning(f"解析环境变量中的 COOKIE_KEY 失败: {e}")
+
+    try:
+        from cryptography.fernet import Fernet
+    except Exception as e:
+        logger.warning(f"cryptography 不可用，Cookie 将使用旧版 XOR 混淆: {e}")
+        return None
+
+    # 2. 读取持久化文件（优先检查 DATA_DIR）
+    for kf in (_COOKIE_KEY_FILE_DATA, _COOKIE_KEY_FILE_CONFIG):
+        if kf.exists():
+            try:
+                data = json.loads(kf.read_text(encoding="utf-8"))
+                key = (data.get("key") or "").strip()
+                if key:
+                    _fernet_key_cache = key.encode("utf-8")
+                    return _fernet_key_cache
+            except Exception as e:
+                logger.warning(f"读取 {kf} 失败: {e}")
+
+    # 3. 生成新的 Fernet 密钥并持久化
+    key = Fernet.generate_key()
+    for kf in (_COOKIE_KEY_FILE_DATA, _COOKIE_KEY_FILE_CONFIG):
+        try:
+            kf.parent.mkdir(parents=True, exist_ok=True)
+            kf.write_text(
+                json.dumps({"key": key.decode("utf-8")}, indent=2),
+                encoding="utf-8",
+            )
+            logger.info(f"已生成 Fernet 密钥并存入 {kf}")
+        except Exception as e:
+            logger.error(f"写入 {kf} 失败: {e}")
+    _fernet_key_cache = key
+    return key
+
+
+def _xor_encrypt(plain: str) -> str:
+    """旧版 XOR + base64 混淆（仅作回退，非加密）"""
     key = _obfuscate_key()
     raw = plain.encode("utf-8")
-    # XOR + base64
     encrypted = bytes(b ^ key[i % len(key)] for i, b in enumerate(raw))
     return base64.b64encode(encrypted).decode("ascii")
 
 
+def _xor_decrypt(cipher: str) -> str:
+    """旧版 XOR + base64 解混淆"""
+    key = _obfuscate_key()
+    raw = base64.b64decode(cipher, validate=True)
+    decrypted = bytes(b ^ key[i % len(key)] for i, b in enumerate(raw))
+    return decrypted.decode("utf-8")
+
+
+def encrypt_cookie(plain: str) -> str:
+    """使用 Fernet 加密 Cookie；cryptography 不可用时回退到 XOR 混淆"""
+    if not plain:
+        return ""
+    key = _get_fernet_key()
+    if key is not None:
+        try:
+            from cryptography.fernet import Fernet
+            return Fernet(key).encrypt(plain.encode("utf-8")).decode("ascii")
+        except Exception as e:
+            logger.warning(f"Fernet 加密失败，回退到 XOR 混淆: {e}")
+    return _xor_encrypt(plain)
+
+
 def decrypt_cookie(cipher: str) -> str:
-    """解混淆 Cookie"""
+    """
+    解密 Cookie。
+    优先使用 Fernet 解密；若失败（旧版 XOR 数据或非密文）则回退到 XOR 逻辑，
+    最终仍失败时返回原值以兼容明文。
+    """
     if not cipher:
         return ""
+    key = _get_fernet_key()
+    if key is not None:
+        try:
+            from cryptography.fernet import Fernet
+            return Fernet(key).decrypt(cipher.encode("ascii")).decode("utf-8")
+        except Exception as e:
+            logger.debug(f"Fernet 解密失败，回退到 XOR 解混淆: {e}")
     try:
-        key = _obfuscate_key()
-        raw = base64.b64decode(cipher)
-        decrypted = bytes(b ^ key[i % len(key)] for i, b in enumerate(raw))
-        return decrypted.decode("utf-8")
-    except Exception:
+        return _xor_decrypt(cipher)
+    except Exception as e:
+        logger.debug(f"XOR 解混淆失败，返回原值以兼容明文: {e}")
         return cipher  # 兼容旧版明文
 
 # Cookie存储路径
-from paths import CONFIG_DIR as COOKIE_DIR
 COOKIE_FILE = COOKIE_DIR / "ths_cookie.json"
 
 # 同花顺模拟炒股 API 基础地址
@@ -166,7 +258,8 @@ class THSDesktopConnector:
             else:
                 self._saved_user = ""
                 self._saved_password = ""
-        except Exception:
+        except Exception as e:
+            logger.debug(f"加载桌面客户端配置失败: {e}")
             self._saved_user = ""
             self._saved_password = ""
 
@@ -184,8 +277,8 @@ class THSDesktopConnector:
                 data["ths_password"] = encrypt_cookie(self._saved_password)
             with open(cfg, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"保存桌面客户端配置失败: {e}")
 
     def save_credentials(self, user: str, password: str) -> Dict:
         """保存登录凭据（加密存储），供下次自动登录"""
@@ -258,7 +351,8 @@ class THSDesktopConnector:
                 capture_output=True, text=True, timeout=5
             )
             return process_name.lower() in result.stdout.lower()
-        except Exception:
+        except Exception as e:
+            logger.debug(f"检查进程 {process_name} 是否运行失败: {e}")
             return False
 
     @staticmethod
@@ -321,9 +415,10 @@ class THSDesktopConnector:
                 self.connected = True
                 self._save_config()
                 return {"success": True, "message": "连接成功", "exe_path": exe_path}
-            except Exception:
+            except Exception as e:
                 # 窗口连上了但数据读取失败
                 # easytrader THS模式：用户直接在xiadan.exe中登录，无需prepare()
+                logger.debug(f"窗口已连接但读取持仓/余额失败，继续使用客户端登录态: {e}")
                 self.connected = True
                 self._save_config()
                 logger.info("✅ 窗口已连接（登录态由客户端管理）")
@@ -353,8 +448,8 @@ class THSDesktopConnector:
                 hwnd = self._app.top_window().handle
                 _ctypes.windll.user32.PostMessageW(hwnd, WM_KEYDOWN, VK_F5, 0)
                 _ctypes.windll.user32.PostMessageW(hwnd, WM_KEYUP, VK_F5, 0)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"PostMessage F5 静默切换菜单失败: {e}")
             self.wait(sleep)
 
         if self.user:
@@ -508,8 +603,8 @@ class THSWebConnector:
                 "message": alert_msg,
                 "account_id": getattr(self, "account_id", 0)
             })
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"推送 Cookie 失效系统通知失败: {e}")
 
     def __init__(self, account_id: int = 0):
         self.account_id = account_id
@@ -597,8 +692,8 @@ class THSWebConnector:
                                 "message": "Cookie从活跃账户加载成功",
                                 "account_id": active_id
                             }
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"从活跃账户加载 Cookie 失败，将尝试本地文件: {e}")
 
             # 2. 从本地文件加载
             if not COOKIE_FILE.exists():
@@ -694,8 +789,8 @@ class THSWebConnector:
                     success=success,
                     error_message=err_msg
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"记录 API 指标失败: {e}")
 
         if error_code == THSErrorCode.COOKIE_EXPIRED:
             self.trigger_cookie_expired_alert(err_msg)
@@ -922,8 +1017,8 @@ class THSWebConnector:
                 # 没找到指定股票的持仓，返回任意一个股东账号
                 if positions:
                     return positions[0].get("gdzh", "")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"从持仓获取股东账号失败: {e}")
         return ""
 
     def buy(self, symbol: str, price: float, amount: int) -> Dict:
@@ -957,8 +1052,8 @@ class THSWebConnector:
                     quote = fetch_realtime_single(symbol)
                     if quote:
                         price = float(quote.get("price", 0))
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"获取 {symbol} 实时价格失败: {e}")
             # 从已有持仓中获取 gdzh
             gdzh = self._get_gdzh_from_positions(symbol)
 
@@ -1050,8 +1145,8 @@ class THSWebConnector:
                     quote = fetch_realtime_single(symbol)
                     if quote:
                         price = float(quote.get("price", 0))
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"获取 {symbol} 实时价格失败: {e}")
             if not gdzh:
                 gdzh = self._get_gdzh_from_positions(symbol)
 
@@ -1335,8 +1430,8 @@ def get_active_connector():
             trader = account_manager.get_trader(active_acc["id"])
             if trader and trader.connected:
                 return trader, "web"
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"通过 account_manager 查找活跃连接器失败: {e}")
     return None, None
 
 
@@ -1578,8 +1673,8 @@ class QRLoginManager:
                                 break
                     if "v" in cookie_map:
                         break
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"从数据库账户 Cookie 中提取 v 字段失败: {e}")
 
         return "; ".join(f"{k}={v}" for k, v in cookie_map.items())
 

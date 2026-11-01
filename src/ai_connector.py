@@ -196,6 +196,25 @@ class AIConnector:
     _SENSITIVE_FIELDS = ("api_key", "base_url", "model")
 
     @staticmethod
+    def _expand_env_refs(val: str) -> str:
+        """展开 ${ENV_VAR} 形式的环境变量引用，未设置则保留原样"""
+        if not val or not isinstance(val, str) or "${" not in val:
+            return val
+        import re
+        pattern = re.compile(r'\$\{([A-Za-z_][A-Za-z0-9_]*)\}')
+        return pattern.sub(lambda m: os.environ.get(m.group(1), m.group(0)), val)
+
+    @staticmethod
+    def _is_valid_key(val) -> bool:
+        """检查 API Key 是否为真实有效字符串（非空且非未展开的 ${ENV_VAR} 模板占位符）"""
+        if not val or not isinstance(val, str):
+            return False
+        v = val.strip()
+        if not v or (v.startswith("${") and v.endswith("}")):
+            return False
+        return True
+
+    @staticmethod
     def _encrypt_value(val: str) -> str:
         """加密单个字段"""
         if not val:
@@ -230,8 +249,13 @@ class AIConnector:
                     if field in data and data[field]:
                         data[field] = self._decrypt_value(data[field])
 
+                # 展开 ${ENV_VAR} 形式的环境变量引用
+                for k, v in data.items():
+                    if isinstance(v, str):
+                        data[k] = self._expand_env_refs(v)
+
                 self.config = AIConfig(**data)
-                self.connected = bool(self.config.api_key)
+                self.connected = self._is_valid_key(self.config.api_key)
         except Exception as e:
             logger.error(f"加载AI配置失败: {e}")
 
@@ -260,7 +284,7 @@ class AIConnector:
             if hasattr(self.config, key):
                 setattr(self.config, key, value)
 
-        self.connected = bool(self.config.api_key)
+        self.connected = self._is_valid_key(self.config.api_key)
         return self.save_config()
 
     def get_config(self) -> Dict:
@@ -271,7 +295,7 @@ class AIConnector:
                 "provider": self.config.provider,
                 "model": self.config.model,
                 "base_url": self.config.base_url,
-                "has_api_key": bool(self.config.api_key),
+                "has_api_key": self._is_valid_key(self.config.api_key),
                 "connected": self.connected,
                 "providers": self.PROVIDERS
             }
@@ -457,8 +481,8 @@ class AIConnector:
                         total = fund.get("total_assets", 0)
                         data_text += f"\n用户资金: 可用资金 {balance} 元, 总资产 {total} 元"
                         data_text += f"\n请确保推荐的买入数量不超过可用资金，且单只股票仓位不超过总资产的30%。"
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"注入用户资金信息失败: {e}")
 
         result = self.chat(data_text, system_prompt)
         if result.get("success"):

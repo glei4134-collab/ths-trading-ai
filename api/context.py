@@ -97,12 +97,6 @@ _PUBLIC_PATHS = {
     # 座舱态势展示只读端点 (确保大屏永不白屏)
     '/api/connection/info',
     '/api/connection/status',
-    '/api/accounts',
-    '/api/accounts/summary',
-    '/api/account/positions',
-    '/api/account/trades',
-    '/api/account/balance',
-    '/api/account/pending-orders',
     '/api/ai/scheduler/status',
     '/api/ai/scheduler/ledger/today',
     '/api/ai/scheduler/windows',

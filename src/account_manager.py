@@ -268,8 +268,8 @@ class THSAccountTrader:
                             now_dt = datetime.now(ZoneInfo("Asia/Shanghai"))
                             if (now_dt - last_dt).total_seconds() < 1800 and last_dt.date() == now_dt.date():
                                 should_snap = False
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug(f"解析快照时间戳失败: {e}")
                     if should_snap:
                         dbs.save_snapshot(
                             balance=ky_fund,
@@ -390,8 +390,8 @@ class AccountManager:
                     with db_store._get_conn() as conn:
                         conn.execute("UPDATE accounts SET ths_gdzh = ? WHERE id = ?", (gdzh, acc_id))
                         conn.commit()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"补齐 ths_gdzh 失败: {e}")
 
             db_store.set_active_account_id(acc_id)
             from ths_connector import web_connector
@@ -601,8 +601,8 @@ class AccountManager:
                             available_shares = int(float(p.get("available") or 0))
                             existing_shares = int(float(p.get("amount") or existing_shares))
                             break
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"获取卖出持仓可卖数量失败: {e}")
 
         quote = fetch_quote_silent(symbol)
         guard = validate_pre_trade(
@@ -653,8 +653,8 @@ class AccountManager:
             result["recorded"] = True
             try:
                 trader.sync_from_ths()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"下单后同步同花顺账户失败: {e}")
         else:
             result["recorded"] = False
         return result

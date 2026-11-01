@@ -10,11 +10,16 @@ services:
     environment:
       - TZ=Asia/Shanghai
       - PYTHONUNBUFFERED=1
+      # 密钥请通过环境变量注入，禁止挂载 config 密钥目录
+      # 示例（按需启用）：
+      # - JWT_SECRET=your_jwt_secret
+      # - AI_API_KEY=your_ai_api_key
+      # - THS_COOKIE=your_ths_cookie
     ports:
       - "5000:5000"
     volumes:
+      # 仅挂载运行时数据目录（持久化），不挂载 config 密钥目录
       - ./data:/app/data
-      - ./config:/app/config
     healthcheck:
       test: ["CMD", "python", "tools/auto_debugger.py", "--check-all"]
       interval: 60s

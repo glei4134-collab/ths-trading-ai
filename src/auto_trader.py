@@ -139,6 +139,8 @@ class AutoTrader:
         self._ds = ds or data_store
         # 从持久化存储加载余额和持仓
         self._load_from_data_store()
+        # 滑点比例（与回测引擎一致，默认 0.1%）
+        self.slippage_rate = self.config.get("slippage_rate", 0.001)
 
     def load_config(self) -> Dict:
         """加载配置"""
@@ -158,6 +160,7 @@ class AutoTrader:
             "monitor_interval": 30,          # 监控检查间隔（秒）
             "max_daily_trades": 10,          # 每日最大交易次数
             "trading_hours_only": True,      # 仅在交易时间执行
+            "slippage_rate": 0.001,          # 滑点比例（与回测一致，0.1%）
         }
 
         try:
@@ -453,6 +456,32 @@ class AutoTrader:
             order = self.create_order(symbol, action, int(amount or 0), float(price or 0.0))
             if notes:
                 order.notes = notes
+        # 滑点调整（与回测一致，模拟市场冲击）：买入上调、卖出下调
+        old_price = order.price
+        if order.action == "buy":
+            order.price = round(order.price * (1 + self.slippage_rate), 2)
+        else:
+            order.price = round(order.price * (1 - self.slippage_rate), 2)
+        logger.debug(f"滑点调整: {order.action} {order.symbol} {old_price} -> {order.price}")
+
+        # 涨跌停限价钳位保护（防交易所废单拒单）
+        try:
+            from order_guard import board_limit_pct
+            from fast_data import fetch_realtime_single
+            q = fetch_realtime_single(order.symbol)
+            if q and q.get("pre_close"):
+                pre = float(q["pre_close"])
+                limit = board_limit_pct(order.symbol)
+                high_limit = round(pre * (1.0 + limit), 2)
+                low_limit = round(pre * (1.0 - limit), 2)
+                if order.action == "buy" and order.price > high_limit:
+                    logger.warning(f"订单 {order.symbol} 滑点价格 {order.price} 触顶涨停价 {high_limit}，钳位至涨停价")
+                    order.price = high_limit
+                elif order.action == "sell" and order.price < low_limit:
+                    logger.warning(f"订单 {order.symbol} 滑点价格 {order.price} 触底跌停价 {low_limit}，钳位至跌停价")
+                    order.price = low_limit
+        except Exception as clamp_err:
+            logger.debug(f"涨跌停限价钳位跳过: {clamp_err}")
         # ★ 订单执行优化: 五档盘口深度 (OBI) 解析与涨停跨档抢筹
         depth = None
         if order.action == "buy":

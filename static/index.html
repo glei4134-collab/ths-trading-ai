@@ -20,7 +20,17 @@
             window.fetch = function(url, options) {
                 try {
                     options = options || {};
-                    const token = localStorage.getItem('api_token') || sessionStorage.getItem('api_token') || '';
+                    let token = localStorage.getItem('api_token') || sessionStorage.getItem('api_token') || '';
+                    if (!token && window.location && window.location.search) {
+                        try {
+                            const urlParams = new URLSearchParams(window.location.search);
+                            const qToken = urlParams.get('token');
+                            if (qToken) {
+                                token = qToken;
+                                localStorage.setItem('api_token', qToken);
+                            }
+                        } catch(e) {}
+                    }
                     if (token && typeof url === 'string' && url.startsWith('/api/')) {
                         options.headers = options.headers || {};
                         if (options.headers instanceof Headers) {
@@ -5420,6 +5430,10 @@
                             <input type="password" class="form-input" id="loginPassword" placeholder="请输入访问密码" autofocus>
                         </div>
                         <div id="loginError" style="color:#f85149;font-size:12px;margin-top:8px;display:none;"></div>
+                        <div style="font-size:11px;color:#94a3b8;margin-top:10px;line-height:1.5;background:rgba(255,255,255,0.03);padding:8px 10px;border-radius:4px;border:1px solid rgba(255,255,255,0.06);">
+                            💡 提示：本地初次运行可查看终端控制台或 <span style="color:#ffe600;font-family:var(--font-mono);">config/api_token.json</span> 中的访问令牌。<br>
+                            若需完全免密调试，可设置环境变量 <span style="color:#00f59b;font-family:var(--font-mono);">ALLOW_INSECURE=1</span>。
+                        </div>
                     </div>
                     <div class="modal-footer">
                         <button class="connect-btn" style="flex:1;background:#ff1824;" onclick="doLogin()">登录</button>

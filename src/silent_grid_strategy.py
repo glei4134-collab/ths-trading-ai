@@ -257,8 +257,8 @@ class SilentWMCopy(IGridStrategy):
                     # 点击验证码图片刷新
                     try:
                         captcha_ctrl.click_input()  # 这个可能抢焦点，但仅在验证码区域
-                    except:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"点击验证码刷新失败: {e}")
                     self._trader.wait(0.3)
                     continue
 
@@ -288,8 +288,8 @@ class SilentWMCopy(IGridStrategy):
                         # 清理临时文件
                         try:
                             os.remove(file_path)
-                        except:
-                            pass
+                        except Exception as e:
+                            logger.debug(f"清理验证码临时文件失败: {e}")
                         return
                 except Exception:
                     # 对话框消失，验证码已解决
@@ -305,8 +305,8 @@ class SilentWMCopy(IGridStrategy):
         try:
             cancel_btn = top_win.Button2
             self._user32.SendMessageW(cancel_btn.handle, BM_CLICK, 0, 0)
-        except:
-            pass
+        except Exception as e:
+            logger.debug(f"点击取消按钮失败: {e}")
         gs.Copy._need_captcha_reg = True
         logger.warning("[静默验证码] ❌ 验证码识别失败，已取消")
 
