@@ -6,13 +6,9 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
-        <!-- Google Fonts: Inter & JetBrains Mono (金融等宽数字与顶级排版) -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-    <title>同花顺模拟比赛AI交易系统</title>
-    <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
+        <title>同花顺模拟比赛AI交易系统</title>
+    <script src="/static/echarts.min.js"></script>
+    <script src="/static/marked.min.js"></script>
     <script>
         // 自动注入 API Token 拦截器 (透明支持 Authorization: Bearer <token>)
         (function() {
@@ -307,25 +303,7 @@
                 letter-spacing: 0.3px !important;
             }
 
-            #workstationLayout {
-                height: calc(100vh - 85px - 58px) !important;
-                padding-bottom: 6px !important;
-            }
-
-            .panel {
-                display: none !important;
-                width: 100% !important;
-                height: 100% !important;
-                border-radius: 8px !important;
-            }
-
-            .panel.mobile-active {
-                display: flex !important;
-            }
-
-            button, select, input[type="text"], input[type="tel"], input[type="password"] {
-                min-height: 42px !important;
-            }
+            
         }
 
 
@@ -8390,6 +8368,8 @@
     let _lastRttTime = 0;
     let _activeAccountId = null;
     let _cachedAccounts = [];
+    let _isConsolidatedViewOpen = false;
+    window.portfolioEquityEChart = window.portfolioEquityEChart || null;
 
     // 格式化金额 (元 / 万元)
     function fmtMoney(val) {
@@ -8530,6 +8510,7 @@
         const statusBadgeMap = {
             'DONE': { text: '已执行', bg: 'rgba(0, 245, 155, 0.15)', color: '#00f59b', border: '#00f59b' },
             'SUCCESS': { text: '成功', bg: 'rgba(0, 245, 155, 0.15)', color: '#00f59b', border: '#00f59b' },
+            'CATCHUP_SUCCESS': { text: '补偿完成', bg: 'rgba(0, 245, 155, 0.15)', color: '#00f59b', border: '#00f59b' },
             'RUNNING': { text: '执行中', bg: 'rgba(255, 24, 36, 0.25)', color: '#ff1824', border: '#ff1824' },
             'ACTIVE': { text: '活跃', bg: 'rgba(255, 24, 36, 0.25)', color: '#ff1824', border: '#ff1824' },
             'PENDING': { text: '待触发', bg: 'rgba(255, 255, 255, 0.05)', color: '#94a3b8', border: 'rgba(255,255,255,0.15)' },
@@ -8543,7 +8524,8 @@
         }
 
         container.innerHTML = entries.map((e, idx) => {
-            const st = statusBadgeMap[e.status] || statusBadgeMap['WAITING'];
+            const stKey = (e.status || 'WAITING').toUpperCase();
+            const st = statusBadgeMap[stKey] || (stKey.startsWith('SKIPPED') ? statusBadgeMap['SKIPPED'] : statusBadgeMap['WAITING']);
             const summary = e.skip_reason || e.output_summary || e.error_detail || '等待时序触发窗口...';
             const dur = e.duration_ms ? `${e.duration_ms}ms` : '';
             return `
@@ -8559,7 +8541,7 @@
                         </div>
                     </div>
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 2px;">
-                        <div style="font-size: 11px; color: #94a3b8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 80%;">
+                        <div style="font-size: 11px; color: #94a3b8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 78%;">
                             ${summary}
                         </div>
                         <button onclick="triggerStepRun('${e.step_id}', true)" style="background: rgba(255,24,36,0.12); border: 1px solid rgba(255,24,36,0.3); color: #ff1824; font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 4px; cursor: pointer; white-space: nowrap;">
@@ -8614,7 +8596,7 @@
         if (posText) posText.innerHTML = '建议目标单票仓位: 26.5% (符合 &le;35% 团队硬限)';
     }
 
-    // 4. 渲染算法自动优选冲击候选池
+    // 4. 渲染算法自动优选冲击候选池 (桌面端表格 + 移动端高保真金融卡片流)
     async function renderCandidateTable() {
         const tbody = document.getElementById('candidateTableBody');
         const mobList = document.getElementById('candidateMobileList');
@@ -8626,8 +8608,10 @@
             const json = await res.json();
             if (json.candidates && json.candidates.length) {
                 list = json.candidates;
-            } else if (json.data && json.data.length) {
+            } else if (json.data && Array.isArray(json.data) && json.data.length) {
                 list = json.data;
+            } else if (json.data && json.data.candidates && json.data.candidates.length) {
+                list = json.data.candidates;
             }
         } catch(e) {
             console.warn('[P5] 获取今日候选池失败:', e);
@@ -8647,10 +8631,10 @@
             const price = Number(item.price) || 0;
             const stopLoss = Number(item.stop_loss || item.stop_loss_price) || (price * 0.955);
             const score = item.ai_score || item.ensemble_score || 85;
-            const weight = item.recommended_weight || 26.5;
+            const weight = item.recommended_weight !== undefined ? item.recommended_weight : 26.5;
 
             return `
-                <tr style="border-bottom: 1px solid rgba(255,255,255,0.06); cursor: pointer; transition: background 0.15s;" onmouseover="this.style.background='rgba(255,24,36,0.06)'" onmouseout="this.style.background='transparent'" onclick="selectStock('${item.code}')">
+                <tr style="border-bottom: 1px solid rgba(255,255,255,0.06); cursor: pointer; transition: background 0.15s;" onmouseover="this.style.background='rgba(255,24,36,0.06)'" onmouseout="this.style.background='transparent'" onclick="if(typeof selectStock==='function') selectStock('${item.code}')">
                     <td style="padding: 10px 14px; white-space: nowrap;">
                         <div style="font-weight: 700; color: #f8fafc; font-size: 13px;">${item.name}</div>
                         <div style="font-size: 11px; color: #94a3b8; font-family: var(--font-mono);">${item.code}</div>
@@ -8677,7 +8661,7 @@
                         </span>
                     </td>
                     <td style="padding: 10px 14px; text-align: center;">
-                        <span style="font-size: 11px; font-weight: 700; color: #ff1824; background: rgba(255,24,36,0.15); padding: 2px 8px; border-radius: 4px; border: 1px solid rgba(255,24,36,0.3);">
+                        <span style="font-size: 11px; font-weight: 700; color: ${item.decision === 'HOLD' ? '#ffe600' : '#ff1824'}; background: ${item.decision === 'HOLD' ? 'rgba(255,230,0,0.14)' : 'rgba(255,24,36,0.15)'}; padding: 2px 8px; border-radius: 4px; border: 1px solid ${item.decision === 'HOLD' ? 'rgba(255,230,0,0.35)' : 'rgba(255,24,36,0.3)'};">
                             ${item.decision === 'HOLD' ? '观望' : '买入'}
                         </span>
                     </td>
@@ -8691,29 +8675,59 @@
             `;
         }).join('');
 
-        // 移动端卡片列表
+        // 移动端专属金融卡片流列表 (.mobile-stock-card)
         if (mobList) {
-            mobList.innerHTML = list.map(item => {
-                const chg = Number(item.change_pct) || 0;
-                const chgColor = chg >= 0 ? '#ff1824' : '#00f59b';
-                const chgSign = chg > 0 ? '+' : '';
+            mobList.innerHTML = list.map(c => {
+                const change = Number(c.change_pct) || 0;
+                const isUp = change >= 0;
+                const changeColor = isUp ? '#ff1824' : '#00f59b';
+                const changeBg = isUp ? 'rgba(255,24,36,0.16)' : 'rgba(0,245,155,0.14)';
+                const changeBorder = isUp ? 'rgba(255,24,36,0.4)' : 'rgba(0,245,155,0.35)';
+                const changePrefix = change > 0 ? '+' : '';
+                const score = Number(c.ensemble_score !== undefined ? c.ensemble_score : c.ai_score) || 85;
+                const act = (c.decision || c.action || 'BUY').toUpperCase();
+                const actBadgeStyled = act === 'BUY'
+                    ? '<span style="background:rgba(255,24,36,0.18);color:#ff1824;border:1px solid rgba(255,24,36,0.45);padding:2px 8px;border-radius:12px;font-size:11px;font-weight:800;">买入进攻</span>'
+                    : '<span style="background:rgba(255,230,0,0.16);color:#ffe600;border:1px solid rgba(255,230,0,0.4);padding:2px 8px;border-radius:12px;font-size:11px;font-weight:800;">保持观望</span>';
+                const targetWeight = c.recommended_weight !== undefined
+                    ? `${Number(c.recommended_weight).toFixed(1)}%`
+                    : (c.target_weight || '26.5%');
+                const stopLossVal = c.stop_loss_price !== undefined ? c.stop_loss_price : (c.stop_loss || (c.price * 0.955));
+                const stopLossPrice = Number(stopLossVal || 0).toFixed(2);
+                const sector = c.industry || c.sector || '主线热门';
+                const votesText = (c.votes_approved !== undefined && c.total_voters !== undefined)
+                    ? `${c.votes_approved}/${c.total_voters} 赞成`
+                    : (c.ensemble_votes || '3/5 赞成');
+
                 return `
-                    <div onclick="selectStock('${item.code}')" style="background: rgba(18, 14, 20, 0.85); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 8px;">
-                        <div style="display: flex; justify-content: space-between; align-items: center;">
-                            <div>
-                                <span style="font-weight: 800; font-size: 14px; color: #f8fafc;">${item.name}</span>
-                                <span style="font-size: 11px; color: #94a3b8; font-family: var(--font-mono); margin-left: 6px;">${item.code}</span>
+                    <div class="mobile-stock-card" onclick="if(typeof selectStock==='function') selectStock('${c.code}')">
+                        <div class="m-card-header">
+                            <div class="m-stock-title">
+                                <span class="m-stock-name">${c.name}</span>
+                                <div class="m-stock-sub">
+                                    <span class="m-stock-code">${c.code}</span>
+                                    <span class="m-stock-sector">${sector}</span>
+                                </div>
                             </div>
-                            <span style="font-size: 14px; font-weight: 800; font-family: var(--font-mono); color: ${chgColor};">
-                                ${chgSign}${chg.toFixed(2)}%
-                            </span>
+                            <div class="m-stock-quote">
+                                <span class="m-stock-price">&yen;${Number(c.price || 0).toFixed(2)}</span>
+                                <span class="m-stock-badge" style="background:${changeBg};border:1px solid ${changeBorder};color:${changeColor};">
+                                    ${changePrefix}${change.toFixed(2)}%
+                                </span>
+                            </div>
                         </div>
-                        <div style="display: flex; justify-content: space-between; align-items: center; font-size: 12px;">
-                            <span style="color: #94a3b8;">现价: <b style="color:#f8fafc; font-family:var(--font-mono);">¥${Number(item.price||0).toFixed(2)}</b></span>
-                            <span style="color: #94a3b8;">多因子: <b style="color:#ffe600; font-family:var(--font-mono);">${item.ai_score || 85}分</b></span>
-                            <span style="font-weight: 700; color: #ff1824; background: rgba(255,24,36,0.15); padding: 1px 6px; border-radius: 4px;">
-                                ${item.decision === 'HOLD' ? '观望' : '买入'}
-                            </span>
+                        <div class="m-card-body">
+                            <div class="m-card-tag">${actBadgeStyled}</div>
+                            <div class="m-card-tag" style="color:#cbd5e1;font-size:11px;">
+                                <span>🗳️ ${votesText}</span>
+                            </div>
+                            <div class="m-card-tag" style="color:#ffe600;font-weight:700;font-family:var(--font-mono);font-size:11px;">
+                                <span>仓位 ${targetWeight}</span>
+                            </div>
+                        </div>
+                        <div class="m-card-footer">
+                            <span>🛡️ 止损线: <b style="color:#00f59b;font-family:var(--font-mono);">&yen;${stopLossPrice}</b> (-4.5%)</span>
+                            <span>因子分: <b style="color:#ffe600;font-family:var(--font-mono);">${score.toFixed(1)}</b></span>
                         </div>
                     </div>
                 `;
@@ -8721,7 +8735,199 @@
         }
     }
 
-    // 5. 渲染 3 账户矩阵卡片与资产总览
+    // 5. ECharts 组合净值走势图 (含移动端隐藏容器自动重绘 + SVG 高保真降级兜底)
+    let _equityResizeObserverBound = false;
+    async function loadPortfolioEquityCurve(currentTotalAssets, baseInitialBal = 200000) {
+        const container = document.getElementById('portfolioEquityChart');
+        if (!container) return;
+
+        try {
+            const res = await fetch('/api/data/equity-curve?days=14&_t=' + Date.now());
+            const resData = await res.json();
+            let rawData = (resData.success && Array.isArray(resData.data)) ? resData.data : [];
+
+            const activeId = window.activeAccountId || _activeAccountId;
+            if (activeId && rawData.length > 0 && rawData.some(item => item.account_id == activeId)) {
+                rawData = rawData.filter(item => item.account_id == activeId);
+            }
+
+            let dates = [];
+            let values = [];
+            const targetAssets = currentTotalAssets > 0 ? currentTotalAssets : baseInitialBal;
+
+            if (rawData.length >= 2) {
+                const step = Math.max(1, Math.floor(rawData.length / 24));
+                for (let i = 0; i < rawData.length; i += step) {
+                    const item = rawData[i];
+                    const ts = String(item.timestamp || item.date || '');
+                    const label = ts.length >= 16 ? ts.slice(5, 16) : (ts.split('T')[0] || ts);
+                    dates.push(label);
+                    values.push(Math.round(Number(item.total_assets || targetAssets)));
+                }
+                const lastItem = rawData[rawData.length - 1];
+                const lastTs = String(lastItem.timestamp || lastItem.date || '');
+                const lastLabel = lastTs.length >= 16 ? lastTs.slice(5, 16) : (lastTs.split('T')[0] || lastTs);
+                if (dates[dates.length - 1] !== lastLabel) {
+                    dates.push(lastLabel);
+                    values.push(Math.round(Number(lastItem.total_assets || targetAssets)));
+                }
+            } else {
+                const today = new Date();
+                for (let i = 6; i >= 0; i--) {
+                    const d = new Date(today.getTime() - i * 86400000);
+                    const mm = String(d.getMonth() + 1).padStart(2, '0');
+                    const dd = String(d.getDate()).padStart(2, '0');
+                    dates.push(`${mm}-${dd}`);
+                    const ratio = (6 - i) / 6;
+                    const simulated = baseInitialBal + (targetAssets - baseInitialBal) * ratio;
+                    values.push(Math.round(simulated));
+                }
+            }
+
+            const alertLineVal = Math.round((baseInitialBal || 200000) * 0.88);
+            const minDataVal = Math.min(...values, alertLineVal);
+            const maxDataVal = Math.max(...values, baseInitialBal);
+            const yMin = Math.floor((minDataVal * 0.985) / 1000) * 1000;
+            const yMax = Math.ceil((maxDataVal * 1.015) / 1000) * 1000;
+
+            if (typeof window.echarts !== 'undefined' && container.clientWidth > 0) {
+                if (!window.portfolioEquityEChart) {
+                    window.portfolioEquityEChart = window.echarts.init(container);
+                    window.addEventListener('resize', () => {
+                        if (window.portfolioEquityEChart) window.portfolioEquityEChart.resize();
+                    });
+                }
+                if (!_equityResizeObserverBound && typeof ResizeObserver !== 'undefined') {
+                    _equityResizeObserverBound = true;
+                    const ro = new ResizeObserver(() => {
+                        if (container.clientWidth > 0) {
+                            if (!window.portfolioEquityEChart && typeof window.echarts !== 'undefined') {
+                                window.portfolioEquityEChart = window.echarts.init(container);
+                            }
+                            if (window.portfolioEquityEChart) {
+                                window.portfolioEquityEChart.resize();
+                            }
+                        }
+                    });
+                    ro.observe(container);
+                }
+
+                const isProfit = values[values.length - 1] >= baseInitialBal;
+                const mainColor = isProfit ? '#ff1824' : '#00f59b';
+                const areaTop = isProfit ? 'rgba(255, 24, 36, 0.35)' : 'rgba(0, 245, 155, 0.32)';
+                const areaBottom = isProfit ? 'rgba(255, 24, 36, 0.02)' : 'rgba(0, 245, 155, 0.02)';
+
+                const option = {
+                    tooltip: {
+                        trigger: 'axis',
+                        backgroundColor: 'rgba(18, 14, 20, 0.95)',
+                        borderColor: 'rgba(255, 24, 36, 0.4)',
+                        textStyle: { color: '#f8fafc', fontSize: 11 },
+                        formatter: function(params) {
+                            const p = params[0];
+                            return `${p.axisValue}<br/>净值: <b>¥${Number(p.value).toLocaleString()}</b>`;
+                        }
+                    },
+                    grid: {
+                        top: 12,
+                        right: 10,
+                        bottom: 20,
+                        left: 44
+                    },
+                    xAxis: {
+                        type: 'category',
+                        data: dates,
+                        axisLine: { lineStyle: { color: '#30363d' } },
+                        axisLabel: { color: '#8b949e', fontSize: 9, hideOverlap: true }
+                    },
+                    yAxis: {
+                        type: 'value',
+                        min: yMin,
+                        max: yMax,
+                        splitNumber: 3,
+                        splitLine: { lineStyle: { color: 'rgba(255,255,255,0.06)' } },
+                        axisLabel: {
+                            color: '#8b949e',
+                            fontSize: 9,
+                            formatter: function(val) {
+                                return (val / 1000).toFixed(0) + 'k';
+                            }
+                        }
+                    },
+                    series: [{
+                        data: values,
+                        type: 'line',
+                        smooth: true,
+                        symbol: 'none',
+                        lineStyle: { color: mainColor, width: 2 },
+                        areaStyle: {
+                            color: new window.echarts.graphic.LinearGradient(0, 0, 0, 1, [
+                                { offset: 0, color: areaTop },
+                                { offset: 1, color: areaBottom }
+                            ])
+                        },
+                        markLine: {
+                            silent: true,
+                            symbol: 'none',
+                            lineStyle: { type: 'dashed', color: '#ffe600', width: 1.2 },
+                            data: [{
+                                yAxis: alertLineVal,
+                                label: {
+                                    formatter: '-12% 警戒 (' + (alertLineVal / 1000).toFixed(0) + 'k)',
+                                    position: 'insideEndTop',
+                                    color: '#ffe600',
+                                    fontSize: 9
+                                }
+                            }]
+                        }
+                    }]
+                };
+
+                window.portfolioEquityEChart.setOption(option, true);
+            } else {
+                if (!_equityResizeObserverBound && typeof ResizeObserver !== 'undefined') {
+                    _equityResizeObserverBound = true;
+                    const ro = new ResizeObserver(() => {
+                        if (container.clientWidth > 0 && typeof window.echarts !== 'undefined') {
+                            loadPortfolioEquityCurve(currentTotalAssets, baseInitialBal);
+                        }
+                    });
+                    ro.observe(container);
+                }
+                const w = 300, h = 115, padL = 38, padR = 8, padT = 10, padB = 18;
+                const plotW = w - padL - padR;
+                const plotH = h - padT - padB;
+                const span = Math.max(1, yMax - yMin);
+                const pts = values.map((v, idx) => {
+                    const x = padL + (idx / Math.max(1, values.length - 1)) * plotW;
+                    const y = padT + (1 - (v - yMin) / span) * plotH;
+                    return `${x.toFixed(1)},${y.toFixed(1)}`;
+                });
+                const alertY = (padT + (1 - (alertLineVal - yMin) / span) * plotH).toFixed(1);
+                const polyPts = `${padL},${padT + plotH} ` + pts.join(' ') + ` ${padL + plotW},${padT + plotH}`;
+                container.innerHTML = `
+                    <svg viewBox="0 0 ${w} ${h}" style="width:100%;height:120px;display:block;">
+                        <defs>
+                            <linearGradient id="eqGrad" x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="0%" stop-color="#00f59b" stop-opacity="0.32"/>
+                                <stop offset="100%" stop-color="#00f59b" stop-opacity="0.02"/>
+                            </linearGradient>
+                        </defs>
+                        <line x1="${padL}" y1="${alertY}" x2="${w - padR}" y2="${alertY}" stroke="#ffe600" stroke-width="1" stroke-dasharray="4,3"/>
+                        <text x="${w - padR - 2}" y="${Math.max(10, alertY - 3)}" fill="#ffe600" font-size="8" text-anchor="end">-12% 警戒 (${(alertLineVal/1000).toFixed(0)}k)</text>
+                        <polygon points="${polyPts}" fill="url(#eqGrad)"/>
+                        <polyline fill="none" stroke="#00f59b" stroke-width="2" points="${pts.join(' ')}"/>
+                        <text x="2" y="${padT + 6}" fill="#8b949e" font-size="8">${(yMax/1000).toFixed(0)}k</text>
+                        <text x="2" y="${padT + plotH}" fill="#8b949e" font-size="8">${(yMin/1000).toFixed(0)}k</text>
+                    </svg>
+                `;
+            }
+        } catch (e) {
+            console.warn('[P5] 渲染组合净值走势图异常:', e);
+        }
+    }
+
+    // 6. 渲染 3 账户矩阵卡片与资产总览
     async function syncAndRenderMultiAccounts() {
         let accounts = [];
         let activeIdFromBackend = null;
@@ -8742,10 +8948,10 @@
         if (!accounts || !accounts.length) {
             const grid = document.getElementById('accountCardsGrid');
             if (grid) grid.innerHTML = '<div style="text-align:center;color:#94a3b8;padding:12px;font-size:11px;grid-column:1/-1;">暂无绑定账户</div>';
+            loadPortfolioEquityCurve(200000, 200000);
             return;
         }
 
-        // 精准自动同步后端 /api/accounts 返回的 active_account_id，首屏与切换无缝高亮
         if (activeIdFromBackend) {
             _activeAccountId = activeIdFromBackend;
             window.activeAccountId = activeIdFromBackend;
@@ -8758,7 +8964,6 @@
 
         const currentActiveId = window.activeAccountId || _activeAccountId || (accounts[0] && accounts[0].id);
 
-        // 账户元数据风格配置 (先锋进攻, 稳健中军, 尾盘防守)
         const HETERO_ACCOUNTS_CONFIG = {
             0: { label: '先锋进攻', badge: 'MOMENTUM', themeColor: '#ff1824', bgGrad: 'rgba(255,24,36,0.12)' },
             1: { label: '稳健中军', badge: 'TREND-CORE', themeColor: '#00f59b', bgGrad: 'rgba(0,245,155,0.12)' },
@@ -8793,21 +8998,23 @@
                     ? `border: 1px solid ${cfg.themeColor}; border-top: 3px solid ${cfg.themeColor}; background: linear-gradient(180deg, rgba(35,20,30,0.98) 0%, rgba(18,14,20,0.95) 100%); box-shadow: 0 0 16px ${cfg.themeColor}55;`
                     : `border: 1px solid rgba(255,255,255,0.08); border-top: 2px solid ${cfg.themeColor}; background: rgba(18, 14, 20, 0.85);`;
 
+                const dispName = (acc.name && String(acc.name).length <= 4) ? `账户${acc.name}` : (acc.name || `账户${acc.id}`);
+
                 return `
-                    <div onclick="switchAccount(${acc.id})" style="${activeStyle} border-radius: 6px; padding: 8px 10px; cursor: pointer; transition: all 0.2s;" onmouseover="this.style.transform='translateY(-2px)'" onmouseout="this.style.transform='none'">
-                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-                            <div style="display: flex; align-items: center; gap: 4px;">
-                                <span style="font-size: 11px; font-weight: 800; color: #f8fafc;">${acc.name || `账户${acc.id}`}</span>
-                                ${isActive ? '<span style="font-size: 9px; color: #00f59b; font-weight: 800;">●当前</span>' : ''}
+                    <div onclick="switchAccount(${acc.id})" style="${activeStyle} border-radius: 6px; padding: 8px 8px; cursor: pointer; transition: all 0.2s; min-width: 0; overflow: hidden;" onmouseover="this.style.transform='translateY(-2px)'" onmouseout="this.style.transform='none'">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; gap: 2px;">
+                            <div style="display: flex; align-items: center; gap: 3px; min-width: 0; overflow: hidden;">
+                                <span style="font-size: 11px; font-weight: 800; color: #f8fafc; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${dispName}</span>
+                                ${isActive ? '<span style="font-size: 9px; color: #00f59b; font-weight: 800; flex-shrink: 0;">●</span>' : ''}
                             </div>
-                            <span style="font-size: 9px; font-weight: 800; font-family: var(--font-mono); padding: 1px 5px; border-radius: 3px; color: ${cfg.themeColor}; background: ${cfg.bgGrad};">${cfg.badge}</span>
+                            <span style="font-size: 8px; font-weight: 800; font-family: var(--font-mono); padding: 1px 4px; border-radius: 3px; color: ${cfg.themeColor}; background: ${cfg.bgGrad}; flex-shrink: 0;">${cfg.label}</span>
                         </div>
-                        <div style="font-size: 13px; font-weight: 800; color: #f8fafc; font-family: var(--font-mono); margin-bottom: 2px;">
+                        <div style="font-size: 13px; font-weight: 800; color: #f8fafc; font-family: var(--font-mono); margin-bottom: 2px; white-space: nowrap;">
                             ¥${fmtMoney(assets)}
                         </div>
-                        <div style="display: flex; justify-content: space-between; align-items: center; font-size: 10px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; font-size: 10px; white-space: nowrap;">
                             <span style="color: #94a3b8;">余 ¥${fmtMoney(available)}</span>
-                            <span style="color: ${profitColor}; font-weight: 700; font-family: var(--font-mono);">${sign}${profitRate.toFixed(2)}%</span>
+                            <span style="color: ${profitColor}; font-weight: 700; font-family: var(--font-mono);">${sign}${profitRate.toFixed(1)}%</span>
                         </div>
                     </div>
                 `;
@@ -8861,7 +9068,8 @@
             sTr.style.color = pProfitRate >= 0 ? '#ff1824' : '#00f59b';
         }
 
-        // 6. 持仓与风控指标
+        // 7. 渲染组合净值走势曲线与持仓风控指标
+        loadPortfolioEquityCurve(pAssets, pInitial);
         renderPositionsAndRisk(pAssets);
     }
 
@@ -8925,9 +9133,85 @@
         }
     }
 
+    // 8. 实时执行引擎流水监听与辅助交互函数
+    async function loadExecutionLogStream() {
+        const execLogEl = document.getElementById('sideExecutionLog');
+        const execCountEl = document.getElementById('sideExecCount');
+        if (!execLogEl) return;
+        try {
+            const res = await fetch('/api/ai/decision_stream?_t=' + Date.now());
+            const resData = await res.json();
+            if (!resData.success || !resData.data) return;
+            const d = resData.data;
+            if (Array.isArray(d.recent_logs) && d.recent_logs.length > 0) {
+                execLogEl.innerHTML = d.recent_logs.map(log => {
+                    let col = '#8b949e';
+                    if (log.includes('成功') || log.includes('买入') || log.includes('成交')) col = '#00f59b';
+                    else if (log.includes('警告') || log.includes('观望')) col = '#ffe600';
+                    else if (log.includes('失败') || log.includes('止损') || log.includes('违规')) col = '#ff1824';
+                    return `<div style="color:${col};margin-bottom:4px;word-break:break-all;">${log}</div>`;
+                }).join('');
+                execLogEl.scrollTop = execLogEl.scrollHeight;
+                if (execCountEl) execCountEl.textContent = `${d.recent_logs.length} 笔动作`;
+            }
+        } catch (e) {}
+    }
+
+    function toggleExecutionLogFold() {
+        const logEl = document.getElementById('sideExecutionLog');
+        const btn = document.getElementById('execLogFoldBtn');
+        if (!logEl) return;
+        const isExp = logEl.classList.toggle('expanded');
+        if (btn) btn.textContent = isExp ? '收起' : '展开';
+    }
+
+    function toggleConsolidatedView() {
+        _isConsolidatedViewOpen = !_isConsolidatedViewOpen;
+        const box = document.getElementById('consolidatedSummaryBox');
+        const btn = document.getElementById('btnConsolidatedView');
+        if (box) box.style.display = _isConsolidatedViewOpen ? 'block' : 'none';
+        if (btn) {
+            btn.style.background = _isConsolidatedViewOpen ? 'rgba(255,24,36,0.28)' : 'rgba(255,24,36,0.12)';
+            btn.textContent = _isConsolidatedViewOpen ? '收起合并总览' : '📊 全局合并总览';
+        }
+    }
+
+    async function runEnsembleDecide() {
+        if (typeof showToast === 'function') showToast('正在重新计算多策略量化加权表决...', 'info');
+        renderEnsembleGrid();
+        await renderCandidateTable();
+        if (typeof showToast === 'function') showToast('多策略量化表决与候选池已刷新', 'success');
+    }
+
+    async function triggerStepRun(stepId, dryRun = true) {
+        if (typeof showToast === 'function') showToast(`正在演练时序节点 ${stepId}...`, 'info');
+        try {
+            const res = await fetch('/api/ai/scheduler/debug/step_run', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ step_id: stepId, dry_run: dryRun })
+            });
+            const data = await res.json();
+            if (data.success) {
+                if (typeof showToast === 'function') showToast(`✅ 节点 ${stepId} 演练完成`, 'success');
+                renderPipelineList();
+            } else {
+                if (typeof showToast === 'function') showToast(`演练提示: ${data.message || '已完成'}`, 'info');
+            }
+        } catch (e) {
+            if (typeof showToast === 'function') showToast(`请求异常: ${e.message}`, 'error');
+        }
+    }
+
     // 全局启动与自愈轮询
     function startProCockpitEngine() {
         console.log("🚀 [P5 ENGINE] 启动 ProCockpitEngine 轮询...");
+
+        // 0. 立即触发移动端/桌面端自适应布局切换，确保手机首屏只展示当前活动 Tab 面板
+        if (typeof handleResize === 'function') {
+            try { handleResize(); } catch(e) {}
+        }
+
         // 立即执行 HUD 时钟
         tickHudClock();
         setInterval(tickHudClock, 1000);
@@ -8941,22 +9225,35 @@
         renderEnsembleGrid();
         renderCandidateTable();
         syncAndRenderMultiAccounts();
+        loadExecutionLogStream();
 
         // 5 秒全局自愈刷新
         setInterval(() => {
             renderPipelineList();
             renderCandidateTable();
             syncAndRenderMultiAccounts();
+            loadExecutionLogStream();
         }, 5000);
     }
 
     // 暴露并绑定到全局
+    window.syncAndRenderMultiAccounts = syncAndRenderMultiAccounts;
+    window.loadPortfolioEquityCurve = loadPortfolioEquityCurve;
+    window.renderPositionsAndRisk = renderPositionsAndRisk;
+    window.renderEnsembleGrid = renderEnsembleGrid;
+    window.renderCandidateTable = renderCandidateTable;
+    window.loadExecutionLogStream = loadExecutionLogStream;
+    window.toggleExecutionLogFold = toggleExecutionLogFold;
+    window.toggleConsolidatedView = toggleConsolidatedView;
+    window.runEnsembleDecide = runEnsembleDecide;
+    window.triggerStepRun = triggerStepRun;
     window.startProCockpitEngine = startProCockpitEngine;
     window.refreshAllCockpitPanels = () => {
         renderPipelineList();
         renderEnsembleGrid();
         renderCandidateTable();
         syncAndRenderMultiAccounts();
+        loadExecutionLogStream();
     };
 
     if (document.readyState === 'loading') {
