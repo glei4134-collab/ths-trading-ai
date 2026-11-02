@@ -9,6 +9,7 @@
 import sys
 import os
 import unittest
+import threading
 from pathlib import Path
 from datetime import datetime, timedelta
 
@@ -359,6 +360,152 @@ class TestDetailedTimingMetricsIntegration(unittest.TestCase):
         self.assertIn("actionable_dips", metrics)
         self.assertIn("unsold_positions", metrics)
         self.assertIn("weights", metrics)
+
+
+
+
+class TestConcurrencyAndBoundaryConditions(unittest.TestCase):
+    """测试高烈度并发线程安全与时间边界容错"""
+
+    def setUp(self):
+        self.buyer = TimingDipBuyer()
+        self.ctrl = UnsoldPositionController()
+
+    def test_concurrent_intraday_engine_thread_safety(self):
+        """
+        方案 8: 高并发压力测试 (10 个线程利用 Barrier 同步起跑，5 读 5 写，每线程 200 次，共 2000 次操作)
+        验证 TimingDipBuyer 与 UnsoldPositionController 内部 RLock 保护下零 RuntimeError / 字典迭代修改异常
+        """
+        num_writers = 5
+        num_readers = 5
+        total_threads = num_writers + num_readers
+        iterations = 200
+        barrier = threading.Barrier(total_threads)
+        errors = []
+
+        def writer_task(tid: int):
+            try:
+                barrier.wait(timeout=10.0)
+                for i in range(iterations):
+                    sym = f"600{tid:02d}{i%10}"
+                    # 1. 写 TimingDipBuyer
+                    self.buyer.register_unbought_candidate(
+                        symbol=sym,
+                        name=f"标的_{sym}",
+                        score=75.0 + (i % 20),
+                        target_price=10.0 + (i % 50) * 0.1
+                    )
+                    self.buyer.update_quote(
+                        symbol=sym,
+                        current_price=10.0 + (i % 50) * 0.1,
+                        change_pct=1.5,
+                        quote={"bid1_vol": 1000, "ask1_vol": 500}
+                    )
+                    # 2. 写 UnsoldPositionController
+                    ord_id = f"ORD_{tid}_{i}"
+                    self.ctrl.register_expected_sell(
+                        symbol=sym,
+                        name=f"标的_{sym}",
+                        expected_sell_time_str="09:40:00",
+                        target_price=11.0,
+                        order_id=ord_id,
+                        account_id=(tid % 3) + 1
+                    )
+                    if i % 3 == 0:
+                        self.ctrl.cancel_expected_sell(symbol=sym, account_id=(tid % 3) + 1, order_id=ord_id)
+            except Exception as e:
+                errors.append(f"Writer-{tid} Exception: {e}")
+
+        def reader_task(tid: int):
+            try:
+                barrier.wait(timeout=10.0)
+                for i in range(iterations):
+                    sym = f"600{(i%num_writers):02d}{i%10}"
+                    # 1. 读 TimingDipBuyer 汇总
+                    _ = self.buyer.get_summary_list()
+                    _ = self.buyer.get_actionable_dip_candidates()
+
+                    # 2. 读 UnsoldPositionController
+                    _ = self.ctrl.get_unsold_summary_list(account_id=(tid % 3) + 1)
+                    _ = self.ctrl.evaluate_unsold_status(
+                        symbol=sym,
+                        current_price=10.5,
+                        change_pct=1.0,
+                        now_time_str="09:45:00",
+                        account_id=(tid % 3) + 1,
+                        order_id=f"ORD_{tid}_{i}"
+                    )
+            except Exception as e:
+                errors.append(f"Reader-{tid} Exception: {e}")
+
+        threads = []
+        for t in range(num_writers):
+            th = threading.Thread(target=writer_task, args=(t,))
+            threads.append(th)
+            th.start()
+
+        for t in range(num_readers):
+            th = threading.Thread(target=reader_task, args=(t,))
+            threads.append(th)
+            th.start()
+
+        for th in threads:
+            th.join(timeout=15.0)
+
+        self.assertEqual(len(errors), 0, f"并发安全测试中抛出异常: {errors}")
+
+    def test_time_parsing_and_boundary(self):
+        """
+        方案 8: 边界测试 (时间解析健壮性与边界覆盖)
+        验证缺失前导零 ('9:30:00')、跨分钟格式 ('9:5:0')、异常字符串、None、空串等均能安全容错且正确判断超时
+        """
+        # 1. 缺失前导零的情况：'9:30:00' vs '09:35:00' (34200 < 34500 -> 未超时)
+        self.assertFalse(UnsoldPositionController._check_is_overdue("9:30:00", "09:35:00"))
+        # 2. 缺失前导零且确实超时：'9:40:00' vs '09:35:00' (34800 > 34500 -> 超时)
+        self.assertTrue(UnsoldPositionController._check_is_overdue("9:40:00", "09:35:00"))
+        # 3. 双方均无前导零：'9:40:00' vs '9:35:00' -> 超时
+        self.assertTrue(UnsoldPositionController._check_is_overdue("9:40:00", "9:35:00"))
+        # 4. HH:MM 短格式测试
+        self.assertTrue(UnsoldPositionController._check_is_overdue("09:40", "09:35"))
+        self.assertFalse(UnsoldPositionController._check_is_overdue("09:30", "09:35"))
+        # 5. 异常格式与 None 容错 (不抛异常崩溃，安全返回 bool)
+        self.assertFalse(UnsoldPositionController._check_is_overdue("", "09:35:00"))
+        self.assertFalse(UnsoldPositionController._check_is_overdue(None, "09:35:00"))
+        self.assertFalse(UnsoldPositionController._check_is_overdue("invalid_time", "09:35:00"))
+        self.assertFalse(UnsoldPositionController._check_is_overdue("09:35:00", None))
+
+        # 6. 在 evaluate_unsold_status 中集成验证无前导零的场景
+        sym = "600000"
+        self.ctrl.register_expected_sell(
+            symbol=sym,
+            name="浦发银行",
+            expected_sell_time_str="09:35:00",
+            target_price=10.0,
+            order_id="ORD_TIME_1",
+            account_id=1
+        )
+        # 当前时间 9:30:00 (尚未到达 09:35:00)
+        res_early = self.ctrl.evaluate_unsold_status(
+            symbol=sym,
+            current_price=10.0,
+            change_pct=0.5,
+            now_time_str="9:30:00",
+            account_id=1,
+            order_id="ORD_TIME_1"
+        )
+        self.assertEqual(res_early["status"], "AWAITING_TIME")
+        self.assertFalse(res_early["is_overdue"])
+
+        # 当前时间 9:40:00 (已超过 09:35:00)
+        res_late = self.ctrl.evaluate_unsold_status(
+            symbol=sym,
+            current_price=10.0,
+            change_pct=0.5,
+            now_time_str="9:40:00",
+            account_id=1,
+            order_id="ORD_TIME_1"
+        )
+        self.assertTrue(res_late["is_overdue"])
 
 
 if __name__ == "__main__":

@@ -192,12 +192,18 @@ class THSAccountTrader:
             _cancelling_orders[order_key] = (now, {"success": True, "message": "撤单已受理中(防频发)", "order_id": order_key})
 
         if not self._order_lock.acquire(timeout=5.0):
-            return {"success": False, "message": "撤单获取锁超时"}
+            err_res = {"success": False, "message": "撤单获取锁超时"}
+            with _cancelling_lock:
+                _cancelling_orders[order_key] = (time.time(), err_res)
+            return err_res
         try:
             if not self.cookie:
                 self._reload_cookie_if_updated()
             if not self.cookie:
-                return {"success": False, "message": "未连接"}
+                err_res = {"success": False, "message": "未连接"}
+                with _cancelling_lock:
+                    _cancelling_orders[order_key] = (time.time(), err_res)
+                return err_res
             self.connector.cookie = self.cookie
             res = self.connector.cancel_order(order_id, date)
             if not res.get("success") and res.get("error_code") == "COOKIE_EXPIRED":
@@ -210,6 +216,12 @@ class THSAccountTrader:
             if not res.get("success"):
                 logger.warning(f"⚠️ 账户 #{self.account_id} 撤单失败: order_id={order_id} 原因={res.get('message')}")
             return res
+        except Exception as e:
+            err_res = {"success": False, "message": f"撤单异常: {e}"}
+            with _cancelling_lock:
+                _cancelling_orders[order_key] = (time.time(), err_res)
+            logger.error(f"❌ 账户 #{self.account_id} 撤单抛出异常: order_id={order_id}, 错误={e}")
+            return err_res
         finally:
             self._order_lock.release()
 

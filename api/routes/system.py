@@ -1625,19 +1625,39 @@ def sync_from_github():
 
 @system_bp.route('/api/debug/github-token', methods=['GET'])
 def debug_github_token():
-    """调试：检查配置状态（严禁向外部非本地回环 IP 暴露，统一拦截）"""
+    """调试：检查配置状态（严禁向外部非本地回环 IP 暴露，并需双重鉴权）"""
     if not is_loopback_request():
         return jsonify({
             "success": False,
             "message": "Access restricted: debug endpoints are only accessible from 127.0.0.1"
         }), 403
 
+    # 双重鉴权：必须具备有效登录态（从 context 或 header 校验 token）
+    token = request.headers.get("Authorization", "").replace("Bearer ", "").strip()
+    if not token:
+        token = request.args.get("token", "").strip()
+
+    from device_manager import device_manager as dm
+    token_valid = False
+    if dm and token:
+        if dm.verify_token(token):
+            token_valid = True
+
+    if not token_valid and API_TOKEN:
+        if token == API_TOKEN:
+            token_valid = True
+    elif not API_TOKEN:
+        token_valid = True
+
+    if not token_valid:
+        return jsonify({"success": False, "message": "Unauthorized: valid token required"}), 401
+
     cookie_file = Path(__file__).parent / "config" / "cookies.json"
     return jsonify({
+        "success": True,
         "cookie_file_exists": cookie_file.exists(),
-        "cookie_file_path": str(cookie_file),
-        "cwd": os.getcwd(),
-        "RAILWAY_ENV": os.environ.get("RAILWAY_ENVIRONMENT", "not set"),
+        "is_configured": cookie_file.exists() and cookie_file.stat().st_size > 10,
+        "environment": "cloud" if os.environ.get("RAILWAY_ENVIRONMENT") else "standard"
     })
 
 

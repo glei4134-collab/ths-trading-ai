@@ -418,21 +418,31 @@ class DBStore:
         self.conn.commit()
 
     def get_sentiment_accuracy(self, symbol: str = None, min_sentiment: int = 50, days: int = 30) -> Dict:
-        """查询情绪准确率"""
-        where = "WHERE sentiment >= ?"
+        """查询情绪准确率（全量参数化查询，消除 SQL 拼接）"""
+        where_clauses = ["sh.sentiment >= ?"]
         params = [min_sentiment]
         if symbol:
-            where += " AND symbol = ?"
+            where_clauses.append("sh.symbol = ?")
             params.append(symbol)
         if days:
-            where += f" AND created_at >= date('now', '-{days} days')"
+            try:
+                days_int = int(days)
+            except (ValueError, TypeError):
+                days_int = 30
+            threshold = (datetime.now(ZoneInfo('Asia/Shanghai')) - timedelta(days=days_int)).strftime('%Y-%m-%d')
+            where_clauses.append("sh.created_at >= ?")
+            params.append(threshold)
+
+        where_clauses.append("sh.action = 'buy'")
+        where_sql = "WHERE " + " AND ".join(where_clauses)
 
         # 情绪>阈值时买入的胜率
-        rows = self.conn.execute(
-            f"SELECT sh.*, so.profit_pct, so.hold_days FROM sentiment_history sh "
-            f"LEFT JOIN sentiment_outcomes so ON sh.id = so.buy_id "
-            f"{where} AND sh.action = 'buy'", params
-        ).fetchall()
+        query = (
+            "SELECT sh.*, so.profit_pct, so.hold_days FROM sentiment_history sh "
+            "LEFT JOIN sentiment_outcomes so ON sh.id = so.buy_id "
+            + where_sql
+        )
+        rows = self.conn.execute(query, params).fetchall()
 
         if not rows:
             return {"count": 0, "win_rate": 0, "avg_profit": 0}
@@ -449,13 +459,18 @@ class DBStore:
         }
 
     def get_sentiment_by_regime(self, regime: str, days: int = 30) -> Dict:
-        """按市场环境查询情绪准确率"""
+        """按市场环境查询情绪准确率（全量参数化查询）"""
+        try:
+            days_int = int(days)
+        except (ValueError, TypeError):
+            days_int = 30
+        threshold = (datetime.now(ZoneInfo('Asia/Shanghai')) - timedelta(days=days_int)).strftime('%Y-%m-%d')
         rows = self.conn.execute(
             "SELECT sh.*, so.profit_pct FROM sentiment_history sh "
             "LEFT JOIN sentiment_outcomes so ON sh.id = so.buy_id "
             "WHERE sh.regime = ? AND sh.action = 'buy' "
-            f"AND sh.created_at >= date('now', '-{days} days')",
-            (regime,)
+            "AND sh.created_at >= ?",
+            (regime, threshold)
         ).fetchall()
 
         if not rows:
@@ -481,9 +496,15 @@ class DBStore:
         return [dict(r) for r in rows]
 
     def get_regret_stats(self, days: int = 30) -> Dict:
-        """获取后悔数据统计"""
+        """获取后悔数据统计（全量参数化查询）"""
+        try:
+            days_int = int(days)
+        except (ValueError, TypeError):
+            days_int = 30
+        threshold = (datetime.now(ZoneInfo('Asia/Shanghai')) - timedelta(days=days_int)).strftime('%Y-%m-%d')
         rows = self.conn.execute(
-            f"SELECT * FROM sentiment_regret WHERE record_date >= date('now', '-{days} days')"
+            "SELECT * FROM sentiment_regret WHERE record_date >= ?",
+            (threshold,)
         ).fetchall()
         if not rows:
             return {"count": 0, "avg_change_5d": 0}

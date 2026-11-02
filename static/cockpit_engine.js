@@ -260,11 +260,11 @@
             return `
                 <div style="background: rgba(18, 14, 20, 0.9); border: 1px solid rgba(255, 255, 255, 0.08); border-top: 2px solid ${s.color}; border-radius: 6px; padding: 8px 10px; display: flex; flex-direction: column; justify-content: space-between; gap: 4px;">
                     <div style="display: flex; justify-content: space-between; align-items: center;">
-                        <span style="font-size: 11px; font-weight: 700; color: #f8fafc;">${s.name.split(' ')[0]}</span>
+                        <span style="font-size: 11px; font-weight: 700; color: #f8fafc;">${escapeHtml(s.name.split(' ')[0])}</span>
                         <span style="font-size: 10px; color: #94a3b8; font-family: var(--font-mono);">权重 ${s.weight}</span>
                     </div>
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 4px;">
-                        <span style="font-size: 10px; background: rgba(255,255,255,0.06); padding: 1px 6px; border-radius: 3px; color: #cbd5e1;">${s.tag}</span>
+                        <span style="font-size: 10px; background: rgba(255,255,255,0.06); padding: 1px 6px; border-radius: 3px; color: #cbd5e1;">${escapeHtml(s.tag)}</span>
                         <span style="font-size: 11px; font-weight: 800; font-family: var(--font-mono); padding: 1px 6px; border-radius: 4px; background: ${voteBg}; color: ${voteColor};">
                             ${s.vote} ${s.conf}
                         </span>
@@ -344,7 +344,7 @@
                     </td>
                     <td style="padding: 10px 14px; text-align: center;">
                         <span style="font-size: 11px; font-weight: 700; color: #00f59b; background: rgba(0,245,155,0.12); padding: 2px 8px; border-radius: 4px; border: 1px solid rgba(0,245,155,0.3);">
-                            ${item.ensemble_votes || '3/5 赞成'}
+                            ${escapeHtml(item.ensemble_votes || '3/5 赞成')}
                         </span>
                     </td>
                     <td style="padding: 10px 14px; text-align: center;">
@@ -406,7 +406,7 @@
                         <div class="m-card-body">
                             <div class="m-card-tag">${actBadgeStyled}</div>
                             <div class="m-card-tag" style="color:#cbd5e1;font-size:11px;">
-                                <span>🗳️ ${votesText}</span>
+                                <span>🗳️ ${escapeHtml(votesText)}</span>
                             </div>
                             <div class="m-card-tag" style="color:#ffe600;font-weight:700;font-family:var(--font-mono);font-size:11px;">
                                 <span>仓位 ${targetWeight}</span>

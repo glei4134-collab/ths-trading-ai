@@ -14,6 +14,9 @@
 
 import json
 import time
+import logging
+
+logger = logging.getLogger(__name__)
 import re
 import sys
 import hashlib
@@ -268,11 +271,13 @@ def analyze_sentiment(news_with_source: List[Tuple[str, str]]) -> Dict:
 # ========== 并发执行主流程 ==========
 
 def fetch_all_news_concurrent(timeout_per_source: float = 4.0, max_workers: int = 4) -> List[Tuple[str, str]]:
-    """使用 ThreadPoolExecutor 并行拉取多源新闻并去重"""
+    """使用 ThreadPoolExecutor 并行拉取多源新闻并去重（真正非阻塞超时设计）"""
     all_news: List[Tuple[str, str]] = []
     seen_hashes = set()
 
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+    # 手动实例化线程池，配合 finally 显式 shutdown(wait=False, cancel_futures=True)，彻底避免 with 块退出时 wait=True 挂起
+    executor = ThreadPoolExecutor(max_workers=max_workers)
+    try:
         future_map = {executor.submit(fn): name for name, fn in ALL_FETCHERS}
         try:
             for future in as_completed(future_map, timeout=timeout_per_source + 2.0):
@@ -290,12 +295,17 @@ def fetch_all_news_concurrent(timeout_per_source: float = 4.0, max_workers: int 
                             all_news.append((t, src_name))
                             added += 1
                 except Exception as e:
-                    # 单源超时或异常捕获跳过
-                    pass
+                    # 单源超时或网络异常仅告警记录，不中断其他源
+                    logger.warning(f"新闻源 [{src_name}] 抓取异常或单源超时: {e}")
         except TimeoutError:
-            pass  # 达到外层总超时上限，安全返回已收集的部分新闻
-        except Exception:
-            pass
+            # 外层总体超时精确捕获告警
+            logger.warning(f"fetch_all_news_concurrent 触发外层总体超时 (timeout={timeout_per_source + 2.0}s)，返回已就绪的部分新闻")
+        except Exception as e:
+            # 编程/迭代未预期异常，详细打印堆栈，严禁宽泛盲目吞噬
+            logger.exception(f"fetch_all_news_concurrent 迭代发生未预期异常: {e}")
+    finally:
+        # cancel_futures=True 要求 Python 3.9+，本项目运行环境为 Python 3.10+
+        executor.shutdown(wait=False, cancel_futures=True)
 
     return all_news
 
