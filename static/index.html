@@ -3251,9 +3251,9 @@
     </div> <!-- end #workstationLayout -->
 
     <!-- Mobile Bottom Navigation -->
-        <!-- Mobile Bottom Navigation (shadcn/ui 风格悬浮毛玻璃胶囊导航栏) -->
+        <!-- Mobile Bottom Navigation (shadcn/ui 风格悬浮毛玻璃胶囊导航栏，专注三大核心量化业务) -->
     <nav class="mobile-nav" id="mobileNav">
-        <div class="mobile-nav-inner">
+        <div class="mobile-nav-inner" style="grid-template-columns: repeat(3, 1fr);">
             <div class="mobile-nav-item active" onclick="switchMobileTab('assets')" data-tab="assets">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M3 3v18h18"/><path d="M18.7 8l-5.1 5.2-2.8-2.7L7 14.3"/>
@@ -3271,15 +3271,6 @@
                     <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
                 </svg>
                 <span>🕒 10大时序</span>
-            </div>
-            <div class="mobile-nav-item" onclick="openLedgerModal()" data-tab="ledger">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-                    <polyline points="14 2 14 8 20 8"></polyline>
-                    <line x1="16" y1="13" x2="8" y2="13"></line>
-                    <line x1="16" y1="17" x2="8" y2="17"></line>
-                </svg>
-                <span>📜 账本</span>
             </div>
         </div>
     </nav>
@@ -3444,6 +3435,13 @@
 
         function switchMobileTab(tab) {
             if (!tab || tab === 'official') tab = 'assets';
+            if (tab === 'ledger') {
+                document.querySelectorAll('.mobile-nav-item').forEach(el => {
+                    el.classList.toggle('active', el.dataset.tab === 'ledger');
+                });
+                openLedgerModal();
+                return;
+            }
             _currentMobileTab = tab;
             if (!isMobile()) return;
 
@@ -8164,12 +8162,52 @@
 
     // ==================== 调度执行审计账本与演练调试 ====================
 
+    let _ledgerCurrentMode = null; // 'card' or 'table'
+
+    function setLedgerViewMode(mode) {
+        _ledgerCurrentMode = mode;
+        const cardList = document.getElementById('ledgerCardList');
+        const tableWrap = document.getElementById('ledgerTableWrap');
+        const btn = document.getElementById('ledgerViewModeBtn');
+        if (!cardList || !tableWrap) return;
+
+        if (mode === 'card') {
+            cardList.style.display = 'flex';
+            tableWrap.style.display = 'none';
+            if (btn) btn.innerHTML = '📊 切换表格视图';
+        } else {
+            cardList.style.display = 'none';
+            tableWrap.style.display = 'block';
+            if (btn) btn.innerHTML = '📱 切换卡片视图';
+        }
+    }
+
+    function toggleLedgerViewMode() {
+        setLedgerViewMode(_ledgerCurrentMode === 'card' ? 'table' : 'card');
+    }
+    window.setLedgerViewMode = setLedgerViewMode;
+    window.toggleLedgerViewMode = toggleLedgerViewMode;
+
+    function closeLedgerModal() {
+        const modal = document.getElementById('ledgerModal');
+        if (modal) modal.remove();
+        if (typeof isMobile === 'function' && isMobile()) {
+            const cur = (typeof _currentMobileTab !== 'undefined' && _currentMobileTab) ? _currentMobileTab : 'assets';
+            document.querySelectorAll('.mobile-nav-item').forEach(el => {
+                el.classList.toggle('active', el.dataset.tab === cur);
+            });
+        }
+    }
+    window.closeLedgerModal = closeLedgerModal;
+
     async function openLedgerModal() {
         try {
-            // 同步高亮底部导航栏「账本」标签
-            document.querySelectorAll('.mobile-nav-item').forEach(el => {
-                el.classList.toggle('active', el.dataset.tab === 'ledger');
-            });
+            if (window.innerWidth <= 768) {
+                if (typeof showToast === 'function') {
+                    showToast('手机端专注交易监控，审计账本与调试请在电脑桌面端查看', 'info');
+                }
+                return;
+            }
 
             let modal = document.getElementById('ledgerModal');
             if (modal) modal.remove();
@@ -8177,42 +8215,57 @@
             const isMob = window.innerWidth <= 768;
             modal = document.createElement('div');
             modal.id = 'ledgerModal';
-            modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.85);z-index:9999;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(6px);padding:' + (isMob ? '10px' : '20px') + ';';
-            modal.onclick = function(e) { if (e.target === modal) modal.remove(); };
+            modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.85);z-index:9999;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(6px);padding:' + (isMob ? '8px' : '20px') + ';';
+            modal.onclick = function(e) { if (e.target === modal) closeLedgerModal(); };
 
             modal.innerHTML = `
-            <div style="background:#161b22;border:1px solid #30363d;border-radius:14px;padding:${isMob ? '16px 12px' : '22px'};width:100%;max-width:980px;max-height:${isMob ? '90vh' : '85vh'};display:flex;flex-direction:column;box-shadow:0 16px 48px rgba(0,0,0,0.7);" onclick="event.stopPropagation()">
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;border-bottom:1px solid #21262d;padding-bottom:10px;flex-shrink:0;">
-                    <div>
-                        <span style="font-size:${isMob ? '15px' : '17px'};font-weight:700;color:#ff1824;letter-spacing:0.3px;">🕒 每日时序执行审计账本 (Execution Ledger)</span>
+            <div style="background:#161b22;border:1px solid #30363d;border-radius:14px;padding:${isMob ? '14px 10px' : '20px 22px'};width:100%;max-width:980px;max-height:${isMob ? '92vh' : '85vh'};display:flex;flex-direction:column;box-shadow:0 16px 48px rgba(0,0,0,0.7);box-sizing:border-box;" onclick="event.stopPropagation()">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;border-bottom:1px solid #21262d;padding-bottom:10px;flex-shrink:0;">
+                    <div style="min-width:0;flex:1;">
+                        <span style="font-size:${isMob ? '14px' : '17px'};font-weight:700;color:#ff1824;letter-spacing:0.3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;">🕒 每日时序执行审计账本</span>
                         <div style="font-size:11px;color:#8b949e;margin-top:2px;" id="ledgerSubtitle">正在加载实时状态...</div>
                     </div>
-                    <div style="display:flex;gap:8px;align-items:center;">
-                        <button onclick="refreshLedgerView()" style="background:#21262d;border:1px solid #30363d;color:#c9d1d9;padding:4px 10px;border-radius:6px;font-size:11px;cursor:pointer;">刷新</button>
-                        <button onclick="this.closest('#ledgerModal').remove()" style="background:none;border:none;color:#8b949e;font-size:24px;cursor:pointer;padding:0 6px;line-height:1;">&times;</button>
+                    <div style="display:flex;gap:6px;align-items:center;flex-shrink:0;">
+                        <button onclick="refreshLedgerView()" style="background:#21262d;border:1px solid #30363d;color:#c9d1d9;padding:4px 8px;border-radius:6px;font-size:11px;cursor:pointer;">刷新</button>
+                        <button onclick="closeLedgerModal()" style="background:none;border:none;color:#8b949e;font-size:24px;cursor:pointer;padding:0 4px;line-height:1;">&times;</button>
                     </div>
                 </div>
 
-                <div id="currentWindowCard" style="background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:10px 14px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;flex-shrink:0;gap:8px;">
+                <div id="currentWindowCard" style="background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:8px 12px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;flex-shrink:0;gap:8px;">
                     <div style="min-width:0;flex:1;">
                         <div style="font-size:10px;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">当前匹配时序区间</div>
-                        <div id="curWinTitle" style="font-size:${isMob ? '13px' : '15px'};font-weight:700;color:#e6edf3;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">-</div>
+                        <div id="curWinTitle" style="font-size:${isMob ? '12.5px' : '14px'};font-weight:700;color:#e6edf3;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">-</div>
                         <div id="curWinDesc" style="font-size:11px;color:#8b949e;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">-</div>
                     </div>
-                    <div id="curWinBadge" style="padding:3px 10px;border-radius:12px;font-size:11px;font-weight:600;white-space:nowrap;flex-shrink:0;">-</div>
+                    <div id="curWinBadge" style="padding:3px 8px;border-radius:12px;font-size:10.5px;font-weight:600;white-space:nowrap;flex-shrink:0;">-</div>
                 </div>
 
-                <!-- 桌面端与移动端双模自适应滚动容器：设置 min-width 彻底杜绝文字挤成竖条 -->
-                <div style="flex:1;overflow-y:auto;overflow-x:auto;-webkit-overflow-scrolling:touch;border:1px solid #21262d;border-radius:8px;background:#0d1117;">
-                    <table style="width:100%;min-width:${isMob ? '720px' : '100%'};border-collapse:collapse;font-size:12px;text-align:left;">
+                <!-- 模式切换与统计栏 -->
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-shrink:0;">
+                    <div style="font-size:11px;color:#8b949e;">
+                        <span>共 <strong id="ledgerEntryCount" style="color:#e6edf3;">0</strong> 个时序节点记录</span>
+                    </div>
+                    <button id="ledgerViewModeBtn" onclick="toggleLedgerViewMode()" style="background:#21262d;border:1px solid #388bfd;color:#79c0ff;padding:3px 9px;border-radius:6px;font-size:11px;cursor:pointer;">
+                        ${isMob ? '📊 切换表格视图' : '📱 切换卡片视图'}
+                    </button>
+                </div>
+
+                <!-- 视图 1: 移动端自适应卡片列表 (彻底杜绝文字挤压，每条卡片自适应多行优雅展现) -->
+                <div id="ledgerCardList" style="flex:1;overflow-y:auto;display:${isMob ? 'flex' : 'none'};flex-direction:column;gap:8px;padding-right:2px;">
+                    <div style="text-align:center;padding:24px;color:#8b949e;font-size:12px;">正在加载账本卡片数据...</div>
+                </div>
+
+                <!-- 视图 2: 7 列全量宽表 (带 min-width 850px 保证横向滚动，单元格绝不被压缩) -->
+                <div id="ledgerTableWrap" style="flex:1;overflow-y:auto;overflow-x:auto;-webkit-overflow-scrolling:touch;border:1px solid #21262d;border-radius:8px;background:#0d1117;display:${isMob ? 'none' : 'block'};">
+                    <table style="width:100%;min-width:850px;border-collapse:collapse;font-size:12px;text-align:left;">
                         <thead style="position:sticky;top:0;background:#161b22;z-index:2;">
                             <tr style="border-bottom:1px solid #30363d;color:#8b949e;">
                                 <th style="padding:10px 10px;width:120px;white-space:nowrap;">时序步骤</th>
                                 <th style="padding:10px 8px;width:110px;white-space:nowrap;">计划时段</th>
                                 <th style="padding:10px 8px;width:120px;white-space:nowrap;">状态</th>
-                                <th style="padding:10px 8px;width:140px;white-space:nowrap;">补偿策略</th>
+                                <th style="padding:10px 8px;width:130px;white-space:nowrap;">补偿策略</th>
                                 <th style="padding:10px 8px;width:90px;white-space:nowrap;">执行耗时</th>
-                                <th style="padding:10px 10px;min-width:240px;">执行摘要 / 安全跳过原因</th>
+                                <th style="padding:10px 10px;min-width:260px;">执行摘要 / 安全跳过原因</th>
                                 <th style="padding:10px 8px;text-align:right;width:90px;white-space:nowrap;">调试操作</th>
                             </tr>
                         </thead>
@@ -8221,11 +8274,12 @@
                         </tbody>
                     </table>
                 </div>
-                ${isMob ? '<div style="font-size:10px;color:#8b949e;text-align:right;margin-top:6px;flex-shrink:0;">💡 左右滑动表格可查看完整执行明细</div>' : ''}
+                ${isMob ? '<div style="font-size:10px;color:#8b949e;text-align:right;margin-top:6px;flex-shrink:0;">💡 点击右上角可在「卡片」与「表格」间无缝切换</div>' : ''}
             </div>
-        `;
-        document.body.appendChild(modal);
-        if (typeof refreshLedgerView === 'function') refreshLedgerView();
+            `;
+            document.body.appendChild(modal);
+            _ledgerCurrentMode = isMob ? 'card' : 'table';
+            if (typeof refreshLedgerView === 'function') refreshLedgerView();
         } catch(e) { console.warn('[Ledger] openLedgerModal error:', e); }
     }
     window.openLedgerModal = openLedgerModal;
@@ -8233,6 +8287,8 @@
 
     async function refreshLedgerView() {
         const body = document.getElementById('ledgerTableBody');
+        const cardList = document.getElementById('ledgerCardList');
+        const countEl = document.getElementById('ledgerEntryCount');
         const sub = document.getElementById('ledgerSubtitle');
         const winTitle = document.getElementById('curWinTitle');
         const winDesc = document.getElementById('curWinDesc');
@@ -8248,13 +8304,13 @@
                 const w = resWin.data.current_window;
                 const timeStr = resWin.data.current_time;
                 const isMock = resWin.data.is_mock_time;
-                if (sub) sub.textContent = `系统当前时间: ${timeStr} ${isMock ? '(🧪 虚拟时钟注入中)' : '(现实时钟)'}`;
+                if (sub) sub.textContent = `当前时间: ${timeStr} ${isMock ? '(🧪 虚拟时钟)' : ''}`;
                 if (winTitle) winTitle.textContent = `${w.name} (${w.start || ''} - ${w.end || ''})`;
-                if (winDesc) winDesc.textContent = `${w.description} | 补偿策略: ${w.catchup_policy}`;
+                if (winDesc) winDesc.textContent = `${w.description} | 补偿: ${w.catchup_policy}`;
 
                 if (winBadge) {
                     if (w.is_active) {
-                        winBadge.textContent = '● 交易时序窗口活跃中';
+                        winBadge.textContent = '● 交易时序窗口活跃';
                         winBadge.style.background = 'rgba(63, 185, 80, 0.2)';
                         winBadge.style.color = '#3fb950';
                         winBadge.style.border = '1px solid #238636';
@@ -8269,8 +8325,12 @@
 
             if (resLedger.success && resLedger.data && resLedger.data.entries) {
                 const entries = resLedger.data.entries;
+                if (countEl) countEl.textContent = entries.length;
+
                 if (!entries.length) {
-                    body.innerHTML = `<tr><td colspan="7" style="text-align:center;padding:24px;color:#8b949e;">今日尚未生成账本条目</td></tr>`;
+                    const emptyMsg = '今日尚未生成账本条目';
+                    if (body) body.innerHTML = `<tr><td colspan="7" style="text-align:center;padding:24px;color:#8b949e;">${emptyMsg}</td></tr>`;
+                    if (cardList) cardList.innerHTML = `<div style="text-align:center;padding:24px;color:#8b949e;font-size:12px;">${emptyMsg}</div>`;
                     return;
                 }
 
@@ -8284,30 +8344,62 @@
                     'FAILED': { text: '🔴 异常报错', bg: 'rgba(248, 81, 73, 0.15)', color: '#f85149', border: '#da3633' },
                 };
 
-                body.innerHTML = entries.map(e => {
-                    const st = statusStyles[e.status] || { text: e.status, bg: '#21262d', color: '#c9d1d9', border: '#30363d' };
-                    const durationStr = e.duration_ms ? `${e.duration_ms} ms` : '-';
-                    const detailMsg = e.skip_reason ? `<span style="color:#79c0ff;">${e.skip_reason}</span>` : (e.output_summary || e.error_detail || '-');
+                // 1. 渲染表格视图
+                if (body) {
+                    body.innerHTML = entries.map(e => {
+                        const st = statusStyles[e.status] || { text: e.status, bg: '#21262d', color: '#c9d1d9', border: '#30363d' };
+                        const durationStr = e.duration_ms ? `${e.duration_ms} ms` : '-';
+                        const detailMsg = e.skip_reason ? `<span style="color:#79c0ff;">${e.skip_reason}</span>` : (e.output_summary || e.error_detail || '-');
 
-                    return `
-                        <tr style="border-bottom:1px solid #21262d;">
-                            <td style="padding:10px 10px;font-weight:600;color:#e6edf3;white-space:nowrap;">${e.step_name}</td>
-                            <td style="padding:10px 8px;color:#8b949e;font-family:monospace;white-space:nowrap;">${e.window}</td>
-                            <td style="padding:10px 8px;white-space:nowrap;">
-                                <span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:500;background:${st.bg};color:${st.color};border:1px solid ${st.border};">${st.text}</span>
-                            </td>
-                            <td style="padding:10px 8px;color:#8b949e;font-size:11px;white-space:nowrap;">${e.policy}</td>
-                            <td style="padding:10px 8px;color:#8b949e;font-family:monospace;white-space:nowrap;">${durationStr}</td>
-                            <td style="padding:10px 10px;color:#c9d1d9;line-height:1.4;word-break:break-all;">${detailMsg}</td>
-                            <td style="padding:10px 8px;text-align:right;white-space:nowrap;">
-                                <button onclick="triggerStepRun('${e.step_id}', true)" style="background:#21262d;border:1px solid #30363d;color:#ff1824;padding:3px 8px;border-radius:4px;font-size:11px;cursor:pointer;">单步演练</button>
-                            </td>
-                        </tr>
-                    `;
-                }).join('');
+                        return `
+                            <tr style="border-bottom:1px solid #21262d;">
+                                <td style="padding:10px 10px;font-weight:600;color:#e6edf3;white-space:nowrap;">${e.step_name}</td>
+                                <td style="padding:10px 8px;color:#8b949e;font-family:monospace;white-space:nowrap;">${e.window}</td>
+                                <td style="padding:10px 8px;white-space:nowrap;">
+                                    <span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:500;background:${st.bg};color:${st.color};border:1px solid ${st.border};">${st.text}</span>
+                                </td>
+                                <td style="padding:10px 8px;color:#8b949e;font-size:11px;white-space:nowrap;">${e.policy}</td>
+                                <td style="padding:10px 8px;color:#8b949e;font-family:monospace;white-space:nowrap;">${durationStr}</td>
+                                <td style="padding:10px 10px;color:#c9d1d9;min-width:260px;line-height:1.5;word-break:break-word;">${detailMsg}</td>
+                                <td style="padding:10px 8px;text-align:right;white-space:nowrap;">
+                                    <button onclick="triggerStepRun('${e.step_id}', true)" style="background:#21262d;border:1px solid #30363d;color:#ff1824;padding:3px 8px;border-radius:4px;font-size:11px;cursor:pointer;">单步演练</button>
+                                </td>
+                            </tr>
+                        `;
+                    }).join('');
+                }
+
+                // 2. 渲染移动端卡片视图 (完全告别横向挤压与单字竖排，自适应全宽展示)
+                if (cardList) {
+                    cardList.innerHTML = entries.map(e => {
+                        const st = statusStyles[e.status] || { text: e.status, bg: '#21262d', color: '#c9d1d9', border: '#30363d' };
+                        const durationStr = e.duration_ms ? `${e.duration_ms} ms` : '-';
+                        const detailMsg = e.skip_reason ? `<span style="color:#79c0ff;">${e.skip_reason}</span>` : (e.output_summary || e.error_detail || '-');
+
+                        return `
+                            <div style="background:#0d1117;border:1px solid #21262d;border-left:4px solid ${st.border};border-radius:8px;padding:10px 12px;display:flex;flex-direction:column;gap:6px;">
+                                <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
+                                    <div style="font-size:13px;font-weight:700;color:#e6edf3;line-height:1.4;">${e.step_name}</div>
+                                    <span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:10.5px;font-weight:600;background:${st.bg};color:${st.color};border:1px solid ${st.border};white-space:nowrap;flex-shrink:0;">${st.text}</span>
+                                </div>
+                                <div style="display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:11px;color:#8b949e;">
+                                    <span style="font-family:monospace;background:#161b22;border:1px solid #30363d;padding:1px 6px;border-radius:4px;color:#79c0ff;">🕒 ${e.window}</span>
+                                    <span style="background:#161b22;border:1px solid #30363d;padding:1px 6px;border-radius:4px;color:#8b949e;">策略: ${e.policy}</span>
+                                    ${durationStr !== '-' ? `<span style="font-family:monospace;background:#161b22;border:1px solid #30363d;padding:1px 6px;border-radius:4px;color:#a5d6ff;">耗时: ${durationStr}</span>` : ''}
+                                </div>
+                                <div style="background:#161b22;border:1px solid #30363d;border-radius:6px;padding:8px 10px;font-size:11.5px;color:#c9d1d9;line-height:1.5;word-break:break-all;">
+                                    <span style="color:#8b949e;font-size:10.5px;font-weight:600;display:block;margin-bottom:2px;">执行摘要 / 安全检查原因：</span>
+                                    ${detailMsg}
+                                </div>
+                            </div>
+                        `;
+                    }).join('');
+                }
             }
         } catch (e) {
-            body.innerHTML = `<tr><td colspan="7" style="text-align:center;padding:20px;color:#f85149;">加载异常: ${e.message}</td></tr>`;
+            const errMsg = `加载异常: ${e.message}`;
+            if (body) body.innerHTML = `<tr><td colspan="7" style="text-align:center;padding:20px;color:#f85149;">${errMsg}</td></tr>`;
+            if (cardList) cardList.innerHTML = `<div style="text-align:center;padding:20px;color:#f85149;font-size:12px;">${errMsg}</div>`;
         }
     }
 
