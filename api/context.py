@@ -90,7 +90,7 @@ def _load_or_create_api_token() -> str:
 API_TOKEN = _load_or_create_api_token()
 
 _PUBLIC_PATHS = {
-    '/', '/api/health', '/api/auth/login', '/api/auth/check',
+    '/', '/cockpit', '/cockpit.html', '/api/health', '/api/auth/login', '/api/auth/check',
     '/api/mobile/bind/claim',
     '/api/device/bind/claim',
     '/api/ths/auth/send-sms',
@@ -116,7 +116,8 @@ _MASKED_PATHS = {
 }
 
 _PUBLIC_PREFIXES = (
-    '/static/', '/mobile', '/api/stock/', '/api/market/', '/api/sentiment/'
+    '/static/', '/mobile', '/api/stock/', '/api/market/', '/api/sentiment/',
+    '/api/macro/', '/api/risk/', '/api/audit/'
 )
 
 _QUICK_BIND_PATHS = {

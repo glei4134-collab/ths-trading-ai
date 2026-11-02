@@ -94,6 +94,38 @@
         if (nextEl) nextEl.textContent = nextWindow;
     }
 
+    // 宏观四象限状态罗盘遥测驱动
+    async function updateMacroQuadrantCompass() {
+        const regimeEl = document.getElementById('hudMacroRegimeText');
+        const confEl = document.getElementById('hudMacroConfText');
+        if (!regimeEl) return;
+
+        try {
+            const res = await fetch('/api/macro/quadrant?_t=' + Date.now());
+            const json = await res.json();
+            if (json.success && json.data) {
+                const d = json.data;
+                const title = d.quadrant_title || d.quadrant_regime || '牛市低波';
+                const conf = d.confidence_pct || '75%';
+                regimeEl.textContent = title.split(' ')[0]; // 如 "牛市低波" / "熊市低波"
+                if (confEl) confEl.textContent = conf;
+
+                // 颜色映射
+                if (d.quadrant_regime === 'bull_low_vol') {
+                    regimeEl.style.color = '#00f59b';
+                } else if (d.quadrant_regime === 'bull_high_vol') {
+                    regimeEl.style.color = '#38bdf8';
+                } else if (d.quadrant_regime === 'bear_low_vol') {
+                    regimeEl.style.color = '#ffe600';
+                } else {
+                    regimeEl.style.color = '#ff1824';
+                }
+            }
+        } catch (e) {
+            console.warn('[Cockpit] 宏观四象限罗盘遥测获取失败:', e);
+        }
+    }
+
     // 网关 RTT 测速与弱网平滑自愈机制
     let _rttFailCount = 0;
     let _wasNetworkOffline = false;
@@ -903,9 +935,11 @@
         tickHudClock();
         setInterval(tickHudClock, 1000);
 
-        // 立即测速 RTT
+        // 立即测速 RTT 与宏观罗盘遥测
         pingGatewayRtt();
         setInterval(pingGatewayRtt, 5000);
+        updateMacroQuadrantCompass();
+        setInterval(updateMacroQuadrantCompass, 15000);
 
         // 渲染三大面板与矩阵
         renderPipelineList();
@@ -936,6 +970,7 @@
     window.triggerStepRun = triggerStepRun;
     window.startProCockpitEngine = startProCockpitEngine;
     window.refreshAllCockpitPanels = () => {
+        updateMacroQuadrantCompass();
         renderPipelineList();
         renderEnsembleGrid();
         renderCandidateTable();

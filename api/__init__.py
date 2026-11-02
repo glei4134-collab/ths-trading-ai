@@ -21,7 +21,8 @@ from api.routes import (
     trade_bp,
     market_bp,
     scheduler_bp,
-    system_bp
+    system_bp,
+    ai_timing_bp
 )
 
 logger = logging.getLogger(__name__)
@@ -213,8 +214,11 @@ def create_app() -> Flask:
     app.register_blueprint(market_bp)
     app.register_blueprint(scheduler_bp)
     app.register_blueprint(system_bp)
+    app.register_blueprint(ai_timing_bp)
 
     @app.route('/')
+    @app.route('/cockpit')
+    @app.route('/cockpit.html')
     def index():
         return send_from_directory(app.static_folder, 'index.html')
 

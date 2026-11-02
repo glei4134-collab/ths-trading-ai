@@ -828,3 +828,143 @@ def get_detailed_timing_metrics(account_id: Optional[int] = None, now: Optional[
         "unsold_positions": unsold_summary,
         "weights": intraday_timing_engine.get("weights", {})
     }
+
+
+# ===== Stage 2: 微观盘口动力学算子 (Microstructure Latency Guard) =====
+
+def calculate_volume_order_imbalance(
+    bid_p: float,
+    bid_v: float,
+    prev_bid_p: float,
+    prev_bid_v: float,
+    ask_p: float,
+    ask_v: float,
+    prev_ask_p: float,
+    prev_ask_v: float
+) -> Dict[str, float]:
+    """
+    Cont, Kukanov & Stoikov (2014) 订单流失衡模型 (Volume Order Imbalance, VOI):
+    量化盘口买一/卖一量价瞬时变化揭示的主动订单流净冲击力。
+    """
+    if prev_bid_p <= 0 or prev_ask_p <= 0:
+        return {"voi": 0.0, "delta_bid_vol": 0.0, "delta_ask_vol": 0.0, "normalized_voi": 0.0}
+
+    # 买方订单流增量 Delta V_b
+    if bid_p < prev_bid_p - 1e-6:
+        delta_vb = 0.0
+    elif abs(bid_p - prev_bid_p) <= 1e-6:
+        delta_vb = float(bid_v) - float(prev_bid_v)
+    else:
+        delta_vb = float(bid_v)
+
+    # 卖方订单流增量 Delta V_a
+    if ask_p < prev_ask_p - 1e-6:
+        delta_va = float(ask_v)
+    elif abs(ask_p - prev_ask_p) <= 1e-6:
+        delta_va = float(ask_v) - float(prev_ask_v)
+    else:
+        delta_va = 0.0
+
+    voi = delta_vb - delta_va
+    denom = max(float(bid_v) + float(ask_v), float(prev_bid_v) + float(prev_ask_v), 1.0)
+    norm_voi = max(-1.0, min(1.0, voi / denom))
+
+    return {
+        "voi": round(float(voi), 2),
+        "delta_bid_vol": round(float(delta_vb), 2),
+        "delta_ask_vol": round(float(delta_va), 2),
+        "normalized_voi": round(float(norm_voi), 4)
+    }
+
+
+def estimate_l2_queue_position(
+    order_shares: int,
+    ahead_queue_volume: float,
+    trade_flow_shares_per_sec: float,
+    cancel_rate: float = 0.25,
+    horizon_sec: float = 60.0
+) -> Dict[str, Any]:
+    """
+    Level-2 逐笔排单队列深度位置与成交概率估计器 (Queue Position & Fill Probability Model):
+        V_effective = max(0, V_ahead * (1 - cancel_rate)) + order_shares
+        E[T_wait] = V_effective / max(trade_flow_per_sec, 1.0)
+        P(Fill <= horizon) = 1 - exp(-horizon / E[T_wait])
+    """
+    import math
+    ahead = max(0.0, float(ahead_queue_volume or 0.0))
+    c_rate = max(0.0, min(0.80, float(cancel_rate or 0.25)))
+    eff_ahead = ahead * (1.0 - c_rate)
+    total_to_clear = eff_ahead + max(0, int(order_shares or 0))
+
+    flow = max(float(trade_flow_shares_per_sec or 0.0), 1e-3)
+    expected_wait_sec = total_to_clear / flow
+    if expected_wait_sec <= 0.1:
+        fill_prob = 1.0
+    else:
+        fill_prob = 1.0 - math.exp(-max(1.0, float(horizon_sec)) / expected_wait_sec)
+
+    recommend_reprice = bool(fill_prob < 0.35 and ahead > max(order_shares * 3, 5000))
+    return {
+        "ahead_raw_volume": round(ahead, 1),
+        "effective_queue_ahead": round(eff_ahead, 1),
+        "expected_wait_sec": round(min(expected_wait_sec, 3600.0), 2),
+        "fill_probability_60s": round(float(fill_prob), 4),
+        "recommend_reprice": recommend_reprice
+    }
+
+
+def detect_spoofing_and_phantom_liquidity(
+    bid1_vol: float,
+    ask1_vol: float,
+    prev_bid1_vol: float,
+    prev_ask1_vol: float,
+    traded_delta_vol: float = 0.0,
+    min_large_order_threshold: float = 10000.0
+) -> Dict[str, Any]:
+    """
+    虚假挂单与流动性幻影识别器 (Spoofing & Phantom Liquidity Detector):
+    当上一帧买一出现巨量托单 (prev_bid1_vol >= threshold 且远大于卖一)，
+    但当前帧买一量骤减超过 65%，且期间真实成交量 (traded_delta_vol) 占减少量不足 25% 时，
+    判定为主力“买一虚假托单高频撤单诱多 (Bull Trap Spoofing)”。
+    反之判定为“卖一虚假压单撤单诱空 (Bear Trap Spoofing)”。
+    """
+    b_cur = max(0.0, float(bid1_vol or 0.0))
+    a_cur = max(0.0, float(ask1_vol or 0.0))
+    b_prev = max(0.0, float(prev_bid1_vol or 0.0))
+    a_prev = max(0.0, float(prev_ask1_vol or 0.0))
+    traded = max(0.0, float(traded_delta_vol or 0.0))
+
+    bid_drop = max(0.0, b_prev - b_cur)
+    ask_drop = max(0.0, a_prev - a_cur)
+
+    bull_spoofing = False
+    bear_spoofing = False
+    cancel_ratio_bid = 0.0
+    cancel_ratio_ask = 0.0
+
+    if b_prev >= min_large_order_threshold and bid_drop >= b_prev * 0.65:
+        unexplained_drop = max(0.0, bid_drop - traded)
+        cancel_ratio_bid = unexplained_drop / bid_drop if bid_drop > 0 else 0.0
+        if cancel_ratio_bid >= 0.75:
+            bull_spoofing = True
+
+    if a_prev >= min_large_order_threshold and ask_drop >= a_prev * 0.65:
+        unexplained_drop_a = max(0.0, ask_drop - traded)
+        cancel_ratio_ask = unexplained_drop_a / ask_drop if ask_drop > 0 else 0.0
+        if cancel_ratio_ask >= 0.75:
+            bear_spoofing = True
+
+    spoofing_type = "NONE"
+    if bull_spoofing:
+        spoofing_type = "BULL_TRAP_SPOOFING"
+    elif bear_spoofing:
+        spoofing_type = "BEAR_TRAP_SPOOFING"
+
+    return {
+        "is_spoofing": bool(bull_spoofing or bear_spoofing),
+        "bull_trap_spoofing": bull_spoofing,
+        "bear_trap_spoofing": bear_spoofing,
+        "spoofing_type": spoofing_type,
+        "bid_cancel_ratio": round(float(cancel_ratio_bid), 4),
+        "ask_cancel_ratio": round(float(cancel_ratio_ask), 4)
+    }

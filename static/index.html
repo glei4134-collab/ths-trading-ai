@@ -2967,6 +2967,12 @@
                 <span id="hudMaxDrawdown" style="font-weight:700;font-size:13px;color:#3fb950;font-family:var(--font-mono);">0.0%</span>
                 <span style="color:var(--text-muted);font-size:11px;">(警戒 12%)</span>
             </div>
+            <div id="hudMacroCompass" style="display:flex;align-items:center;gap:6px;background:var(--bg-card);padding:4px 12px;border-radius:var(--radius-sm);border:1px solid rgba(99,102,241,0.4);box-shadow:0 0 10px rgba(99,102,241,0.15);" title="四象限宏观态势与隐马尔可夫时态罗盘">
+                <span style="font-size:12px;">🧭</span>
+                <span style="color:var(--text-secondary);font-size:12px;">宏观罗盘:</span>
+                <span id="hudMacroRegimeText" style="font-weight:700;font-size:12px;color:#818cf8;font-family:var(--font-mono);">牛市低波</span>
+                <span id="hudMacroConfText" style="font-size:10px;color:#a5b4fc;background:rgba(99,102,241,0.2);padding:1px 5px;border-radius:3px;font-family:var(--font-mono);">75%</span>
+            </div>
         </div>
 
         <!-- Right: 系统体检胶囊 & 桌面端标识 -->
@@ -8558,6 +8564,30 @@
         if (nextEl) nextEl.textContent = nextWindow;
     }
 
+    // 宏观四象限状态罗盘遥测驱动
+    async function updateMacroQuadrantCompass() {
+        const regimeEl = document.getElementById('hudMacroRegimeText');
+        const confEl = document.getElementById('hudMacroConfText');
+        if (!regimeEl) return;
+        try {
+            const res = await fetch('/api/macro/quadrant?_t=' + Date.now());
+            const json = await res.json();
+            if (json.success && json.data) {
+                const d = json.data;
+                const title = d.quadrant_title || d.quadrant_regime || '牛市低波';
+                const conf = d.confidence_pct || '75%';
+                regimeEl.textContent = title.split(' ')[0];
+                if (confEl) confEl.textContent = conf;
+                if (d.quadrant_regime === 'bull_low_vol') regimeEl.style.color = '#00f59b';
+                else if (d.quadrant_regime === 'bull_high_vol') regimeEl.style.color = '#38bdf8';
+                else if (d.quadrant_regime === 'bear_low_vol') regimeEl.style.color = '#ffe600';
+                else regimeEl.style.color = '#ff1824';
+            }
+        } catch (e) {
+            console.warn('[Cockpit] 宏观四象限罗盘遥测获取失败:', e);
+        }
+    }
+
     // 网关 RTT 测速
     async function pingGatewayRtt() {
         const start = performance.now();
@@ -9429,6 +9459,8 @@
         // 立即测速 RTT
         pingGatewayRtt();
         setInterval(pingGatewayRtt, 5000);
+        updateMacroQuadrantCompass();
+        setInterval(updateMacroQuadrantCompass, 15000);
 
         // 渲染三大面板与矩阵
         renderPipelineList();
@@ -9459,6 +9491,7 @@
     window.triggerStepRun = triggerStepRun;
     window.startProCockpitEngine = startProCockpitEngine;
     window.refreshAllCockpitPanels = () => {
+        updateMacroQuadrantCompass();
         renderPipelineList();
         renderEnsembleGrid();
         renderCandidateTable();

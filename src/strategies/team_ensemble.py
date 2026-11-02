@@ -46,9 +46,78 @@ class TeamEnsembleStrategy(BaseStrategy):
             VolumeShrinkReversal(),
             TrendAccelerationStrategy(),
         ]
+        # 记录各子策略滚动实盘胜率与盈亏表现
+        self.sub_strategy_perf: Dict[str, Dict[str, float]] = {
+            s.name: {"wins": 0, "losses": 0, "total_profit": 0.0, "total_loss": 0.0, "win_rate": 0.5, "profit_factor": 1.5}
+            for s in self.sub_strategies
+        }
+
+    def update_sub_strategy_performance(
+        self,
+        strategy_name: str,
+        is_win: bool,
+        profit_pct: float = 0.0
+    ):
+        """
+        更新记录子策略滚动实战胜率与盈亏比，以供贝叶斯自适应赋权微调
+        """
+        if strategy_name not in self.sub_strategy_perf:
+            self.sub_strategy_perf[strategy_name] = {
+                "wins": 0, "losses": 0, "total_profit": 0.0, "total_loss": 0.0,
+                "win_rate": 0.5, "profit_factor": 1.5
+            }
+        p = self.sub_strategy_perf[strategy_name]
+        if is_win:
+            p["wins"] += 1
+            p["total_profit"] += max(0.0, float(profit_pct))
+        else:
+            p["losses"] += 1
+            p["total_loss"] += abs(float(profit_pct))
+
+        total_trades = p["wins"] + p["losses"]
+        if total_trades > 0:
+            p["win_rate"] = p["wins"] / total_trades
+            if p["total_loss"] > 0:
+                p["profit_factor"] = p["total_profit"] / p["total_loss"]
+            else:
+                p["profit_factor"] = 2.0 if p["total_profit"] > 0 else 1.5
+
+    # 四象限先验基准权重矩阵
+    QUADRANT_WEIGHT_MATRIX = {
+        "bull_low_vol": {
+            "competition_breakout": 0.35,
+            "trend_acceleration": 0.30,
+            "limit_up_continue": 0.20,
+            "strong_pullback": 0.10,
+            "volume_shrink_reversal": 0.05,
+        },
+        "bull_high_vol": {
+            "strong_pullback": 0.30,
+            "competition_breakout": 0.25,
+            "trend_acceleration": 0.20,
+            "volume_shrink_reversal": 0.15,
+            "limit_up_continue": 0.10,
+        },
+        "bear_low_vol": {
+            "volume_shrink_reversal": 0.35,
+            "strong_pullback": 0.35,
+            "competition_breakout": 0.10,
+            "trend_acceleration": 0.10,
+            "limit_up_continue": 0.10,
+        },
+        "bear_high_vol": {
+            "volume_shrink_reversal": 0.45,
+            "strong_pullback": 0.35,
+            "competition_breakout": 0.08,
+            "trend_acceleration": 0.07,
+            "limit_up_continue": 0.05,
+        },
+    }
 
     def _get_regime_weights(self, market_data: Optional[Dict], is_auction: bool = False) -> Dict[str, float]:
-        """根据大盘市场状态及是否集合竞价返回子策略精确权重"""
+        """
+        基于四象限连续后验概率分布 (regime_probs) 与滚动实盘胜率进行贝叶斯全概率自适应赋权
+        """
         if is_auction:
             # 集合竞价时段：重点聚焦高开突破与趋势惯性延续
             return {
@@ -59,7 +128,6 @@ class TeamEnsembleStrategy(BaseStrategy):
                 "volume_shrink_reversal": 0.05,
             }
 
-        # 默认中性/震荡权重（修复策略类实际名称映射）
         weights = {
             "strong_pullback": 0.25,
             "competition_breakout": 0.25,
@@ -70,21 +138,59 @@ class TeamEnsembleStrategy(BaseStrategy):
         if not market_data:
             return weights
 
-        regime = market_data.get("regime", "neutral")  # bull / bear / volatile / neutral
-        if regime == "bull":
-            # 牛市/强趋势：加大突破与连板、趋势加速权重
-            weights["competition_breakout"] = 0.35
-            weights["trend_acceleration"] = 0.25
-            weights["limit_up_continue"] = 0.20
-            weights["strong_pullback"] = 0.10
-            weights["volume_shrink_reversal"] = 0.10
-        elif regime == "bear":
-            # 弱势/防守：加大缩量企稳与强势回调权重，压低追高
-            weights["volume_shrink_reversal"] = 0.35
-            weights["strong_pullback"] = 0.35
-            weights["competition_breakout"] = 0.10
-            weights["trend_acceleration"] = 0.10
-            weights["limit_up_continue"] = 0.10
+        # 1. 优先使用四象限连续后验概率分布 (Bayesian Regime Probability Mixing)
+        regime_probs = market_data.get("regime_probs")
+        quadrant = market_data.get("quadrant_regime")
+        if isinstance(regime_probs, dict) and len(regime_probs) > 0:
+            blended = {k: 0.0 for k in weights}
+            prob_sum = 0.0
+            for q_name, q_prob in regime_probs.items():
+                if q_name in self.QUADRANT_WEIGHT_MATRIX and q_prob > 0:
+                    prob_sum += float(q_prob)
+                    for s_name, s_w in self.QUADRANT_WEIGHT_MATRIX[q_name].items():
+                        blended[s_name] += float(q_prob) * s_w
+            if prob_sum > 1e-6:
+                weights = {k: v / prob_sum for k, v in blended.items()}
+        elif quadrant in self.QUADRANT_WEIGHT_MATRIX:
+            weights = dict(self.QUADRANT_WEIGHT_MATRIX[quadrant])
+        else:
+            # 兼容旧版 bull / bear / volatile 字符串
+            regime = market_data.get("regime", "neutral")
+            if regime == "bull":
+                weights = dict(self.QUADRANT_WEIGHT_MATRIX["bull_low_vol"])
+            elif regime == "bear":
+                weights = dict(self.QUADRANT_WEIGHT_MATRIX["bear_low_vol"])
+            elif regime == "volatile":
+                weights = dict(self.QUADRANT_WEIGHT_MATRIX["bull_high_vol"])
+
+        # 2. 融合子策略滚动实盘表现 (按胜率 win_rate 与盈亏比 profit_factor 进行贝叶斯自适应微调)
+        strat_perf = (
+            market_data.get("strategy_perf")
+            or market_data.get("sub_strategy_stats")
+            or self.sub_strategy_perf
+        )
+        if isinstance(strat_perf, dict) and strat_perf:
+            for s_name in list(weights.keys()):
+                perf = strat_perf.get(s_name)
+                if isinstance(perf, dict):
+                    wr = float(perf.get("win_rate", 0.5))
+                    if wr > 1.0:
+                        wr = wr / 100.0  # 百分比转小数
+                    pf = float(perf.get("profit_factor", 1.5))
+                    total_t = perf.get("wins", 0) + perf.get("losses", 0)
+
+                    # 仅在有样本或明确提供指标时微调
+                    if wr > 0:
+                        wr_ratio = max(0.2, min(2.5, wr / 0.5))
+                        pf_ratio = max(0.2, min(2.5, pf / 1.5))
+                        # 胜率赋权 0.5 次方，盈亏比赋权 0.25 次方
+                        tilt = max(0.5, min(1.8, (wr_ratio ** 0.5) * (pf_ratio ** 0.25)))
+                        weights[s_name] *= tilt
+
+        # 3. 归一化
+        total_w = sum(weights.values())
+        if total_w > 0:
+            weights = {k: round(v / total_w, 4) for k, v in weights.items()}
         return weights
 
     def analyze(
@@ -228,7 +334,8 @@ class TeamEnsembleStrategy(BaseStrategy):
                     "votes_sell": votes_sell,
                     "net_votes": net_votes,
                     "target_position_pct": self.params["target_position_pct"]["default"],
-                    "is_call_auction": is_auction
+                    "is_call_auction": is_auction,
+                    "regime_weights": weights
                 }
             )
         else:
@@ -244,6 +351,7 @@ class TeamEnsembleStrategy(BaseStrategy):
                     "votes_buy": votes_buy,
                     "votes_sell": votes_sell,
                     "net_votes": net_votes,
-                    "is_call_auction": is_auction
+                    "is_call_auction": is_auction,
+                    "regime_weights": weights
                 }
             )
