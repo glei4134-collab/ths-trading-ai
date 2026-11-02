@@ -1271,6 +1271,26 @@ class AIScheduler:
             except Exception as e:
                 logger.debug(f"获取收盘持仓摘要失败: {e}")
 
+            # 汇总当日未买入重点关注池起伏踏空与未卖出挂单调控统计（形成全模块数据利用闭环）
+            from intraday_timing_engine import intraday_timing_engine
+            dip_buyer = intraday_timing_engine.get("dip_buyer")
+            unsold_ctrl = intraday_timing_engine.get("unsold_controller")
+
+            watchlist_summary = []
+            if dip_buyer and dip_buyer.watchlist:
+                for w_sym, w_item in dip_buyer.watchlist.items():
+                    watchlist_summary.append({
+                        "symbol": w_sym,
+                        "name": w_item.get("name", w_sym),
+                        "status": w_item.get("status"),
+                        "last_price": w_item.get("last_price", 0.0),
+                        "high_price": w_item.get("high_price", 0.0),
+                        "pullback_pct": w_item.get("pullback_pct", 0.0),
+                        "dip_score": w_item.get("dip_score", 0.0),
+                    })
+
+            unsold_summary = unsold_ctrl.get_unsold_summary_list() if unsold_ctrl else []
+
             summary_data = {
                 "date": self.now().date().isoformat(),
                 "time": self.now().strftime("%H:%M:%S"),
@@ -1280,6 +1300,12 @@ class AIScheduler:
                 },
                 "trade_summary": trade_summary,
                 "position_summary": position_summary,
+                "timing_closed_loop": {
+                    "watchlist_unbought_count": len(watchlist_summary),
+                    "watchlist_unbought": watchlist_summary,
+                    "unsold_controls_count": len(unsold_summary),
+                    "unsold_controls": unsold_summary,
+                }
             }
 
             # 基础架构与持久化治理：执行收盘数据库全套维护 (清理过期日志 + WAL TRUNCATE + VACUUM 碎片整理)
@@ -1346,7 +1372,16 @@ class AIScheduler:
             total_count = len(trades)
             win_rate = (win_count / total_count * 100.0) if total_count > 0 else 0.0
 
-            # 3. 策略团队参数自适应适配
+            # 3. 汇总当日未买入关注池与未卖出调控统计
+            from intraday_timing_engine import intraday_timing_engine
+            dip_buyer = intraday_timing_engine.get("dip_buyer")
+            unsold_ctrl = intraday_timing_engine.get("unsold_controller")
+            timing_stats = {
+                "watchlist_monitored": len(dip_buyer.watchlist) if dip_buyer else 0,
+                "unsold_controls": len(unsold_ctrl.get_unsold_summary_list()) if unsold_ctrl else 0,
+            }
+
+            # 4. 策略团队参数自适应适配
             team_strat = registry.get("team_ensemble")
             if team_strat and hasattr(team_strat, "adapt_to_market_regime"):
                 team_strat.adapt_to_market_regime(regime)
@@ -2209,13 +2244,52 @@ A股交易时段: 上午9:30-11:30, 下午13:00-15:00
                 if decision.action == "buy":
                     amount = decision.position_size if decision.position_size >= 100 else 100
                     signal_weight = 1.3 if getattr(decision, "signal", "") == "STRONG_BUY" else (1.1 if getattr(decision, "signal", "") == "BUY" else 1.0)
-                    score = decision.confidence * signal_weight
+
+                    # 1. 基础策略置信度得分 (0-100 标准化)
+                    base_strategy_score = float(decision.confidence) * 100.0 * signal_weight
+
+                    # 2. 盘口微观数据得分 (买卖五档挂单失衡度 OBI + 换手率加成)
+                    obi_val = float(stock_data.get("obi", 0.0) or 0.0)
+                    turnover_val = float(stock_data.get("turnover", 0.0) or 0.0)
+                    micro_obi_vol_score = max(0.0, min(100.0, 50.0 + obi_val * 40.0 + min(10.0, turnover_val * 1.5)))
+
+                    # 3. 全网舆情情绪加成权重 (-15.0 ~ +15.0 分)
+                    from sentiment_analyzer import sentiment_analyzer
+                    stk_name = stock.get("name", "") or stock_data.get("name", "")
+                    sent_info = sentiment_analyzer.get_stock_sentiment_weight(symbol, name=stk_name)
+
+                    if sent_info.get("has_critical_risk"):
+                        logger.warning(f"⚠️ [{symbol} {stk_name}] 命中重大负面舆情雷区，直接一票否决剔除")
+                        continue
+
+                    sent_bonus = float(sent_info.get("sentiment_bonus", 0.0))
+                    news_sentiment_bonus = max(0.0, min(100.0, 50.0 + (sent_bonus / 15.0) * 50.0))
+
+                    # ★ 三维融合加权评分公式: final_score = base_strategy_score * 0.65 + micro_obi_vol_score * 0.20 + news_sentiment_bonus * 0.15
+                    final_score = base_strategy_score * 0.65 + micro_obi_vol_score * 0.20 + news_sentiment_bonus * 0.15
+
+                    # 4. 检查未买入重点关注池起伏突破加成 (+5.0分)
+                    from intraday_timing_engine import intraday_timing_engine
+                    dip_buyer = intraday_timing_engine.get("dip_buyer")
+                    if dip_buyer and symbol in dip_buyer.watchlist:
+                        w_item = dip_buyer.watchlist[symbol]
+                        w_status = w_item.get("status", "")
+                        w_reg = float(w_item.get("registered_at", now_ts))
+                        if w_status in ("WATCHING", "TIMING_DIP_BUY") and (now_ts - w_reg >= 60.0) and (obi_val > 0.15):
+                            final_score += 5.0
+                            logger.info(f"🎯 [{symbol}] 命中重点关注池起伏突破加成: +5.0分 (OBI={obi_val:.3f})")
+
                     candidates.append({
                         "symbol": symbol,
                         "confidence": decision.confidence,
                         "signal": getattr(decision, "signal", "BUY"),
                         "position_size": amount,
-                        "score": score
+                        "score": round(final_score, 2),
+                        "obi": obi_val,
+                        "sentiment_bonus": sent_bonus,
+                        "base_strategy_score": round(base_strategy_score, 1),
+                        "micro_score": round(micro_obi_vol_score, 1),
+                        "news_score": round(news_sentiment_bonus, 1),
                     })
             except Exception as e:
                 logger.warning(f"分析 {symbol} 失败: {e}")
@@ -2647,6 +2721,16 @@ A股交易时段: 上午9:30-11:30, 下午13:00-15:00
                     act = eval_res.get("action", "")
                     reason_desc = eval_res.get("reason", "")
 
+                    # 舆情协同去仓：持仓标的命中重大负面舆情立即升级为止损清仓
+                    from sentiment_analyzer import sentiment_analyzer
+                    sent_weight = sentiment_analyzer.get_stock_sentiment_weight(sym, name=pos.get("name", sym))
+                    if sent_weight.get("has_critical_risk") or sent_weight.get("sentiment_bonus", 0.0) <= -12.0:
+                        if act not in ("EMERGENCY_STOP_LOSS", "SELL_WEAK_EXIT"):
+                            act = "EMERGENCY_STOP_LOSS"
+                            crit_tags = ", ".join(sent_weight.get("critical_hits", ["突发利空暴雷"]))
+                            reason_desc = f"重大负面舆情协同果断去仓: {crit_tags}"
+                            logger.warning(f"🚨 [{acc_name}] {sym} 命中重大负面舆情，协同果断去仓!")
+
                     if act in ["EMERGENCY_STOP_LOSS", "SELL_WEAK_EXIT"]:
                         logger.warning(f"🚨 [{acc_name} 持仓去留] 触发卖出去仓: {sym} 动作={act} 原因={reason_desc}")
                         try:
@@ -2660,6 +2744,18 @@ A股交易时段: 上午9:30-11:30, 下午13:00-15:00
                                 notes=f"持仓去留-{act}: {reason_desc}"
                             )
                             logger.info(f"✅ [{acc_name}] 真实通道去留止损委托结果: {order_res.get('message')}")
+                            # 闭环追踪：自动登记到 unsold_controller，若一定时间未成交将触发超时调控
+                            unsold_ctrl = intraday_timing_engine["unsold_controller"]
+                            exp_time = (datetime.now() + timedelta(minutes=3)).strftime("%H:%M:%S")
+                            unsold_ctrl.register_expected_sell(
+                                symbol=sym,
+                                name=pos.get("name", sym),
+                                expected_sell_time_str=exp_time,
+                                target_price=cur_p,
+                                reason=f"持仓去留-{act}",
+                                order_id=str(order_res.get("order_id", "")),
+                                account_id=acc_id
+                            )
                         except Exception as ex:
                             logger.error(f"[{acc_name}] 持仓去仓报单异常: {ex}")
 
@@ -2693,7 +2789,20 @@ A股交易时段: 上午9:30-11:30, 下午13:00-15:00
                     dip_buyer.update_quote(sym, float(q.get("price")), float(q.get("change_pct", 0.0)),
                                            high=float(q.get("high", 0.0)), low=float(q.get("low", 0.0)))
 
-            actionable_dips = dip_buyer.get_actionable_dip_candidates(min_dip_score=75.0)
+            # 根据当前市场整体情绪分动态微调 dip_buyer 的回踩触发门槛
+            from sentiment_analyzer import sentiment_analyzer
+            mkt_sent = sentiment_analyzer.get_market_sentiment()
+            mkt_score = float(mkt_sent.get("score", 50.0))
+            if mkt_score >= 65.0:
+                eff_min_dip_score = 70.0
+                logger.info(f"📈 市场情绪高涨({mkt_score:.1f})，动态微调低吸门槛放宽至 70.0 分")
+            elif mkt_score < 40.0:
+                eff_min_dip_score = 82.0
+                logger.info(f"📉 市场情绪低迷({mkt_score:.1f})，动态微调低吸门槛收紧至 82.0 分防接飞刀")
+            else:
+                eff_min_dip_score = 75.0
+
+            actionable_dips = dip_buyer.get_actionable_dip_candidates(min_dip_score=eff_min_dip_score)
             if actionable_dips:
                 summary = db_store.get_account_summary(active_id) or {}
                 avail_cash = float(summary.get("ky_fund", summary.get("balance", 0.0)) or 0.0)

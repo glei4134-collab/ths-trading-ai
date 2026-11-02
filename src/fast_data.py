@@ -12,7 +12,7 @@ import json
 import time
 import logging
 import requests
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Tuple, Any
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from datetime import timedelta
@@ -20,16 +20,77 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 logger = logging.getLogger(__name__)
 
-# ==================== 请求会话（连接池复用） ====================
+# ==================== 请求会话（连接池复用与多源防反爬） ====================
+import random
+import threading
+from requests.adapters import HTTPAdapter
+
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 Edg/122.0.0.0",
+]
+
 _session = requests.Session()
+_adapter = HTTPAdapter(pool_connections=20, pool_maxsize=20, max_retries=2)
+_session.mount("http://", _adapter)
+_session.mount("https://", _adapter)
 _session.headers.update({
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    "User-Agent": USER_AGENTS[0],
     "Accept": "text/html,application/json,*/*",
 })
 
-# 国内行情API（东方财富/腾讯）不走代理，避免被本地代理拦截
-# 用户环境可能设置了 HTTP_PROXY=127.0.0.1:7897，会导致 ProxyError
+# 国内行情API（东方财富/腾讯/新浪）不走代理，避免被本地代理拦截
 _session.trust_env = False
+
+def get_random_headers(referer: str = "") -> dict:
+    h = {
+        "User-Agent": random.choice(USER_AGENTS),
+        "Accept": "text/html,application/json,*/*",
+    }
+    if referer:
+        h["Referer"] = referer
+    return h
+
+_last_request_time = 0.0
+_request_lock = threading.Lock()
+
+def _rate_limit(min_interval: float = 0.05):
+    """请求间微限速 (0.05s~0.1s)，平滑并发峰值，彻底根除对端机房 RST 强切断流"""
+    global _last_request_time
+    with _request_lock:
+        now = time.time()
+        elapsed = now - _last_request_time
+        if elapsed < min_interval:
+            time.sleep(min_interval - elapsed)
+        _last_request_time = time.time()
+
+# ==================== K线内存 TTL 缓存 ====================
+_kline_cache: Dict[str, Tuple[List[Dict], float]] = {}
+_kline_cache_lock = threading.Lock()
+
+TTL_KLINE_DAILY = 1800   # 日K/周K/月K 缓存 30 分钟 (1800s)
+TTL_KLINE_INTRADAY = 60  # 分钟级K线 (1min/5min/15min/30min/60min) 缓存 60 秒
+
+def get_cached_kline(cache_key: str) -> Optional[List[Dict]]:
+    with _kline_cache_lock:
+        if cache_key in _kline_cache:
+            data, exp = _kline_cache[cache_key]
+            if time.time() < exp:
+                return data
+            del _kline_cache[cache_key]
+    return None
+
+def set_cached_kline(cache_key: str, data: List[Dict], period: str):
+    ttl = TTL_KLINE_DAILY if period in ("daily", "weekly", "monthly") else TTL_KLINE_INTRADAY
+    with _kline_cache_lock:
+        _kline_cache[cache_key] = (data, time.time() + ttl)
+
+def clear_kline_cache():
+    with _kline_cache_lock:
+        _kline_cache.clear()
 
 
 # ==================== 代码格式转换 ====================
@@ -384,7 +445,9 @@ def fetch_eastmoney_kline(symbol: str, period: str = "daily", days: int = 60,
     }
 
     try:
-        resp = _session.get(url, params=params, timeout=10)
+        _rate_limit(0.05)
+        headers = get_random_headers(referer="https://push2his.eastmoney.com")
+        resp = _session.get(url, params=params, headers=headers, timeout=10)
         data = resp.json()
 
         if not data or "data" not in data or not data["data"]:
@@ -461,7 +524,9 @@ def fetch_eastmoney_intraday(symbol: str) -> list:
     }
 
     try:
-        resp = _session.get(url, params=params, timeout=10)
+        _rate_limit(0.05)
+        headers = get_random_headers(referer="http://gu.qq.com")
+        resp = _session.get(url, params=params, headers=headers, timeout=10)
         data = resp.json()
 
         if not data or "data" not in data or not data["data"]:
@@ -569,6 +634,166 @@ def fetch_tencent_kline(symbol: str, period: str = "daily", days: int = 60,
     except Exception as e:
         logger.error(f"腾讯K线请求失败 {symbol}: {e}")
         return []
+
+
+# ==================== 新浪 K线数据 (Tier 3 备用源) ====================
+
+def fetch_sina_kline(symbol: str, period: str = "daily", days: int = 60,
+                     is_index: bool = False) -> list:
+    """
+    新浪财经 API 获取K线数据 (Tier 3 备用源)
+    URL: http://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData
+    scale: 240(daily), 60(60min), 30(30min), 15(15min), 5(5min)
+    返回: [{date, open, close, high, low, volume, change_pct}, ...]
+    """
+    if MockMarketDataProvider.is_mock_active():
+        return MockMarketDataProvider.generate_mock_kline(symbol, days)
+
+    _rate_limit(0.05)
+    tc_sym = symbol_to_tencent(symbol, is_index=is_index)
+    scale_map = {
+        "daily": 240, "weekly": 1200, "monthly": 7200,
+        "60min": 60, "30min": 30, "15min": 15, "5min": 5, "1min": 5
+    }
+    scale = scale_map.get(period, 240)
+    url = f"http://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData?symbol={tc_sym}&scale={scale}&ma=no&datalen={days}"
+
+    try:
+        headers = get_random_headers(referer="http://finance.sina.com.cn")
+        resp = _session.get(url, headers=headers, timeout=10)
+        if resp.status_code != 200 or not resp.text.strip().startswith("["):
+            return []
+        items = resp.json()
+        if not items or not isinstance(items, list):
+            return []
+
+        result = []
+        prev_close = None
+        for item in items:
+            try:
+                open_p = round(float(item.get("open", 0)), 2)
+                close_p = round(float(item.get("close", 0)), 2)
+                high_p = round(float(item.get("high", 0)), 2)
+                low_p = round(float(item.get("low", 0)), 2)
+                vol = int(float(item.get("volume", 0)))
+                d_str = str(item.get("day", ""))
+
+                if open_p <= 0 or close_p <= 0:
+                    continue
+                if high_p < low_p:
+                    continue
+
+                change_pct = round((close_p / prev_close - 1) * 100, 2) if prev_close and prev_close > 0 else 0.0
+                result.append({
+                    "date": d_str,
+                    "open": open_p,
+                    "close": close_p,
+                    "high": high_p,
+                    "low": low_p,
+                    "volume": vol,
+                    "change_pct": change_pct
+                })
+                prev_close = close_p
+            except (ValueError, TypeError):
+                continue
+
+        return result[-days:] if len(result) > days else result
+    except Exception as e:
+        logger.warning(f"新浪K线获取失败 {symbol}: {e}")
+        return []
+
+
+# ==================== 4级韧性弹性K线数据获取引擎 ====================
+
+def fetch_kline(symbol: str, period: str = "daily", days: int = 60,
+                start_date: str = None, end_date: str = None,
+                is_index: bool = False) -> list:
+    """
+    四级韧性弹性K线数据获取引擎:
+    1. 内存 TTL 缓存快速命中 (日K 1800s / 分钟K 60s)
+    2. Tier 1: 东方财富 push2his (速度最快、字段最全)
+    3. Tier 2: 腾讯证券 ifzq (稳定性极高、抗防火墙断流)
+    4. Tier 3: 新浪财经 json_v2 (高可用备用)
+    5. Tier 4: akshare / 仿真Mock兜底
+    """
+    cache_key = f"{symbol}_{period}_{days}_{is_index}_{start_date}_{end_date}"
+    cached = get_cached_kline(cache_key)
+    if cached:
+        return cached
+
+    if MockMarketDataProvider.is_mock_active():
+        mock_data = MockMarketDataProvider.generate_mock_kline(symbol, days)
+        set_cached_kline(cache_key, mock_data, period)
+        return mock_data
+
+    # Tier 1: 东方财富
+    try:
+        data = fetch_eastmoney_kline(symbol, period=period, days=days,
+                                    start_date=start_date, end_date=end_date,
+                                    is_index=is_index)
+        if data and len(data) > 0:
+            set_cached_kline(cache_key, data, period)
+            return data
+    except Exception as e:
+        logger.warning(f"[Tier 1 东方财富] K线获取失败 {symbol}: {e}")
+
+    # Tier 2: 腾讯证券
+    try:
+        data = fetch_tencent_kline(symbol, period=period, days=days, is_index=is_index)
+        if data and len(data) > 0:
+            set_cached_kline(cache_key, data, period)
+            return data
+    except Exception as e:
+        logger.warning(f"[Tier 2 腾讯] K线获取失败 {symbol}: {e}")
+
+    # Tier 3: 新浪财经
+    try:
+        data = fetch_sina_kline(symbol, period=period, days=days, is_index=is_index)
+        if data and len(data) > 0:
+            set_cached_kline(cache_key, data, period)
+            return data
+    except Exception as e:
+        logger.warning(f"[Tier 3 新浪] K线获取失败 {symbol}: {e}")
+
+    # Tier 4: akshare 或 Mock兜底
+    try:
+        import akshare as ak
+        if not start_date:
+            end_date_val = end_date or datetime.now(ZoneInfo('Asia/Shanghai')).strftime("%Y%m%d")
+            start_date_val = (datetime.now(ZoneInfo('Asia/Shanghai')) - timedelta(days=days + 30)).strftime("%Y%m%d")
+        else:
+            start_date_val = start_date
+            end_date_val = end_date or "20500101"
+
+        df = ak.stock_zh_a_hist(
+            symbol=symbol, period=period, adjust="qfq",
+            start_date=start_date_val, end_date=end_date_val
+        )
+        if df is not None and not df.empty:
+            result = []
+            for _, row in df.iterrows():
+                d = str(row['日期'])[:10]
+                result.append({
+                    "date": d,
+                    "open": round(float(row['开盘']), 2),
+                    "close": round(float(row['收盘']), 2),
+                    "high": round(float(row['最高']), 2),
+                    "low": round(float(row['最低']), 2),
+                    "volume": int(row['成交量']),
+                    "change_pct": round(float(row['涨跌幅']), 2) if '涨跌幅' in row else 0.0,
+                })
+            final_res = result[-days:] if len(result) > days else result
+            set_cached_kline(cache_key, final_res, period)
+            return final_res
+    except Exception as e:
+        logger.warning(f"[Tier 4 akshare] K线获取失败 {symbol}: {e}")
+
+    mock_fallback = MockMarketDataProvider.generate_mock_kline(symbol, days)
+    set_cached_kline(cache_key, mock_fallback, period)
+    return mock_fallback
+
+# 别名导出，确保对 data_cache 及各处调用的全面兼容
+get_kline = fetch_kline
 
 
 # ==================== 腾讯 分时数据 ====================

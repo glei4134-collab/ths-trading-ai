@@ -88,12 +88,14 @@ def stock_realtime(symbol):
 
 
 @market_bp.route('/api/stock/history/<symbol>', methods=['GET'])
+@market_bp.route('/api/stock/kline/<symbol>', methods=['GET'])
 def stock_history(symbol):
-    """获取历史K线数据（使用 fast_data，带缓存）"""
+    """获取历史K线数据（使用 fast_data，带缓存，支持 /history/ 与 /kline/ 互通）"""
     try:
         days = request.args.get('days', 30, type=int)
+        period = request.args.get('period', 'daily', type=str)
 
-        data = get_kline(symbol, period="daily", days=days)
+        data = get_kline(symbol, period=period, days=days)
         if data:
             return jsonify({"success": True, "data": data})
 

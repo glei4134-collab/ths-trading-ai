@@ -146,8 +146,8 @@ def get_kline(symbol: str, period: str = "daily", days: int = 60,
               start_date: str = None, end_date: str = None) -> list:
     """
     获取K线数据（带缓存）
-    底层: 东方财富直连API（跳过akshare封装）
-    period: daily / weekly
+    底层: fast_data 4级韧性弹性K线数据获取引擎 (东财 -> 腾讯 -> 新浪 -> akshare/Mock)
+    period: daily / weekly / 5min / 15min / 30min / 60min / 1min
     返回: [{date, open, close, high, low, volume, change_pct}, ...]
     """
     cache_key = f"kline:{symbol}:{period}:{days}"
@@ -155,62 +155,22 @@ def get_kline(symbol: str, period: str = "daily", days: int = 60,
     if cached is not None:
         return cached
 
-    # 方案1: 腾讯K线API（最稳定，HTTP无代理问题）
     try:
-        from fast_data import fetch_tencent_kline
-        data = fetch_tencent_kline(symbol, period=period, days=days)
+        from fast_data import get_kline as fast_get_kline
+        data = fast_get_kline(symbol, period=period, days=days,
+                              start_date=start_date, end_date=end_date, is_index=False)
         if data:
             cache.set(cache_key, data, TTL_KLINE)
             return data
     except Exception as e:
-        logger.warning(f"腾讯K线请求失败 {symbol}: {e}")
-
-    # 方案2: 东方财富直连API
-    try:
-        from fast_data import fetch_eastmoney_kline
-        data = fetch_eastmoney_kline(symbol, period=period, days=days,
-                                     start_date=start_date, end_date=end_date)
-        if data:
-            cache.set(cache_key, data, TTL_KLINE)
-            return data
-    except Exception as e:
-        logger.warning(f"东方财富K线请求失败 {symbol}: {e}")
-
-    # 方案2: akshare 备用
-    try:
-        import akshare as ak
-        if not start_date:
-            end_date = end_date or datetime.now(ZoneInfo('Asia/Shanghai')).strftime("%Y%m%d")
-            start_date = (datetime.now(ZoneInfo('Asia/Shanghai')) - timedelta(days=days + 30)).strftime("%Y%m%d")
-
-        df = ak.stock_zh_a_hist(
-            symbol=symbol, period=period, adjust="qfq",
-            start_date=start_date, end_date=end_date
-        )
-        if df is not None and not df.empty:
-            data = []
-            for _, row in df.iterrows():
-                d = str(row['日期'])[:10]
-                data.append({
-                    "date": d,
-                    "open": round(float(row['开盘']), 2),
-                    "close": round(float(row['收盘']), 2),
-                    "high": round(float(row['最高']), 2),
-                    "low": round(float(row['最低']), 2),
-                    "volume": int(row['成交量']),
-                    "change_pct": round(float(row['涨跌幅']), 2)
-                })
-            cache.set(cache_key, data, TTL_KLINE)
-            return data
-    except Exception as e:
-        logger.warning(f"akshare K线也失败 {symbol}: {e}")
+        logger.warning(f"fast_data.get_kline 获取失败 {symbol}: {e}")
 
     return []
 
 
 def get_index_kline(symbol: str, period: str = "daily", days: int = 60) -> list:
     """
-    获取指数K线数据（直接使用东方财富API，跳过腾讯——腾讯K线不支持指数代码）
+    获取指数K线数据（通过 fast_data 4级韧性弹性引擎）
     例如: get_index_kline("000300", days=90) 获取沪深300日K线
     """
     cache_key = f"kline_index:{symbol}:{period}:{days}"
@@ -218,52 +178,14 @@ def get_index_kline(symbol: str, period: str = "daily", days: int = 60) -> list:
     if cached is not None:
         return cached
 
-    # 方案1: 腾讯K线API（极速稳定，毫秒级响应）
     try:
-        from fast_data import fetch_tencent_kline
-        data = fetch_tencent_kline(symbol, period=period, days=days, is_index=True)
+        from fast_data import get_kline as fast_get_kline
+        data = fast_get_kline(symbol, period=period, days=days, is_index=True)
         if data:
             cache.set(cache_key, data, TTL_KLINE)
             return data
     except Exception as e:
-        logger.warning(f"腾讯指数K线请求失败 {symbol}: {e}")
-
-    # 方案2: 东方财富直连API（备用）
-    try:
-        from fast_data import fetch_eastmoney_kline
-        data = fetch_eastmoney_kline(symbol, period=period, days=days, is_index=True)
-        if data:
-            cache.set(cache_key, data, TTL_KLINE)
-            return data
-    except Exception as e:
-        logger.warning(f"东方财富指数K线请求失败 {symbol}: {e}")
-
-    # 方案2: akshare 备用
-    try:
-        import akshare as ak
-        end_date = datetime.now(ZoneInfo('Asia/Shanghai')).strftime("%Y%m%d")
-        start_date = (datetime.now(ZoneInfo('Asia/Shanghai')) - timedelta(days=days + 30)).strftime("%Y%m%d")
-        df = ak.index_zh_a_hist(
-            symbol=symbol, period=period if period != "daily" else "daily",
-            start_date=start_date, end_date=end_date
-        )
-        if df is not None and not df.empty:
-            data = []
-            for _, row in df.iterrows():
-                d = str(row.get('日期', ''))[:10]
-                data.append({
-                    "date": d,
-                    "open": round(float(row.get('开盘', 0)), 2),
-                    "close": round(float(row.get('收盘', 0)), 2),
-                    "high": round(float(row.get('最高', 0)), 2),
-                    "low": round(float(row.get('最低', 0)), 2),
-                    "volume": int(row.get('成交量', 0)),
-                    "change_pct": round(float(row.get('涨跌幅', 0)), 2)
-                })
-            cache.set(cache_key, data, TTL_KLINE)
-            return data
-    except Exception as e:
-        logger.warning(f"akshare 指数K线也失败 {symbol}: {e}")
+        logger.warning(f"fast_data.get_kline 获取指数失败 {symbol}: {e}")
 
     return []
 

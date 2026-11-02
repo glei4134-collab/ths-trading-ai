@@ -47,9 +47,11 @@ class TimingDipBuyer:
     def register_unbought_candidate(self, symbol: str, name: str, score: float, 
                                      reason: str = "资金受限/等待回踩", 
                                      target_price: float = 0.0,
-                                     industry: str = ""):
+                                     industry: str = "",
+                                     initial_price: float = 0.0):
         """登记或更新未买入重点关注标的"""
         now_ts = time.time()
+        init_p = float(initial_price or target_price or 0.0)
         if symbol not in self.watchlist:
             self.watchlist[symbol] = {
                 "symbol": symbol,
@@ -57,6 +59,11 @@ class TimingDipBuyer:
                 "score": score,
                 "reason": reason,
                 "target_price": target_price,
+                "initial_price": init_p,
+                "missed_gain_pct": 0.0,
+                "obi": 0.0,
+                "volume_ratio": 1.0,
+                "turnover_ratio": 0.0,
                 "industry": industry,
                 "registered_at": now_ts,
                 "ticks": deque(maxlen=self.max_ticks),
@@ -73,16 +80,23 @@ class TimingDipBuyer:
             self.watchlist[symbol]["reason"] = reason
             if target_price > 0:
                 self.watchlist[symbol]["target_price"] = target_price
+            if init_p > 0 and self.watchlist[symbol].get("initial_price", 0.0) <= 0:
+                self.watchlist[symbol]["initial_price"] = init_p
 
     def update_quote(self, symbol: str, current_price: float, change_pct: float, 
-                     high: float = 0.0, low: float = 0.0, volume: float = 0.0) -> Dict[str, Any]:
-        """更新个股即时行情并计算时序低吸信号"""
+                     high: float = 0.0, low: float = 0.0, volume: float = 0.0,
+                     quote: Optional[Dict[str, Any]] = None, **kwargs) -> Dict[str, Any]:
+        """更新个股即时行情并计算时序微观低吸信号 (支持OBI/量比/错过涨幅统计)"""
         if symbol not in self.watchlist:
             return {}
 
         item = self.watchlist[symbol]
         now_ts = time.time()
         
+        # 补全初始登记价格
+        if item.get("initial_price", 0.0) <= 0:
+            item["initial_price"] = item.get("target_price") or current_price
+
         # 动态更新高低点与移动均线
         eff_high = max(high, item["high_price"], current_price)
         eff_low = min(low if low > 0 else current_price, item["low_price"], current_price)
@@ -91,8 +105,28 @@ class TimingDipBuyer:
         item["last_price"] = current_price
         item["last_change_pct"] = change_pct
 
+        # 订单簿不平衡度 (Order Book Imbalance, OBI) 与量比换手计算
+        q = quote or {}
+        bid1_vol = float(q.get("bid1_vol") or kwargs.get("bid1_vol", 0.0) or 0.0)
+        ask1_vol = float(q.get("ask1_vol") or kwargs.get("ask1_vol", 0.0) or 0.0)
+        tot_depth = bid1_vol + ask1_vol
+        obi = round((bid1_vol - ask1_vol) / tot_depth, 4) if tot_depth > 0 else 0.0
+        item["obi"] = obi
+
+        vol_ratio = float(q.get("volume_ratio") or kwargs.get("volume_ratio", 1.0) or 1.0)
+        turnover_ratio = float(q.get("turnover_ratio") or kwargs.get("turnover_ratio", 0.0) or 0.0)
+        item["volume_ratio"] = vol_ratio
+        item["turnover_ratio"] = turnover_ratio
+
+        # 统计错过的最大涨幅 (Missed Gain %)
+        init_p = item.get("initial_price", 0.0)
+        missed_gain_pct = 0.0
+        if init_p > 0 and eff_high > init_p:
+            missed_gain_pct = round((eff_high - init_p) / init_p * 100.0, 2)
+        item["missed_gain_pct"] = missed_gain_pct
+
         # 维护有界双端队列 (RingBuffer)
-        item["ticks"].append((now_ts, current_price, volume))
+        item["ticks"].append((now_ts, current_price, volume, obi))
 
         # 计算日内分时均价 (VWAP 估算)
         if len(item["ticks"]) > 0:
@@ -111,15 +145,16 @@ class TimingDipBuyer:
         # 1. 股票具有强动量基础 (score >= 70)
         # 2. 早盘冲高后发生健康回踩，回踩幅度在 1.5% ~ 3.5% 之间
         # 3. 价格未跌破日内分时均线 (price >= vwap * 0.995)，表明有大资金托底
-        # 4. 处于日内低吸黄金窗口
+        # 4. 买一支撑坚挺 (OBI > -0.2)
         dip_score = 0.0
         signal = "WATCHING"
         suggested_action = "CONTINUE_OBSERVE"
 
         if item["score"] >= 70:
             if 1.5 <= pullback_pct <= 3.8 and current_price >= item["vwap"] * 0.995:
-                # 触发优质低吸黄金点
-                dip_score = round(item["score"] * 0.5 + 45.0 + (3.8 - pullback_pct) * 5.0, 1)
+                # 触发优质低吸黄金点 (结合OBI微观调节)
+                obi_bonus = 5.0 if obi > 0.1 else (0.0 if obi >= -0.2 else -5.0)
+                dip_score = round(item["score"] * 0.5 + 45.0 + (3.8 - pullback_pct) * 5.0 + obi_bonus, 1)
                 signal = "TIMING_DIP_BUY"
                 suggested_action = "EXECUTE_DIP_BUY"
             elif pullback_pct > 4.5:
@@ -151,10 +186,17 @@ class TimingDipBuyer:
             "high_price": eff_high,
             "vwap": item["vwap"],
             "pullback_pct": pullback_pct,
+            "initial_price": init_p,
+            "missed_gain_pct": missed_gain_pct,
+            "obi": obi,
+            "volume_ratio": vol_ratio,
+            "turnover_ratio": turnover_ratio,
             "dip_score": dip_score,
             "signal": signal,
             "suggested_action": suggested_action
         }
+
+    update_quote_and_check = update_quote
 
     def get_actionable_dip_candidates(self, min_dip_score: float = 75.0) -> List[Dict[str, Any]]:
         """提取已达到时序低吸买入标准的标的列表"""
@@ -178,10 +220,15 @@ class TimingDipBuyer:
                 "industry": item.get("industry", ""),
                 "reason": item.get("reason", "等待低吸"),
                 "tracked_minutes": round((now_ts - item.get("registered_at", now_ts)) / 60.0, 1),
+                "initial_price": item.get("initial_price", 0.0),
                 "last_price": item.get("last_price", 0.0),
                 "high_price": item.get("high_price", 0.0),
                 "vwap": item.get("vwap", 0.0),
                 "pullback_pct": item.get("pullback_pct", 0.0),
+                "missed_gain_pct": item.get("missed_gain_pct", 0.0),
+                "obi": item.get("obi", 0.0),
+                "volume_ratio": item.get("volume_ratio", 1.0),
+                "turnover_ratio": item.get("turnover_ratio", 0.0),
                 "dip_score": item.get("dip_score", 0.0),
                 "status": item.get("status", "WATCHING"),
                 "suggested_action": item.get("suggested_action", "OBSERVE"),
@@ -196,17 +243,25 @@ class PositionRetentionDecider:
     def __init__(self):
         pass
 
-    def evaluate_retention(self, position: Dict[str, Any], quote: Dict[str, Any]) -> Dict[str, Any]:
+    def evaluate_retention(self, position: Dict[str, Any], quote: Dict[str, Any], 
+                           news_sentiment_score: float = 50.0) -> Dict[str, Any]:
         """
-        全要素评估现有持仓去留决策
-        :param position: 当前账户持仓数据 (symbol, amount, cost_price, profit_rate, held_days, etc.)
+        全要素评估现有持仓去留决策 (支持成本价三级兜底与新闻舆情权重修正)
+        :param position: 当前账户持仓数据 (symbol, amount, cost_price, avg_price, total_cost, profit_rate, held_days, etc.)
         :param quote: 实时盘口数据 (price, change_pct, high, low, bid1_vol, ask1_vol, vwap)
+        :param news_sentiment_score: 舆情情绪评分 (0~100，默认50中性)
         :return: 决策结果字典 (action: KEEP/TRIM/SELL/STOP, reason, confidence, urgency)
         """
         symbol = position.get("symbol", position.get("code", ""))
         name = position.get("name", symbol)
-        cost_price = float(position.get("cost_price") or position.get("avg_price", 0.0) or 0.0)
-        current_price = float(quote.get("price", 0.0) or cost_price)
+        
+        # 成本价三级兜底计算：cost_price -> avg_price -> total_cost / amount，防止 profit_rate 被误算为 0.0
+        amt = float(position.get("amount", 0) or position.get("total_amount", 0) or 0)
+        total_cost = float(position.get("total_cost", 0.0) or 0.0)
+        calc_cost = (total_cost / amt) if amt > 0 else 0.0
+        cost_price = float(position.get("cost_price") or position.get("avg_price") or calc_cost or 0.0)
+
+        current_price = float(quote.get("price", 0.0) or (cost_price if cost_price > 0 else 0.0))
         change_pct = float(quote.get("change_pct", 0.0) or 0.0)
         
         profit_rate = 0.0
@@ -218,6 +273,7 @@ class PositionRetentionDecider:
         high_price = float(quote.get("high", 0.0) or current_price)
         vwap = float(quote.get("vwap", 0.0) or current_price)
         ask1_vol = float(quote.get("ask1_vol", 0.0) or 0.0)
+        sentiment = float(news_sentiment_score if news_sentiment_score is not None else 50.0)
 
         # 1. 涨停板判定：封单充足，坚决【留】
         if change_pct >= 9.8 and ask1_vol == 0:
@@ -229,10 +285,29 @@ class PositionRetentionDecider:
                 "confidence": 0.95,
                 "urgency": "LOW",
                 "reason": f"股票强势封板 (+{change_pct:.2f}%)，卖一封死，坚决持仓赚取次日高开溢价",
-                "profit_rate": profit_rate
+                "profit_rate": profit_rate,
+                "cost_price": cost_price,
+                "news_sentiment_score": sentiment
             }
 
-        # 2. 硬风控止损红线：触及 -3.5% 坚决【去】
+        # 2. 舆情恶化联动判定：情绪分低于30且持仓浮亏，下调止损容忍度，提前触发清仓避险
+        if sentiment < 30.0 and profit_rate < 0:
+            loss_pct = profit_rate * 100.0
+            if profit_rate <= -0.018 or current_price < vwap * 0.99:
+                return {
+                    "symbol": symbol,
+                    "name": name,
+                    "action": "SELL_WEAK_EXIT",
+                    "retention_decision": "去 (舆情恶化避险)",
+                    "confidence": 0.92,
+                    "urgency": "HIGH",
+                    "reason": f"舆情极度悲观({sentiment:.0f}<30)且持仓浮亏({loss_pct:.2f}%)，下调止损阈值触发清仓避险",
+                    "profit_rate": profit_rate,
+                    "cost_price": cost_price,
+                    "news_sentiment_score": sentiment
+                }
+
+        # 3. 硬风控止损红线：触及 -3.5% 坚决【去】
         if profit_rate <= -0.035:
             return {
                 "symbol": symbol,
@@ -242,10 +317,12 @@ class PositionRetentionDecider:
                 "confidence": 0.99,
                 "urgency": "HIGH",
                 "reason": f"触及硬止损阈值 ({profit_rate*100:.2f}% <= -3.5%)，铁律清仓防大回撤",
-                "profit_rate": profit_rate
+                "profit_rate": profit_rate,
+                "cost_price": cost_price,
+                "news_sentiment_score": sentiment
             }
 
-        # 3. 冲高受阻回落保利判定：曾经大赚但从日内高点回落过深，部分【减】
+        # 4. 冲高受阻回落保利判定：曾经大赚但从日内高点回落过深，部分【减】
         pullback_from_high = 0.0
         if high_price > 0:
             pullback_from_high = (high_price - current_price) / high_price * 100.0
@@ -259,10 +336,12 @@ class PositionRetentionDecider:
                 "confidence": 0.85,
                 "urgency": "MEDIUM",
                 "reason": f"日内从高位回落 {pullback_from_high:.1f}%，盈利丰厚 (+{profit_rate*100:.1f}%)，建议减仓锁定战果",
-                "profit_rate": profit_rate
+                "profit_rate": profit_rate,
+                "cost_price": cost_price,
+                "news_sentiment_score": sentiment
             }
 
-        # 4. 破位与均线背离判定：跌破日内分时均线且翻绿，【去】仓换牛股
+        # 5. 破位与均线背离判定：跌破日内分时均线且翻绿，【去】仓换牛股
         if vwap > 0 and current_price < vwap * 0.982 and change_pct < 0:
             return {
                 "symbol": symbol,
@@ -272,20 +351,26 @@ class PositionRetentionDecider:
                 "confidence": 0.82,
                 "urgency": "MEDIUM",
                 "reason": f"价格跌破分时均线 1.8% 且处于弱势区间，建议出局腾挪仓位配置时序低吸标的",
-                "profit_rate": profit_rate
+                "profit_rate": profit_rate,
+                "cost_price": cost_price,
+                "news_sentiment_score": sentiment
             }
 
-        # 5. 多头趋势良好，站在分时均线上方：顺势【留】
+        # 6. 多头趋势良好，站在分时均线上方：顺势【留】 (若舆情>70显著增强多头信心)
         if current_price >= vwap:
+            boost_conf = 0.88 if sentiment > 70.0 else 0.78
+            sentiment_note = f"，舆情积极({sentiment:.0f}>70)增强持股信心" if sentiment > 70.0 else ""
             return {
                 "symbol": symbol,
                 "name": name,
                 "action": "KEEP_RIDE_TREND",
                 "retention_decision": "留 (多头顺势)",
-                "confidence": 0.78,
+                "confidence": boost_conf,
                 "urgency": "LOW",
-                "reason": f"运行于日内分时均线上方 (现价 {current_price:.2f} >= VWAP {vwap:.2f})，多头动能充沛，持股待涨",
-                "profit_rate": profit_rate
+                "reason": f"运行于日内分时均线上方 (现价 {current_price:.2f} >= VWAP {vwap:.2f})，多头动能充沛{sentiment_note}，持股待涨",
+                "profit_rate": profit_rate,
+                "cost_price": cost_price,
+                "news_sentiment_score": sentiment
             }
 
         # 默认中性持有
@@ -297,7 +382,9 @@ class PositionRetentionDecider:
             "confidence": 0.60,
             "urgency": "LOW",
             "reason": "处于正常分时震荡箱体内，未触发离场信号，继续持仓观察",
-            "profit_rate": profit_rate
+            "profit_rate": profit_rate,
+            "cost_price": cost_price,
+            "news_sentiment_score": sentiment
         }
 
 
@@ -353,9 +440,10 @@ class UnsoldPositionController:
         return removed
 
     def evaluate_unsold_status(self, symbol: str, current_price: float, change_pct: float,
-                               now_time_str: Optional[str] = None, account_id: Optional[int] = None) -> Dict[str, Any]:
+                               now_time_str: Optional[str] = None, account_id: Optional[int] = None,
+                               quote: Optional[Dict[str, Any]] = None, **kwargs) -> Dict[str, Any]:
         """
-        对已超预期时间却未卖出的标的进行智能调控
+        对已超预期时间却未卖出的标的进行智能调控 (记录滑点损失率与买一支撑占比)
         调控逻辑：
         1. 若价格反而拉升至涨停 -> 调控：撤销卖出计划，转为继续持有；
         2. 若已经超时且价格开始滞涨/跳水 -> 调控：立刻降价至即时买一或市价急卖，坚决止盈/避险；
@@ -383,6 +471,21 @@ class UnsoldPositionController:
         if not now_time_str:
             now_time_str = datetime.now().strftime("%H:%M:%S")
 
+        # 滑点损失率计算 (Slippage %): 相对目标卖出价的滑点
+        target_p = float(item.get("target_price", 0.0) or 0.0)
+        slippage_pct = 0.0
+        if target_p > 0 and current_price < target_p:
+            slippage_pct = round((target_p - current_price) / target_p * 100.0, 2)
+        item["slippage_pct"] = slippage_pct
+
+        # 买一盘口支撑度计算 (Bid1 Support Ratio)
+        q = quote or {}
+        bid1_vol = float(q.get("bid1_vol") or kwargs.get("bid1_vol", 0.0) or 0.0)
+        ask1_vol = float(q.get("ask1_vol") or kwargs.get("ask1_vol", 0.0) or 0.0)
+        tot_depth = bid1_vol + ask1_vol
+        bid1_support_ratio = round(bid1_vol / tot_depth, 4) if tot_depth > 0 else 0.5
+        item["bid1_support_ratio"] = bid1_support_ratio
+
         is_overdue = now_time_str > item["expected_sell_time"]
         tuning_action = "KEEP_PENDING"
         tuning_reason = "尚未到达预期卖出时钟"
@@ -395,10 +498,10 @@ class UnsoldPositionController:
                 # 市场超预期强劲，调控为顺延持有
                 tuning_action = "CANCEL_AND_RIDE"
                 tuning_reason = f"[账户#{acc_id}] 已过预定卖出时间 {item['expected_sell_time']}，但股价封死涨停，调控为取消卖出继续享受涨幅"
-            elif current_price < item["target_price"] * 0.985:
-                # 价格已跌破目标价 1.5%，属于挂单过高未成交，必须紧急调价
+            elif current_price < target_p * 0.985 or (bid1_support_ratio < 0.3 and slippage_pct > 1.0):
+                # 价格已跌破目标价 1.5% 或买一支撑崩塌，属于挂单过高未成交，必须紧急调价
                 tuning_action = "REPRICE_URGENT_SELL"
-                tuning_reason = f"[账户#{acc_id}] 已超时且价格跌破挂单价 ({current_price:.2f} < {item['target_price']:.2f})，调控为按买一市价紧急卖出防滑坡"
+                tuning_reason = f"[账户#{acc_id}] 已超时且价格跌破挂单价 ({current_price:.2f} < {target_p:.2f}, 滑点 {slippage_pct:.1f}%)，调控为按买一市价紧急卖出防滑坡"
             else:
                 # 正常超时，调整为分批现价卖出
                 tuning_action = "MARKET_SELL_NOW"
@@ -417,8 +520,10 @@ class UnsoldPositionController:
             "symbol": sym,
             "name": item.get("name", sym),
             "expected_sell_time": item["expected_sell_time"],
-            "target_price": item["target_price"],
+            "target_price": target_p,
             "current_price": current_price,
+            "slippage_pct": slippage_pct,
+            "bid1_support_ratio": bid1_support_ratio,
             "is_overdue": is_overdue,
             "status": status,
             "tuning_action": tuning_action,
@@ -450,3 +555,44 @@ intraday_timing_engine = {
         "retention_control_weight": 0.20   # 持仓去留与超时调控权重
     }
 }
+
+
+def get_detailed_timing_metrics(account_id: Optional[int] = None) -> Dict[str, Any]:
+    """
+    全局时序微观量化指标汇聚输出
+    涵盖未买入低吸监控、未卖出超时调控、订单簿不平衡(OBI)、错过涨幅及滑点统计
+    """
+    dip_buyer: TimingDipBuyer = intraday_timing_engine["dip_buyer"]
+    unsold_ctrl: UnsoldPositionController = intraday_timing_engine["unsold_controller"]
+
+    unbought_summary = dip_buyer.get_summary_list()
+    actionable_dips = dip_buyer.get_actionable_dip_candidates()
+    unsold_summary = unsold_ctrl.get_unsold_summary_list(account_id=account_id)
+
+    total_unbought = len(unbought_summary)
+    actionable_count = len(actionable_dips)
+    total_unsold = len(unsold_summary)
+    overdue_count = sum(1 for x in unsold_summary if x.get("status") == "OVERDUE_UNSOLD")
+
+    avg_pullback = round(sum(x.get("pullback_pct", 0.0) for x in unbought_summary) / total_unbought, 2) if total_unbought > 0 else 0.0
+    avg_missed = round(sum(x.get("missed_gain_pct", 0.0) for x in unbought_summary) / total_unbought, 2) if total_unbought > 0 else 0.0
+    avg_slippage = round(sum(x.get("slippage_pct", 0.0) for x in unsold_summary) / total_unsold, 2) if total_unsold > 0 else 0.0
+
+    return {
+        "status": "success",
+        "timestamp": datetime.now().isoformat(),
+        "account_id": account_id,
+        "statistics": {
+            "total_tracked_unbought": total_unbought,
+            "actionable_dip_count": actionable_count,
+            "total_pending_sells": total_unsold,
+            "overdue_unsold_count": overdue_count,
+            "avg_pullback_pct": avg_pullback,
+            "avg_missed_gain_pct": avg_missed,
+            "avg_slippage_pct": avg_slippage,
+        },
+        "unbought_candidates": unbought_summary,
+        "actionable_dips": actionable_dips,
+        "unsold_positions": unsold_summary,
+        "weights": intraday_timing_engine.get("weights", {})
+    }

@@ -147,6 +147,10 @@ class SentimentAnalyzer:
         self._max_history_keys: int = 200
         # 异步解耦非阻塞后台工作线程池，彻底杜绝网络请求阻塞交易主循环
         self._async_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="sentiment_async")
+        # 全网市场新闻 10 分钟 TTL 内存缓存与去重指纹池
+        self._all_news_cache: List[Tuple[str, str]] = []
+        self._all_news_cache_time: float = 0.0
+        self._all_news_cache_ttl: float = 600.0
 
         # 正则表达式 DFA 预编译缓存 (单次扫描 O(L) 复杂度)
         self._pos_pattern: Optional[re.Pattern] = None
@@ -425,6 +429,106 @@ class SentimentAnalyzer:
         except Exception:
             pass
         return ""
+
+    def _get_cached_or_recent_news(self) -> List[Tuple[str, str]]:
+        """获取当前缓存的或最新拉取的全网新闻"""
+        now_ts = time.time()
+        if self._all_news_cache and (now_ts - self._all_news_cache_time < self._all_news_cache_ttl):
+            return self._all_news_cache
+        return self._fetch_all_news()
+
+    def get_stock_sentiment_weight(self, symbol: str, name: str = "") -> Dict:
+        """
+        根据全网新闻标题/摘要，匹配股票名称、代码及所属热点题材关键词，
+        输出该标的的情绪加成权重 (sentiment_bonus: -15.0 ~ +15.0 分) 与新闻命中明细 (matched_news)
+        """
+        symbol = str(symbol).strip()
+        if not name:
+            name = self._resolve_stock_name(symbol)
+        clean_name = name.strip() if name else ""
+
+        # 1. 尝试从个股专属情绪引擎获取基准分 (non_blocking 模式保证交易主线程零阻塞)
+        stock_sent = self.get_stock_sentiment(symbol, clean_name, non_blocking=True)
+        stock_score = float(stock_sent.get("score", 50.0))
+
+        # 2. 匹配全网已缓存新闻或个股专属新闻中的相关条目
+        all_market_news = self._get_cached_or_recent_news()
+        matched_news = []
+        seen_titles = set()
+
+        # 关联概念/关键词
+        stock_cfg = self.STOCK_KEYWORDS.get(symbol, {})
+        pos_kws = stock_cfg.get("positive", [])
+        neg_kws = stock_cfg.get("negative", [])
+
+        # 聚合个股专属新闻
+        for item in stock_sent.get("news_headlines", []):
+            title = item.get("title", "") if isinstance(item, dict) else str(item)
+            if title and title not in seen_titles:
+                seen_titles.add(title)
+                src = item.get("source", "stock_specific") if isinstance(item, dict) else "stock_specific"
+                matched_news.append({"title": title, "source": src, "match_reason": "个股专属资讯"})
+
+        # 扫描全网最新市场新闻
+        for title, source in all_market_news:
+            if title in seen_titles:
+                continue
+            matched = False
+            match_reason = ""
+            if symbol in title:
+                matched = True
+                match_reason = "代码直接命中"
+            elif clean_name and len(clean_name) >= 2 and clean_name in title:
+                matched = True
+                match_reason = "名称直接命中"
+            elif any(k in title for k in pos_kws):
+                matched = True
+                match_reason = "核心业务题材正向命中"
+            elif any(k in title for k in neg_kws):
+                matched = True
+                match_reason = "行业/业务负向预警"
+
+            if matched:
+                seen_titles.add(title)
+                matched_news.append({"title": title, "source": source, "match_reason": match_reason})
+
+        # 3. 计算情绪加成权重 sentiment_bonus: -15.0 ~ +15.0
+        # 基准分映射：(stock_score - 50.0) * 0.3 -> [-15.0, +15.0]
+        sentiment_bonus = (stock_score - 50.0) * 0.3
+
+        # 严重雷区检查：一票否决压制至 -15.0
+        has_critical_risk = False
+        critical_hits = []
+        for item in matched_news:
+            t = item.get("title", "")
+            for crk in self.CRITICAL_RISK_KEYWORDS:
+                if crk in t:
+                    has_critical_risk = True
+                    if crk not in critical_hits:
+                        critical_hits.append(crk)
+
+        if has_critical_risk:
+            sentiment_bonus = -15.0
+        else:
+            # 若有重大正面词命中（如暴增、涨停、中标、新高）
+            strong_pos = any(w in t.get("title", "") for t in matched_news for w in ("暴增", "新高", "涨停", "大增", "超预期", "中标", "增持"))
+            if strong_pos and sentiment_bonus > 0:
+                sentiment_bonus = min(15.0, sentiment_bonus + 3.0)
+
+        # 裁剪在 [-15.0, 15.0] 区间
+        sentiment_bonus = round(max(-15.0, min(15.0, sentiment_bonus)), 2)
+
+        return {
+            "symbol": symbol,
+            "name": clean_name,
+            "score": stock_score,
+            "sentiment_bonus": sentiment_bonus,
+            "has_critical_risk": has_critical_risk,
+            "critical_hits": critical_hits,
+            "matched_news": matched_news[:15],
+            "matched_count": len(matched_news),
+            "description": stock_sent.get("description", "中性")
+        }
 
     def get_sentiment_with_technical(self, symbol: str, stock_name: str,
                                      indicators: Dict) -> Dict:
@@ -826,37 +930,48 @@ class SentimentAnalyzer:
 
     # ========== 并发多源新闻获取方法 ==========
 
-    def _fetch_all_news(self) -> List[Tuple[str, str]]:
+    def _fetch_all_news(self, force_refresh: bool = False) -> List[Tuple[str, str]]:
         """
-        并发获取所有有效国内权威财经源的市场新闻（耗时 < 1.5秒）
-        涵盖：新浪7x24快讯(宏观+A股焦点)、新浪财经滚动、东方财富全市场公告、
-        同花顺实时快讯、东方财富券商研报评级、央行宏观政策
+        并发获取所有有效国内权威财经源的市场新闻（单源超时控制 <= 4 秒，10 分钟 TTL 内存缓存）
+        涵盖：新浪 7x24 快讯、东财 7x24 极速快讯、同花顺实时快讯、新浪财经滚动、
+        雪球热榜、东方财富全市场公告、东方财富研报评级、央行宏观政策
         """
+        now_ts = time.time()
+        if not force_refresh and self._all_news_cache and (now_ts - self._all_news_cache_time < self._all_news_cache_ttl):
+            return self._all_news_cache
+
         all_news: List[Tuple[str, str]] = []
+        seen_titles = set()
 
         tasks = [
             (self._fetch_sina_live_news, "sina_live"),
-            (self._fetch_sina_news, "sina"),
+            (self._fetch_eastmoney_fast_flash, "eastmoney_flash"),
             (self._fetch_10jqka_news, "10jqka"),
+            (self._fetch_sina_news, "sina"),
+            (self._fetch_xueqiu_hot, "xueqiu_hot"),
             (self._fetch_eastmoney_market_news, "eastmoney_ann"),
             (self._fetch_research_reports, "research"),
             (self._fetch_policy_news, "policy"),
-            (self._fetch_eastmoney_fast_flash, "eastmoney_flash"),
-            (self._fetch_xueqiu_hot, "xueqiu_hot"),
         ]
 
-        with ThreadPoolExecutor(max_workers=8) as pool:
+        with ThreadPoolExecutor(max_workers=4) as pool:
             future_to_source = {pool.submit(fn): src for fn, src in tasks}
-            for fut in as_completed(future_to_source, timeout=8):
+            for fut in as_completed(future_to_source, timeout=6.0):
                 src = future_to_source[fut]
                 try:
-                    titles = fut.result(timeout=5)
+                    titles = fut.result(timeout=4.0)
                     for title in titles:
-                        if title:
+                        if not title or len(title) < 5:
+                            continue
+                        prefix = title[:30].strip()
+                        if prefix not in seen_titles:
+                            seen_titles.add(prefix)
                             all_news.append((title, src))
                 except Exception as e:
                     logger.debug(f"新闻源 [{src}] 抓取跳过: {e}")
 
+        self._all_news_cache = all_news
+        self._all_news_cache_time = now_ts
         return all_news
 
     # ========== 个股专属新闻源（3大核心源） ==========

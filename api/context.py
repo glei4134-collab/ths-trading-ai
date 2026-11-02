@@ -101,6 +101,7 @@ _PUBLIC_PATHS = {
     '/api/ai/scheduler/ledger/today',
     '/api/ai/scheduler/windows',
     '/api/ai/candidates/today',
+    '/api/ai/timing/overview',
     '/api/stream/cockpit',
     '/api/competition/rules',
     '/api/competition/status',

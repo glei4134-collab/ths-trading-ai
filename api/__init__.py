@@ -23,6 +23,12 @@ from api.routes import (
 
 logger = logging.getLogger(__name__)
 
+# 全局结构化日志配置（确保 ai_scheduler、account_manager 等 logger.info 能正常输出至 systemd journalctl）
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+)
+
 _boot_started = False
 _boot_lock = threading.Lock()
 
@@ -87,6 +93,19 @@ def create_app() -> Flask:
     CORS(app)
 
     boot_runtime_services()
+
+    @app.before_request
+    def _security_firewall():
+        """轻量级安全防护中间件：毫秒级静默拦截公网机器人与恶意爬虫扫描，防范单线程资源耗尽"""
+        path = request.path.lower()
+        MALICIOUS_PROBES = (
+            "/.env", "/wp-config", "/.aws", "/.git", "/phpinfo", "/wp-json",
+            "/.s3cfg", "/wp-admin", "/wp-login", "/phpmyadmin", "/.svn",
+            "/.ds_store", "/credentials", "/id_rsa", "/config.json", "/actuator"
+        )
+        if any(probe in path for probe in MALICIOUS_PROBES) or path.endswith((".php", ".env", ".yml", ".yaml")):
+            logger.warning(f"🚫 [WAF] 拦截公网恶意探测: {request.remote_addr} -> {request.path}")
+            return ("", 403)
 
     @app.before_request
     def _check_auth():

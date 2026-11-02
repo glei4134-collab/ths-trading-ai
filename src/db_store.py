@@ -64,6 +64,10 @@ class DBStore:
         self.conn.execute("PRAGMA synchronous=NORMAL")
         self.conn.execute("PRAGMA cache_size=-8000")
         self.conn.execute("PRAGMA wal_autocheckpoint=1000")
+        # 性能打点高频批量写入缓冲 (Write-Behind Buffer) 防 WAL 膨胀
+        self._perf_log_buffer: List[tuple] = []
+        self._last_perf_flush: float = time.time()
+        self._perf_flush_counter: int = 0
         self._init_tables()
         self._migrate_json_if_needed()
         self._ensure_account_id_columns()
@@ -199,6 +203,30 @@ class DBStore:
         """)
         c.execute("CREATE INDEX IF NOT EXISTS idx_perf_time ON api_performance_logs(timestamp)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_perf_action ON api_performance_logs(action)")
+
+        # 时序微观轨迹历史表 (记录未买入重点关注回踩、踏空率、超时调控及新闻情绪联动)
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS timing_micro_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                date TEXT NOT NULL,
+                account_id INTEGER DEFAULT 0,
+                symbol TEXT NOT NULL,
+                name TEXT DEFAULT '',
+                event_type TEXT NOT NULL,
+                price REAL DEFAULT 0.0,
+                target_price REAL DEFAULT 0.0,
+                pullback_pct REAL DEFAULT 0.0,
+                missed_profit_pct REAL DEFAULT 0.0,
+                sentiment_score REAL DEFAULT 0.0,
+                action_taken TEXT DEFAULT '',
+                reason TEXT DEFAULT '',
+                details TEXT DEFAULT ''
+            )
+        """)
+        c.execute("CREATE INDEX IF NOT EXISTS idx_timing_micro_date ON timing_micro_history(date)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_timing_micro_symbol ON timing_micro_history(symbol)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_timing_micro_type ON timing_micro_history(event_type)")
 
         self.conn.commit()
 
@@ -910,27 +938,68 @@ class DBStore:
         }
 
 
+    def _flush_perf_logs_locked(self):
+        """执行批量性能打点批量落盘（调用方需持有 self._lock）"""
+        if not self._perf_log_buffer:
+            return
+        batch = list(self._perf_log_buffer)
+        self._perf_log_buffer.clear()
+        self._last_perf_flush = time.time()
+        try:
+            self.conn.executemany("""
+                INSERT INTO api_performance_logs 
+                (timestamp, account_id, action, url, duration_ms, status_code, success, error_message)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, batch)
+            self.conn.commit()
+            self._perf_flush_counter += len(batch)
+            # 累计达到 500 条时顺带执行一次轻量级 PRAGMA wal_checkpoint(PASSIVE) 防 WAL 膨胀
+            if self._perf_flush_counter >= 500:
+                self._perf_flush_counter = 0
+                try:
+                    self.conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
+                    logger.debug("⚡ [PERF-LOG] 性能打点日志累计写入500条，触发轻量级 PASSIVE WAL 检查点")
+                except Exception as ck_e:
+                    logger.debug(f"轻量级 PASSIVE 检查点忽略异常: {ck_e}")
+        except Exception as e:
+            logger.error(f"批量刷盘 API 性能指标失败: {e}")
+
     @retry_on_db_locked()
+    def flush_perf_logs(self) -> int:
+        """主动强制刷盘性能日志内存缓冲"""
+        with self._lock:
+            count = len(self._perf_log_buffer)
+            if count > 0:
+                self._flush_perf_logs_locked()
+            return count
+
     def record_api_metric(self, action: str, url: str, duration_ms: float,
                           account_id: int = 0, status_code: int = 200,
                           success: bool = True, error_message: str = ""):
-        """记录网络与API性能指标"""
+        """记录网络与API性能指标（内存缓冲 Write-Behind 批量落盘）"""
+        now_str = datetime.now(ZoneInfo('Asia/Shanghai')).strftime("%Y-%m-%d %H:%M:%S")
+        log_tuple = (now_str, account_id, action, url, round(duration_ms, 2),
+                     status_code, 1 if success else 0, str(error_message)[:200])
         with self._lock:
-            try:
-                now_str = datetime.now(ZoneInfo('Asia/Shanghai')).strftime("%Y-%m-%d %H:%M:%S")
-                self.conn.execute("""
-                    INSERT INTO api_performance_logs 
-                    (timestamp, account_id, action, url, duration_ms, status_code, success, error_message)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """, (now_str, account_id, action, url, round(duration_ms, 2),
-                         status_code, 1 if success else 0, str(error_message)[:200]))
-                self.conn.commit()
-            except Exception as e:
-                logger.error(f"记录API性能指标失败: {e}")
+            self._perf_log_buffer.append(log_tuple)
+            # 仅当 buffer >= 25 条 或 距离上次刷盘超过 30 秒 时才触发批量落盘
+            if len(self._perf_log_buffer) >= 25 or (time.time() - self._last_perf_flush) >= 30.0:
+                self._flush_perf_logs_locked()
+
+    def log_api_performance(self, action: str, url: str = "", duration_ms: float = 0.0,
+                            account_id: int = 0, status_code: int = 200,
+                            success: bool = True, error_message: str = ""):
+        """记录 API 性能指标（别名兼容方法）"""
+        return self.record_api_metric(
+            action=action, url=url, duration_ms=duration_ms,
+            account_id=account_id, status_code=status_code,
+            success=success, error_message=error_message
+        )
 
     def get_api_performance_stats(self, limit: int = 100) -> Dict:
-        """获取API网络性能统计分析"""
+        """获取API网络性能统计分析（主动刷盘以包含最新缓冲）"""
         with self._lock:
+            self.flush_perf_logs()
             try:
                 c = self.conn.cursor()
                 c.execute("""
@@ -958,6 +1027,7 @@ class DBStore:
     def clean_old_performance_logs(self, keep_days: int = 7) -> int:
         """清理指定天数之前的 API 性能追踪日志，避免日志表无限膨胀"""
         with self._lock:
+            self.flush_perf_logs()
             try:
                 cutoff = (datetime.now(ZoneInfo('Asia/Shanghai')) - timedelta(days=keep_days)).strftime("%Y-%m-%d %H:%M:%S")
                 c = self.conn.cursor()
@@ -969,6 +1039,122 @@ class DBStore:
             except Exception as e:
                 logger.error(f"清理 API 性能日志失败: {e}")
                 return 0
+
+    @retry_on_db_locked()
+    def save_timing_micro_event(
+        self,
+        symbol: str,
+        event_type: str,
+        name: str = "",
+        account_id: int = 0,
+        price: float = 0.0,
+        target_price: float = 0.0,
+        pullback_pct: float = 0.0,
+        missed_profit_pct: float = 0.0,
+        sentiment_score: float = 0.0,
+        action_taken: str = "",
+        reason: str = "",
+        details: Optional[Dict] = None,
+        timestamp: Optional[str] = None
+    ) -> bool:
+        """
+        保存时序微观轨迹事件（未买入重点关注回踩、踏空率、超时调控、情绪联动等）
+        支持盘后复盘与跨日策略权重学习持久化
+        """
+        now = datetime.now(ZoneInfo('Asia/Shanghai'))
+        ts_str = timestamp or now.strftime("%Y-%m-%d %H:%M:%S")
+        date_str = ts_str[:10]
+        details_json = json.dumps(details, ensure_ascii=False) if isinstance(details, dict) else (str(details) if details else "")
+
+        with self._lock:
+            try:
+                self.conn.execute("""
+                    INSERT INTO timing_micro_history
+                    (timestamp, date, account_id, symbol, name, event_type, price, target_price,
+                     pullback_pct, missed_profit_pct, sentiment_score, action_taken, reason, details)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    ts_str, date_str, account_id, symbol, name, event_type,
+                    round(float(price or 0.0), 3),
+                    round(float(target_price or 0.0), 3),
+                    round(float(pullback_pct or 0.0), 2),
+                    round(float(missed_profit_pct or 0.0), 2),
+                    round(float(sentiment_score or 0.0), 2),
+                    str(action_taken or ""),
+                    str(reason or "")[:300],
+                    details_json
+                ))
+                self.conn.commit()
+                return True
+            except Exception as e:
+                logger.error(f"保存时序微观轨迹事件失败: {e}")
+                return False
+
+    def get_timing_micro_summary(self, days: int = 7, symbol: Optional[str] = None, event_type: Optional[str] = None) -> Dict:
+        """
+        获取最近指定天数内的时序微观轨迹与复盘汇总分析
+        """
+        now = datetime.now(ZoneInfo('Asia/Shanghai'))
+        cutoff_date = (now - timedelta(days=days)).strftime("%Y-%m-%d")
+
+        with self._lock:
+            try:
+                c = self.conn.cursor()
+                query = "SELECT * FROM timing_micro_history WHERE date >= ?"
+                params = [cutoff_date]
+
+                if symbol:
+                    query += " AND symbol = ?"
+                    params.append(symbol)
+                if event_type:
+                    query += " AND event_type = ?"
+                    params.append(event_type)
+
+                query += " ORDER BY id DESC"
+                c.execute(query, params)
+                rows = [dict(r) for r in c.fetchall()]
+
+                total_events = len(rows)
+                event_counts = {}
+                symbols_seen = set()
+                total_sentiment = 0.0
+                sentiment_count = 0
+                max_missed_profit = 0.0
+
+                for r in rows:
+                    et = r.get("event_type", "UNKNOWN")
+                    event_counts[et] = event_counts.get(et, 0) + 1
+                    if r.get("symbol"):
+                        symbols_seen.add(r["symbol"])
+                    sc = r.get("sentiment_score", 0.0)
+                    if sc:
+                        total_sentiment += sc
+                        sentiment_count += 1
+                    mp = r.get("missed_profit_pct", 0.0)
+                    if mp > max_missed_profit:
+                        max_missed_profit = mp
+
+                avg_sentiment = round(total_sentiment / sentiment_count, 1) if sentiment_count > 0 else 0.0
+
+                return {
+                    "days": days,
+                    "cutoff_date": cutoff_date,
+                    "total_events": total_events,
+                    "unique_symbols_count": len(symbols_seen),
+                    "event_counts": event_counts,
+                    "avg_sentiment": avg_sentiment,
+                    "max_missed_profit_pct": max_missed_profit,
+                    "recent_events": rows[:100]
+                }
+            except Exception as e:
+                logger.error(f"获取时序微观轨迹汇总失败: {e}")
+                return {
+                    "days": days,
+                    "total_events": 0,
+                    "event_counts": {},
+                    "recent_events": [],
+                    "error": str(e)
+                }
 
     def checkpoint_wal(self, mode: str = "TRUNCATE") -> Dict:
         """执行 WAL 检查点，将 WAL 事务日志压缩截断合并至主库"""
@@ -1003,6 +1189,7 @@ class DBStore:
             "success": False
         }
         try:
+            self.flush_perf_logs()
             res["deleted_perf_logs"] = self.clean_old_performance_logs(keep_days=keep_perf_days)
             res["wal_checkpoint"] = self.checkpoint_wal(mode="TRUNCATE")
             res["vacuum"] = self.vacuum_and_optimize()
@@ -1023,6 +1210,13 @@ class DBStore:
             "signals": self.get_signals(days=365, limit=10000, account_id=account_id),
             "exported_at": datetime.now(ZoneInfo('Asia/Shanghai')).strftime("%Y-%m-%d %H:%M:%S")
         }
+
+    def __del__(self):
+        try:
+            if hasattr(self, '_perf_log_buffer') and self._perf_log_buffer:
+                self.flush_perf_logs()
+        except Exception:
+            pass
 
 
 # 全局实例

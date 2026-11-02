@@ -367,6 +367,8 @@ def ai_candidates_today():
                 "timing_signal": dip_stat.get("signal", "WATCHING"),
                 "timing_action": dip_stat.get("suggested_action", "OBSERVE"),
                 "pullback_pct": dip_stat.get("pullback_pct", 0.0),
+                "obi": round(float(q.get("obi", 0.0) or 0.0), 4),
+                "obi_pct": f"{round(float(q.get("obi", 0.0) or 0.0) * 100, 1):+.1f}%",
                 "utilization_weight": 0.25,
                 "matched_strategies": ["强势回调", "放量突破"] if votes >= 2 else ["缩量企稳"]
             })
@@ -400,8 +402,26 @@ def ai_timing_overview():
         from db_store import db_store
         from fast_data import fetch_realtime_single
 
-        # 1. 获取未买入标的时序跟踪
-        unbought_list = intraday_timing_engine["dip_buyer"].get_summary_list()
+        # 1. 获取未买入标的时序跟踪并补充实时盘口委比(OBI)与起伏数据
+        unbought_raw = intraday_timing_engine["dip_buyer"].get_summary_list()
+        unbought_list = []
+        for ub in unbought_raw:
+            ub_copy = dict(ub)
+            sym = ub_copy.get("symbol", "")
+            if sym:
+                try:
+                    q = fetch_realtime_single(sym) or {}
+                    obi = float(q.get("obi", 0.0) or 0.0)
+                    ub_copy["obi"] = round(obi, 4)
+                    ub_copy["obi_pct"] = f"{round(obi * 100, 1):+.1f}%"
+                    if q.get("price"):
+                        ub_copy["last_price"] = float(q["price"])
+                    if q.get("change_pct"):
+                        ub_copy["change_pct"] = float(q["change_pct"])
+                except Exception:
+                    ub_copy["obi"] = 0.0
+                    ub_copy["obi_pct"] = "+0.0%"
+            unbought_list.append(ub_copy)
 
         # 2. 获取全量账户字典与映射
         all_accounts = db_store.list_accounts() or []
@@ -453,6 +473,41 @@ def ai_timing_overview():
                 item_copy["account_name"] = acc_name_map.get(int(item_acc_id), f"账户#{item_acc_id}")
             unsold_list.append(item_copy)
 
+        # 6. 多维数据利用权重与微观统计看板
+        news_coverage_count = 0
+        sentiment_score = 50.0
+        try:
+            import json
+            from pathlib import Path
+            sent_file = Path(__file__).resolve().parent.parent.parent / "data" / "market_sentiment.json"
+            if sent_file.exists():
+                with open(sent_file, "r", encoding="utf-8") as sf:
+                    s_data = json.load(sf)
+                    news_coverage_count = int(s_data.get("news_count", 0))
+                    sentiment_score = float(s_data.get("score", 50.0))
+        except Exception:
+            pass
+
+        dip_pullback_count = sum(1 for c in unbought_list if float(c.get("pullback_pct", 0.0)) >= 1.5)
+        dip_actionable_count = sum(1 for c in unbought_list if c.get("status") in ("TIMING_DIP_BUY", "HELD"))
+
+        data_utilization_weights = {
+            "technical_factors": 0.65,      # 技术多因子 (趋势/均线/MACD/KDJ/成交量) 65%
+            "micro_orderbook_obi": 0.20,    # 盘口委比 OBI 与时序起伏 20%
+            "news_sentiment": 0.15,         # 多源舆情新闻 15%
+            "badge_display": "技术65% · 盘口/未成交20% · 舆情15%"
+        }
+
+        micro_stats = {
+            "unbought_count": len(unbought_list),
+            "unbought_actionable_count": dip_actionable_count,
+            "unbought_pullback_monitoring": f"{dip_pullback_count}/{len(unbought_list)} 处于黄金回踩区",
+            "unsold_controls_count": len(unsold_list),
+            "news_coverage_count": news_coverage_count,
+            "sentiment_score": sentiment_score,
+            "active_accounts_count": len(target_accounts)
+        }
+
         return jsonify({
             "success": True,
             "data": {
@@ -460,6 +515,8 @@ def ai_timing_overview():
                 "retention_evaluations": retention_evals,
                 "unsold_controls": unsold_list,
                 "weights": intraday_timing_engine["weights"],
+                "data_utilization_weights": data_utilization_weights,
+                "micro_stats": micro_stats,
                 "account_scope": "single" if req_acc_id is not None else "all",
                 "target_account_id": req_acc_id
             }
