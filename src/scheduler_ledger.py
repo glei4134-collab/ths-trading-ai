@@ -108,6 +108,15 @@ STANDARD_STEPS: List[StepDefinition] = [
         expire_tolerance_sec=300,
     ),
     StepDefinition(
+        step_id="intraday_morning",
+        name="早盘连续交易（时序低吸+持仓去留）",
+        window_start="09:35",
+        window_end="11:30",
+        policy=CatchupPolicy.DEGRADE_ADAPT,
+        description="30秒高频巡检，重点关注未买入优质标的分时回踩低吸点，动态评估现有持仓去留",
+        expire_tolerance_sec=7200,
+    ),
+    StepDefinition(
         step_id="midday_recess",
         name="午间休市复盘与挂单清理",
         window_start="11:30",
@@ -115,6 +124,15 @@ STANDARD_STEPS: List[StepDefinition] = [
         policy=CatchupPolicy.MUST_CATCHUP,
         description="撤销早盘未成交废单防下午突发低开被动套牢，重新抓取午间突发消息面",
         expire_tolerance_sec=3600,
+    ),
+    StepDefinition(
+        step_id="intraday_afternoon",
+        name="午盘连续交易（趋势跟踪+超时调控）",
+        window_start="13:00",
+        window_end="14:50",
+        policy=CatchupPolicy.DEGRADE_ADAPT,
+        description="午后资金异动跟踪，对未卖出超时标的执行买一降价追单或涨停顺延调控",
+        expire_tolerance_sec=7200,
     ),
     StepDefinition(
         step_id="closing_rebalance",
