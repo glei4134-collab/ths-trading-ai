@@ -838,6 +838,92 @@ from strategies.base import BaseStrategy, StrategyResult, Signal
                 logger.error(f"账户 {acc_id} 决策失败: {e}")
         return results
 
+    def allocate_candidate_weights(self, candidates: List[Dict], method: str = "black_litterman",
+                                   max_weight: float = 0.35) -> List[Dict]:
+        """
+        主干缝合 (Stage 1-3):
+        1. 使用 LowodinOrthogonalizer 对候选股多维因子截面 ([ensemble_score, change_pct, obi, pullback_inv]) 进行对称正交化，消除风格共线性；
+        2. 使用 PortfolioOptimizer (HRP 层次风险平价 + Black-Litterman 贝叶斯观点融合) 计算资产级最优配置权重。
+        """
+        if not candidates:
+            return candidates
+        try:
+            import numpy as np
+            from factors.orthogonalizer import LowodinOrthogonalizer
+            from portfolio_opt import PortfolioOptimizer
+
+            n = len(candidates)
+            if n >= 3:
+                raw_factors = np.zeros((n, 4), dtype=float)
+                for idx, c in enumerate(candidates):
+                    raw_factors[idx, 0] = float(c.get("ensemble_score", 50.0) or 50.0)
+                    raw_factors[idx, 1] = float(c.get("change_pct", 0.0) or 0.0)
+                    raw_factors[idx, 2] = float(c.get("obi", 0.0) or 0.0)
+                    raw_factors[idx, 3] = -float(c.get("pullback_pct", 0.0) or 0.0)
+
+                ortho, _ = LowodinOrthogonalizer().fit_transform(raw_factors)
+                # 综合正交化因子得分 (以第一主因子为主，结合正交盘口与回踩动量)
+                ortho_composite = 0.55 * ortho[:, 0] + 0.15 * ortho[:, 1] + 0.15 * ortho[:, 2] + 0.15 * ortho[:, 3]
+                for idx, c in enumerate(candidates):
+                    c["ortho_score"] = round(float(50.0 + ortho_composite[idx] * 12.0), 2)
+            else:
+                for c in candidates:
+                    c["ortho_score"] = round(float(c.get("ensemble_score", 50.0) or 50.0), 2)
+
+            buy_indices = [i for i, c in enumerate(candidates) if c.get("decision") == "BUY"]
+            if len(buy_indices) >= 2:
+                from portfolio_opt import HierarchicalRiskParity, BlackLittermanModel
+                m = len(buy_indices)
+                # 构造基于行业同源性与价格波动率的稳健协方差矩阵
+                vols = np.array([
+                    max(0.012, min(0.06, abs(float(candidates[i].get("change_pct", 1.5) or 1.5)) / 100.0 + 0.015))
+                    for i in buy_indices
+                ], dtype=float)
+                corr = np.eye(m, dtype=float)
+                for a in range(m):
+                    for b in range(a + 1, m):
+                        same_sec = (candidates[buy_indices[a]].get("industry") == candidates[buy_indices[b]].get("industry"))
+                        rho = 0.55 if same_sec else 0.20
+                        corr[a, b] = corr[b, a] = rho
+                cov_matrix = np.outer(vols, vols) * corr
+
+                # 1) HRP 层次风险平价递归二分权重
+                raw_hrp = HierarchicalRiskParity.recursive_bisection(cov_matrix, list(range(m)))
+                hrp_w = raw_hrp / (float(np.sum(raw_hrp)) if np.sum(raw_hrp) > 0 else 1.0)
+
+                # 2) Black-Litterman 贝叶斯后验权重 (P = I_m, Q = 正交化因子隐含超额收益)
+                p_mat = np.eye(m, dtype=float)
+                q_vec = np.array([
+                    max(0.001, (float(candidates[i].get("ortho_score", 60.0)) - 50.0) / 1000.0)
+                    for i in buy_indices
+                ], dtype=float)
+                mkt_weights = np.ones(m, dtype=float) / float(m)
+                confs = [min(0.95, max(0.35, float(candidates[i].get("confidence", 0.65) or 0.65))) for i in buy_indices]
+                _, _, bl_w = BlackLittermanModel().fit(
+                    cov_matrix=cov_matrix,
+                    market_weights=mkt_weights,
+                    views_P=p_mat,
+                    views_Q=q_vec,
+                    views_confidences=confs,
+                )
+                for local_idx, cand_idx in enumerate(buy_indices):
+                    c = candidates[cand_idx]
+                    c["hrp_weight"] = round(float(hrp_w[local_idx]) * 100.0, 2)
+                    c["bl_weight"] = round(float(bl_w[local_idx]) * 100.0, 2)
+                    # 将 HRP 与 BL 融合权重映射到推荐仓位上限内
+                    blended_pct = round(min(max_weight * 100.0, (0.5 * float(hrp_w[local_idx]) + 0.5 * float(bl_w[local_idx])) * 100.0), 1)
+                    if blended_pct > 0:
+                        c["recommended_weight"] = blended_pct
+                        c["target_weight"] = f"{blended_pct:.1f}%"
+            elif len(buy_indices) == 1:
+                c = candidates[buy_indices[0]]
+                w_pct = round(float(c.get("recommended_weight", max_weight * 100.0)), 2)
+                c["hrp_weight"] = w_pct
+                c["bl_weight"] = w_pct
+        except Exception as e:
+            logger.debug(f"候选股正交化与组合权重优化回退默认: {e}")
+        return candidates
+
 
 # 全局AI大脑实例
 ai_brain = AIBrain()

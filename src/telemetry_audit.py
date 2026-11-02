@@ -230,3 +230,5 @@ class DeltaPatchStreamer:
 order_hmac_auth = OrderHMACAuthenticator()
 audit_chain = TamperEvidentAuditChain()
 delta_streamer = DeltaPatchStreamer()
+global_order_authenticator = order_hmac_auth
+global_audit_chain = audit_chain

@@ -810,9 +810,26 @@ class AccountManager:
             logger.debug(f"[SLIPPAGE] 账户#{account_id} {action} {symbol}: 原价 {original_price:.2f} -> 滑点后 {price:.2f} (rate={slippage_rate})")
 
         if dry_run:
+            audit_hash = ""
+            try:
+                from telemetry_audit import global_audit_chain
+                audit_entry = global_audit_chain.append_event(
+                    event_type="ORDER_DRY_RUN",
+                    symbol=symbol,
+                    action=action,
+                    details={
+                        "account_id": account_id,
+                        "price": price,
+                        "amount": amount,
+                    },
+                )
+                audit_hash = audit_entry.get("entry_hash", "")
+            except Exception:
+                pass
             return {
                 "success": True, "message": "演练通过闸门，未向券商发单",
                 "amount": amount, "recorded": False, "dry_run": True,
+                "audit_hash": audit_hash,
             }
 
         if skip_optimizer:
@@ -837,7 +854,7 @@ class AccountManager:
 
         if result.get("success") and persist:
             now_s = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S")
-            db_store.add_trade({
+            trade_payload = {
                 "time": now_s,
                 "action": action,
                 "symbol": symbol,
@@ -848,7 +865,22 @@ class AccountManager:
                 "balance": round(cash - (price * amount if action == "buy" else -price * amount), 2),
                 "mode": "real" if trader and trader.connected else "simulated",
                 "order_id": order_id,
-            }, account_id=account_id)
+            }
+            try:
+                from telemetry_audit import global_audit_chain
+                audit_entry = global_audit_chain.append_event(
+                    event_type="ORDER_EXECUTED",
+                    symbol=symbol,
+                    action=action,
+                    details={
+                        "account_id": account_id,
+                        **trade_payload,
+                    },
+                )
+                result["audit_hash"] = audit_entry.get("entry_hash", "")
+            except Exception as _aud_err:
+                logger.debug(f"写入防篡改哈希审计链忽略: {_aud_err}")
+            db_store.add_trade(trade_payload, account_id=account_id)
             result["recorded"] = True
             try:
                 trader.sync_from_ths()
@@ -906,13 +938,17 @@ class AccountManager:
         cash = float(acc.get("ky_fund") or acc.get("balance") or 0)
         pos = pos_dict.get(symbol) or {}
         existing_shares = int(pos.get("amount") or 0)
+        q_now = fetch_quote_silent(symbol)
+        sector_name = str(pos.get("industry") or pos.get("sector") or (q_now or {}).get("industry") or "")
         guard = validate_pre_trade(
             symbol, action, price, amount,
             total_assets=tot_assets,
             available_cash=cash,
             existing_position_value=existing_shares * float(price or 0),
             existing_shares=existing_shares,
-            quote=fetch_quote_silent(symbol),
+            quote=q_now,
+            sector=sector_name,
+            positions=pos_dict,
         )
         if not guard.allowed:
             return {"success": False, "message": guard.message, "code": guard.code}
@@ -991,6 +1027,27 @@ class AccountManager:
             # 至少买一手 100 股
             if shares < 100 and ky >= price * 100 * 1.002:
                 shares = 100
+
+            # 结合 Fractional Half-Kelly + ATR 波动率头寸上限保护
+            try:
+                from order_guard import calculate_dynamic_position_size, fetch_quote_silent
+                q_vol = fetch_quote_silent(symbol) or {}
+                hi_p = float(q_vol.get("high") or price * 1.02)
+                lo_p = float(q_vol.get("low") or price * 0.98)
+                est_atr = max(price * 0.015, hi_p - lo_p)
+                kelly_atr_shares = calculate_dynamic_position_size(
+                    total_assets=ky / max(effective_ratio, 0.20),
+                    available_cash=ky,
+                    price=price,
+                    atr=est_atr,
+                    win_rate=0.55,
+                    payoff_ratio=1.5,
+                    max_single_pct=max(effective_ratio, 0.30),
+                )
+                if kelly_atr_shares >= 100:
+                    shares = min(shares, kelly_atr_shares)
+            except Exception:
+                pass
 
             # 上限限制：不能超过可用资金的 95%（保留必要手续费缓冲）
             max_shares = int((ky * 0.95) / price / 100) * 100

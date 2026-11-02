@@ -126,6 +126,7 @@ class TimingDipBuyer:
                     prev_l = float(target.get("low_price", 0.0) or 0.0)
                     target["high_price"] = max(init_p, prev_h) if prev_h > 0 else init_p
                     target["low_price"] = min(init_p, prev_l) if prev_l > 0 else init_p
+        _publish_and_persist_intraday_event("register_unbought", {"symbol": symbol, "score": score})
 
     def _ensure_metrics_ready(self, symbol: str, current_price: float, change_pct: float,
                               high: float = 0.0, low: float = 0.0, volume: float = 0.0,
@@ -151,12 +152,36 @@ class TimingDipBuyer:
 
         init_p = float(item.get("initial_price", 0.0) or item.get("target_price", 0.0) or cur_p)
 
-        # 订单簿不平衡度 (OBI) 与量比换手计算
+        # 订单簿不平衡度 (OBI)、五档深度与跨帧订单流失衡 (VOI) 计算
         q = quote or {}
-        bid1_vol = float(q.get("bid1_vol") or kwargs.get("bid1_vol", 0.0) or 0.0)
-        ask1_vol = float(q.get("ask1_vol") or kwargs.get("ask1_vol", 0.0) or 0.0)
-        tot_depth = bid1_vol + ask1_vol
-        obi = round((bid1_vol - ask1_vol) / tot_depth, 4) if tot_depth > 0 else 0.0
+        bid_vols = q.get("bid_vols") or []
+        ask_vols = q.get("ask_vols") or []
+        bid1_vol = float(q.get("bid1_vol") or (bid_vols[0] if bid_vols else 0.0) or kwargs.get("bid1_vol", 0.0) or 0.0)
+        ask1_vol = float(q.get("ask1_vol") or (ask_vols[0] if ask_vols else 0.0) or kwargs.get("ask1_vol", 0.0) or 0.0)
+        bid1_p = float(q.get("bid1_price") or kwargs.get("bid1_price", 0.0) or round(cur_p - 0.01, 2))
+        ask1_p = float(q.get("ask1_price") or kwargs.get("ask1_price", 0.0) or round(cur_p + 0.01, 2))
+        tot_b_depth = float(sum(bid_vols)) if bid_vols else bid1_vol
+        tot_a_depth = float(sum(ask_vols)) if ask_vols else ask1_vol
+        tot_depth = tot_b_depth + tot_a_depth
+        obi = round((tot_b_depth - tot_a_depth) / tot_depth, 4) if tot_depth > 0 else 0.0
+
+        prev_q = item.get("_prev_quote") or {}
+        if prev_q and (bid1_vol > 0 or ask1_vol > 0):
+            voi_res = calculate_volume_order_imbalance(
+                bid_p=bid1_p,
+                bid_v=bid1_vol,
+                prev_bid_p=float(prev_q.get("bid1_price") or bid1_p),
+                prev_bid_v=float(prev_q.get("bid1_vol") or bid1_vol),
+                ask_p=ask1_p,
+                ask_v=ask1_vol,
+                prev_ask_p=float(prev_q.get("ask1_price") or ask1_p),
+                prev_ask_v=float(prev_q.get("ask1_vol") or ask1_vol),
+            )
+            voi_val = voi_res["voi"]
+            norm_voi = voi_res["normalized_voi"]
+        else:
+            voi_val = 0.0
+            norm_voi = 0.0
 
         vol_ratio = float(q.get("volume_ratio") or kwargs.get("volume_ratio", 1.0) or 1.0)
         turnover_ratio = float(q.get("turnover_ratio") or kwargs.get("turnover_ratio", 0.0) or 0.0)
@@ -200,7 +225,8 @@ class TimingDipBuyer:
             elif PULLBACK_MIN <= pullback_pct <= PULLBACK_MAX and cur_p >= vwap * 0.995:
                 # 仅在 -7.0% <= change_pct <= 5.0% 且满足回踩与支撑条件时才触发买入
                 obi_bonus = 5.0 if obi > OBI_BULLISH else (0.0 if obi >= OBI_BEARISH else -5.0)
-                dip_score = round(base_score * 0.5 + 45.0 + (PULLBACK_MAX - pullback_pct) * 5.0 + obi_bonus, 1)
+                voi_bonus = round(norm_voi * 4.0, 1)
+                dip_score = round(base_score * 0.5 + 45.0 + (PULLBACK_MAX - pullback_pct) * 5.0 + obi_bonus + voi_bonus, 1)
                 signal = "TIMING_DIP_BUY"
                 suggested_action = "EXECUTE_DIP_BUY"
             elif pullback_pct > 4.5:
@@ -227,6 +253,8 @@ class TimingDipBuyer:
             "last_price": cur_p,
             "last_change_pct": change_pct,
             "obi": obi,
+            "voi": voi_val,
+            "normalized_voi": norm_voi,
             "volume_ratio": vol_ratio,
             "turnover_ratio": turnover_ratio,
             "missed_gain_pct": missed_gain_pct,
@@ -235,6 +263,13 @@ class TimingDipBuyer:
             "dip_score": dip_score,
             "status": signal,
             "suggested_action": suggested_action,
+            "_prev_quote": {
+                "bid1_price": bid1_p,
+                "bid1_vol": bid1_vol,
+                "ask1_price": ask1_p,
+                "ask1_vol": ask1_vol,
+                "volume": volume,
+            },
             "_new_tick": (now_ts, cur_p, volume, obi)
         }
 
@@ -257,6 +292,7 @@ class TimingDipBuyer:
                     "initial_price": raw_item.get("initial_price", 0.0),
                     "high_price": raw_item.get("high_price", 0.0),
                     "low_price": raw_item.get("low_price", 0.0),
+                    "_prev_quote": dict(raw_item.get("_prev_quote") or {}),
                     "ticks": list(raw_item.get("ticks", []))
                 }
 
@@ -297,6 +333,8 @@ class TimingDipBuyer:
                 "initial_price": metrics["initial_price"],
                 "missed_gain_pct": metrics["missed_gain_pct"],
                 "obi": metrics["obi"],
+                "voi": metrics.get("voi", 0.0),
+                "normalized_voi": metrics.get("normalized_voi", 0.0),
                 "volume_ratio": metrics["volume_ratio"],
                 "turnover_ratio": metrics["turnover_ratio"],
                 "dip_score": metrics["dip_score"],
@@ -352,6 +390,8 @@ class TimingDipBuyer:
                 "pullback_pct": item.get("pullback_pct", 0.0),
                 "missed_gain_pct": item.get("missed_gain_pct", 0.0),
                 "obi": item.get("obi", 0.0),
+                "voi": item.get("voi", 0.0),
+                "normalized_voi": item.get("normalized_voi", 0.0),
                 "volume_ratio": item.get("volume_ratio", 1.0),
                 "turnover_ratio": item.get("turnover_ratio", 0.0),
                 "dip_score": item.get("dip_score", 0.0),
@@ -576,7 +616,8 @@ class UnsoldPositionController:
                 "status": "AWAITING_TIME",
                 "tuning_action": "NONE"
             }
-            return comp_key
+        _publish_and_persist_intraday_event("register_expected_sell", {"account_id": acc_id, "symbol": sym, "order_id": ord_id})
+        return comp_key
 
     def cancel_expected_sell(self, symbol: str, account_id: Optional[int] = None, order_id: Optional[str] = None) -> bool:
         """撤销预期卖出计划（支持指定 order_id、account_id 或全量匹配标的撤销，全量锁保护）"""
@@ -622,7 +663,9 @@ class UnsoldPositionController:
                     del self.pending_sells[k]
                     removed = True
 
-            return removed
+        if removed:
+            _publish_and_persist_intraday_event("cancel_expected_sell", {"symbol": sym, "account_id": account_id})
+        return removed
 
     def evaluate_unsold_status(self, symbol: str, current_price: float, change_pct: float,
                                now_time_str: Optional[str] = None, account_id: Optional[int] = None,
@@ -775,11 +818,20 @@ class UnsoldPositionController:
             return res
 
 
+from pathlib import Path as _Path
+from reliability.crash_recovery import LockFreeRingBuffer, AtomicSnapshotRecovery
+
+_INTRADAY_SNAPSHOT_PATH = _Path(__file__).resolve().parent.parent / "data" / "intraday_timing_snapshot.json"
+_intraday_ring_buffer = LockFreeRingBuffer(capacity=512)
+_intraday_snapshot_mgr = AtomicSnapshotRecovery(_INTRADAY_SNAPSHOT_PATH)
+
 # 全局单例引擎实例
 intraday_timing_engine = {
     "dip_buyer": TimingDipBuyer(),
     "retention_decider": PositionRetentionDecider(),
     "unsold_controller": UnsoldPositionController(),
+    "ring_buffer": _intraday_ring_buffer,
+    "snapshot_recovery": _intraday_snapshot_mgr,
     "weights": {
         "ensemble_rule_weight": WEIGHT_RETAIL,      # 多策略量化加权表决基础权重
         "timing_dip_weight": WEIGHT_TECH,           # 时序低吸买入权重 (未买入起伏关注)
@@ -787,6 +839,79 @@ intraday_timing_engine = {
         "retention_control_weight": WEIGHT_TIMING   # 持仓去留与超时调控权重
     }
 }
+
+
+def save_intraday_state_snapshot() -> bool:
+    """将当前 dip_buyer 与 unsold_controller 内存状态原子持久化到磁盘快照"""
+    try:
+        dip_buyer: TimingDipBuyer = intraday_timing_engine["dip_buyer"]
+        unsold_ctrl: UnsoldPositionController = intraday_timing_engine["unsold_controller"]
+        with dip_buyer._lock:
+            wl_copy = {}
+            for sym, val in dip_buyer.watchlist.items():
+                d = dict(val)
+                d["ticks"] = list(val.get("ticks", []))
+                wl_copy[sym] = d
+        with unsold_ctrl._lock:
+            ps_copy = {}
+            for k, val in unsold_ctrl.pending_sells.items():
+                d = dict(val)
+                if "composite_key" in d and isinstance(d["composite_key"], tuple):
+                    d["composite_key"] = list(d["composite_key"])
+                str_k = f"{k[0]}:{k[1]}:{k[2]}" if isinstance(k, tuple) and len(k) == 3 else str(k)
+                ps_copy[str_k] = d
+        state = {
+            "date": datetime.now().strftime("%Y-%m-%d"),
+            "watchlist": wl_copy,
+            "pending_sells": ps_copy,
+        }
+        return _intraday_snapshot_mgr.save_snapshot(state)
+    except Exception as e:
+        logger.debug(f"保存盘中状态快照忽略: {e}")
+        return False
+
+
+def restore_intraday_state_snapshot() -> bool:
+    """进程启动时从磁盘原子快照自愈恢复当日未买/未卖追踪队列"""
+    try:
+        loaded = _intraday_snapshot_mgr.load_snapshot()
+        state = loaded[0] if isinstance(loaded, tuple) else loaded
+        if not state or state.get("date") != datetime.now().strftime("%Y-%m-%d"):
+            return False
+        dip_buyer: TimingDipBuyer = intraday_timing_engine["dip_buyer"]
+        unsold_ctrl: UnsoldPositionController = intraday_timing_engine["unsold_controller"]
+        with dip_buyer._lock:
+            for sym, val in (state.get("watchlist") or {}).items():
+                d = dict(val)
+                raw_ticks = d.get("ticks") or []
+                d["ticks"] = deque([tuple(t) for t in raw_ticks], maxlen=dip_buyer.max_ticks)
+                dip_buyer.watchlist[sym] = d
+        with unsold_ctrl._lock:
+            for str_k, val in (state.get("pending_sells") or {}).items():
+                d = dict(val)
+                ck = d.get("composite_key")
+                if isinstance(ck, list) and len(ck) == 3:
+                    comp_key = (int(ck[0]), str(ck[1]), str(ck[2]))
+                    d["composite_key"] = comp_key
+                else:
+                    comp_key = str_k
+                unsold_ctrl.pending_sells[comp_key] = d
+        return True
+    except Exception as e:
+        logger.debug(f"恢复盘中状态快照忽略: {e}")
+        return False
+
+
+def _publish_and_persist_intraday_event(event_type: str, payload: Dict[str, Any]) -> None:
+    try:
+        _intraday_ring_buffer.publish({"event": event_type, "ts": time.time(), **payload})
+        save_intraday_state_snapshot()
+    except Exception:
+        pass
+
+
+# 模块加载时自动尝试恢复今日盘中快照
+restore_intraday_state_snapshot()
 
 
 def get_detailed_timing_metrics(account_id: Optional[int] = None, now: Optional[datetime] = None) -> Dict[str, Any]:

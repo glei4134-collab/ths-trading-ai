@@ -20,6 +20,7 @@ import json
 import time
 import hashlib
 import sqlite3
+import threading
 import logging
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -118,9 +119,10 @@ class AtomicSnapshotRecovery:
     """
 
     def __init__(self, snapshot_path: str):
-        self.snapshot_path = snapshot_path
-        self.backup_path = f"{snapshot_path}.bak"
-        self.temp_path = f"{snapshot_path}.tmp"
+        self.snapshot_path = str(snapshot_path)
+        self.backup_path = f"{self.snapshot_path}.bak"
+        self.temp_path = f"{self.snapshot_path}.tmp"
+        self._io_lock = threading.Lock()
 
     @staticmethod
     def _compute_sha256(payload_json: str) -> str:
@@ -150,21 +152,22 @@ class AtomicSnapshotRecovery:
             }
             full_text = json.dumps(envelope, ensure_ascii=False, indent=2)
 
-            # 1. 先写临时文件并强制刷盘
-            with open(self.temp_path, "w", encoding="utf-8") as f:
-                f.write(full_text)
-                f.flush()
-                os.fsync(f.fileno())
+            with self._io_lock:
+                # 1. 先写临时文件并强制刷盘
+                with open(self.temp_path, "w", encoding="utf-8") as f:
+                    f.write(full_text)
+                    f.flush()
+                    os.fsync(f.fileno())
 
-            # 2. 如果旧主快照存在，先备份至 .bak
-            if os.path.exists(self.snapshot_path):
-                try:
-                    os.replace(self.snapshot_path, self.backup_path)
-                except OSError:
-                    pass
+                # 2. 如果旧主快照存在，先备份至 .bak
+                if os.path.exists(self.snapshot_path):
+                    try:
+                        os.replace(self.snapshot_path, self.backup_path)
+                    except OSError:
+                        pass
 
-            # 3. 原子替换目标文件
-            os.replace(self.temp_path, self.snapshot_path)
+                # 3. 原子替换目标文件
+                os.replace(self.temp_path, self.snapshot_path)
             return True
         except Exception as e:
             logger.error(f"保存原子状态快照失败: {e}")

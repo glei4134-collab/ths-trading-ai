@@ -80,6 +80,9 @@ class AIScheduler:
         self._trade_cooldown: Dict[str, float] = {}
         # 未成交委托缓存（同一轮分析周期内共享）
         self._cached_pending_orders: List[Dict] = []
+        # 非阻塞 Almgren-Chriss 算法拆单执行队列
+        self._pending_algo_slices: List[Dict] = []
+        self._algo_slice_lock = threading.Lock()
         # 策略评估计数器（每5轮分析执行一次信号评估）
         self._analysis_count = 0
 
@@ -2701,6 +2704,8 @@ A股交易时段: 上午9:30-11:30, 下午13:00-15:00
                 active_id = db_store.get_active_account_id() or 1
                 accounts = [{"id": active_id, "name": "默认主账户"}]
 
+            # 0. 推进非阻塞 Almgren-Chriss 拆单切片队列
+            self._tick_algo_order_slices()
             # 1. 持仓去留评估与卖出
             self._tick_retention_control(accounts, retention_decider, unsold_ctrl)
             # 2. 未买入标的低吸买入（多账户独立分配）
@@ -2710,6 +2715,108 @@ A股交易时段: 上午9:30-11:30, 下午13:00-15:00
 
         except Exception as e:
             logger.warning(f"高频时序巡检逻辑执行异常: {e}")
+
+    def schedule_almgren_chriss_order(
+        self,
+        account_id: int,
+        symbol: str,
+        action: str,
+        price: float,
+        total_shares: int,
+        name: str = "",
+        n_slices: int = 4,
+        interval_sec: float = 15.0,
+        risk_aversion: float = 1e-5,
+        dry_run: bool = False,
+    ) -> Dict:
+        """
+        使用 Almgren-Chriss (2000) 最优执行轨迹规划大单切片，并注册到非阻塞拆单队列中，
+        由高频巡检循环 (_tick_algo_order_slices) 按时间戳非阻塞逐笔发单，并立即执行首笔切片。
+        """
+        from execution.algo_orders import AlmgrenChrissExecutor
+        from account_manager import account_manager
+
+        planner = AlmgrenChrissExecutor(risk_aversion=risk_aversion)
+        plan = planner.plan_trajectory(total_shares=total_shares, price=price, n_slices=n_slices, action=action)
+        slices = [s for s in plan.get("slices", []) if int(s.get("trade_shares", s.get("shares", 0))) >= 100]
+        if not slices:
+            res = account_manager.place_order(account_id, symbol, action, price, total_shares, name=name, dry_run=dry_run)
+            return {"scheduled": False, "slices": [], "first_order": res}
+
+        first_slice = slices[0]
+        first_qty = int(first_slice.get("trade_shares", first_slice.get("shares", 0)))
+        first_res = account_manager.place_order(
+            account_id, symbol, action, price, first_qty,
+            name=name or symbol, notes="AlmgrenChriss-Slice#1", dry_run=dry_run
+        )
+        now_mono = _time.monotonic()
+        queued = []
+        with self._algo_slice_lock:
+            for idx, s in enumerate(slices[1:], start=2):
+                qty = int(s.get("trade_shares", s.get("shares", 0)))
+                entry = {
+                    "account_id": account_id,
+                    "symbol": symbol,
+                    "name": name or symbol,
+                    "action": action,
+                    "price": price,
+                    "shares": qty,
+                    "slice_index": idx,
+                    "total_slices": len(slices),
+                    "due_mono": now_mono + (idx - 1) * float(interval_sec),
+                    "dry_run": dry_run,
+                }
+                self._pending_algo_slices.append(entry)
+                queued.append(entry)
+
+        return {
+            "scheduled": True,
+            "kappa": plan.get("kappa"),
+            "total_shares": plan.get("total_shares"),
+            "first_order": first_res,
+            "queued_slices": len(queued),
+            "slices": slices,
+        }
+
+    def _tick_algo_order_slices(self) -> List[Dict]:
+        """非阻塞消费已到期的 Almgren-Chriss 算法拆单切片"""
+        now_mono = _time.monotonic()
+        due_items = []
+        with self._algo_slice_lock:
+            remaining = []
+            for item in self._pending_algo_slices:
+                if now_mono >= float(item.get("due_mono", 0.0)):
+                    due_items.append(item)
+                else:
+                    remaining.append(item)
+            self._pending_algo_slices = remaining
+
+        executed = []
+        if not due_items:
+            return executed
+
+        from account_manager import account_manager
+        from fast_data import fetch_realtime_single
+
+        for item in due_items:
+            try:
+                sym = item["symbol"]
+                q = fetch_realtime_single(sym) or {}
+                live_px = float(q.get("price") or item["price"])
+                res = account_manager.place_order(
+                    account_id=item["account_id"],
+                    symbol=sym,
+                    action=item["action"],
+                    price=live_px,
+                    amount=int(item["shares"]),
+                    name=item.get("name", sym),
+                    notes=f"AlmgrenChriss-Slice#{item['slice_index']}/{item['total_slices']}",
+                    dry_run=bool(item.get("dry_run", False)),
+                )
+                executed.append({"slice": item, "result": res})
+            except Exception as e:
+                logger.warning(f"Almgren-Chriss 切片执行异常 {item.get('symbol')}: {e}")
+        return executed
 
     def _tick_retention_control(self, accounts, retention_decider, unsold_ctrl):
         """持仓去留评估与卖出：遍历多账户持仓，按 evaluate_retention 决策执行去/留/减/换"""
@@ -2806,8 +2913,15 @@ A股交易时段: 上午9:30-11:30, 下午13:00-15:00
             for sym, item in list(dip_buyer.watchlist.items())[:10]:
                 q = fetch_realtime_single(sym) or {}
                 if q and q.get("price"):
-                    dip_buyer.update_quote(sym, float(q.get("price")), float(q.get("change_pct", 0.0)),
-                                           high=float(q.get("high", 0.0)), low=float(q.get("low", 0.0)))
+                    dip_buyer.update_quote(
+                        sym,
+                        float(q.get("price")),
+                        float(q.get("change_pct", 0.0)),
+                        high=float(q.get("high", 0.0)),
+                        low=float(q.get("low", 0.0)),
+                        volume=float(q.get("volume", 0.0) or 0.0),
+                        quote=q,
+                    )
 
             # 根据当前市场整体情绪分动态微调 dip_buyer 的回踩触发门槛
             from sentiment_analyzer import sentiment_analyzer

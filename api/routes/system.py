@@ -394,6 +394,12 @@ def ai_candidates_today():
                 "matched_strategies": ["强势回调", "放量突破"] if votes >= 2 else ["缩量企稳"]
             })
 
+        try:
+            from ai_brain import ai_brain
+            ai_brain.allocate_candidate_weights(results, method="black_litterman", max_weight=max_single_pct)
+        except Exception as _opt_err:
+            logger.debug(f"ai_candidates_today 组合优化忽略: {_opt_err}")
+
         results.sort(key=lambda x: (x["decision"] == "BUY", x["affordable"], x["ensemble_score"]), reverse=True)
 
         # 双模脱敏：未登录时隐藏资金与持仓明细
