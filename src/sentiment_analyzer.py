@@ -841,9 +841,11 @@ class SentimentAnalyzer:
             (self._fetch_eastmoney_market_news, "eastmoney_ann"),
             (self._fetch_research_reports, "research"),
             (self._fetch_policy_news, "policy"),
+            (self._fetch_eastmoney_fast_flash, "eastmoney_flash"),
+            (self._fetch_xueqiu_hot, "xueqiu_hot"),
         ]
 
-        with ThreadPoolExecutor(max_workers=6) as pool:
+        with ThreadPoolExecutor(max_workers=8) as pool:
             future_to_source = {pool.submit(fn): src for fn, src in tasks}
             for fut in as_completed(future_to_source, timeout=8):
                 src = future_to_source[fut]
@@ -1120,8 +1122,43 @@ class SentimentAnalyzer:
     def _fetch_cnbc(self) -> List[str]:
         return []
 
+    def _fetch_eastmoney_fast_flash(self) -> List[str]:
+        """东方财富 7x24 全球财经极速快讯（覆盖A股要闻与宏观突发）"""
+        try:
+            import requests, json
+            url = "https://newsapi.eastmoney.com/kuaixun/v1/getlist_102_ajaxResult_50_1_.html"
+            resp = requests.get(url, timeout=4, headers={"User-Agent": "Mozilla/5.0"})
+            raw = resp.text.replace("var ajaxResult=", "").rstrip(";")
+            data = json.loads(raw)
+            lives = data.get("LivesList", [])
+            titles = []
+            for item in lives:
+                title = (item.get("title") or "").strip() or (item.get("digest") or "").strip()
+                if title and len(title) >= 6:
+                    titles.append(f"[东财快讯] {title}")
+            return titles[:40]
+        except Exception:
+            return []
+
     def _fetch_xueqiu_hot(self) -> List[str]:
-        return []
+        """雪球 7x24 投资者热搜榜与情绪讨论"""
+        try:
+            import requests
+            session = requests.Session()
+            session.get("https://xueqiu.com", timeout=3, headers={"User-Agent": "Mozilla/5.0"})
+            url = "https://stock.xueqiu.com/v5/stock/hot_stock/list.json?size=20&_type=10&type=10"
+            resp = session.get(url, timeout=4, headers={"User-Agent": "Mozilla/5.0"})
+            items = resp.json().get("data", {}).get("items", [])
+            results = []
+            for item in items:
+                name = item.get("name", "")
+                code = item.get("code", "")
+                pct = item.get("percent", 0.0)
+                if name:
+                    results.append(f"[雪球热榜] {name}({code}) 热度激增 涨跌幅:{pct}%")
+            return results[:20]
+        except Exception:
+            return []
 
     def _fetch_macro_news(self) -> List[str]:
         return self._fetch_policy_news()

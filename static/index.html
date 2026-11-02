@@ -2398,13 +2398,21 @@
             }
 
             
-            /* 手机端彻底删除所有调试信息按钮与体检入口 */
+            /* 手机端彻底删除所有调试信息按钮、单步演练、以及取消/关闭自动化交易等危险开关 */
             .debug-btn,
+            .desktop-only-toggle,
+            #aiSchedSideToggle,
+            #aiSchedToggle,
+            button[onclick*="triggerStepRun"],
+            button[onclick*="toggleAIScheduler"],
             button[onclick*="openLedgerModal"],
             button[onclick*="openDebugModal"],
             button[onclick*="openDiagnosticModal"],
             div[onclick*="openDiagnosticModal"] {
                 display: none !important;
+            }
+            .mobile-only-safe-badge {
+                display: inline-block !important;
             }
 
             /* 手机端 HUD 顶栏优化：隐藏前缀冒号文字，防止最右侧数字截断 */
@@ -3085,7 +3093,8 @@
         <div class="panel mobile-active" id="executionPanel" style="display:flex;flex-direction:column;">
             <div class="panel-header" style="display:flex;justify-content:space-between;align-items:center;">
                 <span style="font-weight:600;color:#c9d1d9;">📊 资产合规与自动化流水</span>
-                <button onclick="toggleAIScheduler()" id="aiSchedSideToggle" style="background:#238636;border:none;color:white;padding:3px 10px;border-radius:4px;font-size:11px;cursor:pointer;">自动交易: 开</button>
+                <button onclick="toggleAIScheduler()" id="aiSchedSideToggle" class="desktop-only-toggle" style="background:#238636;border:none;color:white;padding:3px 10px;border-radius:4px;font-size:11px;cursor:pointer;">自动交易: 开</button>
+                <span id="aiSchedMobileSafeBadge" class="mobile-only-safe-badge" style="display:none;background:rgba(0,245,155,0.12);border:1px solid #00f59b;color:#00f59b;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;">🟢 实盘自动化运行中</span>
             </div>
             <div class="panel-body" style="flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:12px;">
 
@@ -7178,6 +7187,10 @@
         }
 
         async function toggleAIScheduler() {
+        if (window.innerWidth <= 768) {
+            if (typeof showToast === 'function') showToast('手机端已启用只读安全防护，禁止停用实盘自动交易', 'warning');
+            return;
+        }
             try {
                 const res = await fetch('/api/ai/scheduler/toggle', {
                     method: 'POST',
@@ -8192,6 +8205,10 @@
     }
 
     async function triggerStepRun(stepId, dryRun = true) {
+        if (window.innerWidth <= 768) {
+            if (typeof showToast === 'function') showToast('手机端已启用只读安全防护，禁止调试演练', 'warning');
+            return;
+        }
         if (!confirm(`确定要触发单步 [${stepId}] 演练吗？\n模式: ${dryRun ? 'Dry-Run (模拟计算不真发单)' : '实盘真实下单'}`)) return;
         try {
             showToast(`正在单步演练 [${stepId}]...`, 'info');

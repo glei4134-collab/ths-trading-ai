@@ -271,6 +271,18 @@ def ai_candidates_today():
             # 动态止损价 (结合账户风格)
             stop_loss_price = round(price * (1.0 - stop_loss_pct), 2)
 
+            # 登记并更新未买入时序低吸指标与权重
+            try:
+                from intraday_timing_engine import intraday_timing_engine
+                dip_buyer = intraday_timing_engine["dip_buyer"]
+                if held_shares == 0:
+                    dip_buyer.register_unbought_candidate(code, item["name"], float(base_score), reason=reason, target_price=price, industry=item["industry"])
+                    dip_stat = dip_buyer.update_quote(code, price, change_pct)
+                else:
+                    dip_stat = {"dip_score": 50.0, "signal": "HELD", "suggested_action": "HOLD_POSITION", "pullback_pct": 0.0}
+            except Exception:
+                dip_stat = {"dip_score": 50.0, "signal": "WATCHING", "suggested_action": "OBSERVE", "pullback_pct": 0.0}
+
             # 结合该账户的持仓及可用现金计算执行指标
             pos_info = held_positions.get(code, {})
             held_shares = int(pos_info.get("amount", 0) or 0)
@@ -350,6 +362,11 @@ def ai_candidates_today():
                 "account_id": account_id,
                 "account_name": acc_name,
                 "account_style": style,
+                "timing_dip_score": dip_stat.get("dip_score", 50.0),
+                "timing_signal": dip_stat.get("signal", "WATCHING"),
+                "timing_action": dip_stat.get("suggested_action", "OBSERVE"),
+                "pullback_pct": dip_stat.get("pullback_pct", 0.0),
+                "utilization_weight": 0.25,
                 "matched_strategies": ["强势回调", "放量突破"] if votes >= 2 else ["缩量企稳"]
             })
 
@@ -372,6 +389,49 @@ def ai_candidates_today():
         })
     except Exception as e:
         logger.exception(f"获取今日优选候选池异常: {e}")
+        return jsonify({"success": False, "message": str(e)})
+
+
+@system_bp.route('/api/ai/timing/overview', methods=['GET'])
+def ai_timing_overview():
+    try:
+        from intraday_timing_engine import intraday_timing_engine
+        from db_store import db_store
+        from fast_data import fetch_realtime_single
+
+        # 1. 获取未买入标的时序跟踪
+        unbought_list = intraday_timing_engine["dip_buyer"].get_summary_list()
+
+        # 2. 获取指定账户或当前活动账户持仓并全要素评估去留
+        req_acc_id = request.args.get("account_id", type=int)
+        if req_acc_id is not None:
+            active_id = req_acc_id
+        else:
+            active_id = db_store.get_active_account_id() or 1
+
+        held_positions = db_store.get_positions(active_id) or {}
+        retention_decider = intraday_timing_engine["retention_decider"]
+        retention_evals = []
+        for sym, pos in held_positions.items():
+            q = fetch_realtime_single(sym) or {}
+            eval_res = retention_decider.evaluate_retention(pos, q)
+            retention_evals.append(eval_res)
+
+        # 3. 未卖出超时调控清单
+        unsold_controller = intraday_timing_engine["unsold_controller"]
+        unsold_list = unsold_controller.get_unsold_summary_list()
+
+        return jsonify({
+            "success": True,
+            "data": {
+                "unbought_candidates": unbought_list,
+                "retention_evaluations": retention_evals,
+                "unsold_controls": unsold_list,
+                "weights": intraday_timing_engine["weights"]
+            }
+        })
+    except Exception as e:
+        logger.exception(f"获取时序与持仓去留概览异常: {e}")
         return jsonify({"success": False, "message": str(e)})
 
 

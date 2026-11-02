@@ -410,6 +410,16 @@ class AIScheduler:
                     except Exception as e:
                         logger.debug(f"动态止损止盈监控失败: {e}")
 
+                    # 高频微时序巡检 (30秒级：持仓去留评估 + 未买入时序回踩低吸 + 未卖出超时调控)
+                    if not hasattr(self, '_last_high_freq_tick'):
+                        self._last_high_freq_tick = 0.0
+                    if curr_mono - self._last_high_freq_tick >= 30.0:
+                        self._last_high_freq_tick = curr_mono
+                        try:
+                            self._run_high_frequency_intraday_tick()
+                        except Exception as e:
+                            logger.debug(f"高频时序巡检触发异常: {e}")
+
                     # 周期性 AI/规则 策略分析
                     if self._last_analysis_time:
                         try:
@@ -2393,6 +2403,105 @@ A股交易时段: 上午9:30-11:30, 下午13:00-15:00
             "pre_market_news_count": pm.get("news_count") if pm else None,
             "lunch_score": self._lunch_sentiment.get("score") if self._lunch_sentiment else None,
         }
+
+
+    def _run_high_frequency_intraday_tick(self):
+        """
+        高频率盘中微观时序巡检（30秒级）
+        1. 针对现有持仓股票执行动态去留决策（去/留/减/换）
+        2. 针对未买入股票跟踪时序起伏，若触发低吸黄金点且有额度则执行低买
+        3. 针对未卖出股票根据预期时钟执行动态调控（涨停顺延/跳水压价市价急卖）
+        """
+        if not self.enabled:
+            return
+
+        try:
+            from intraday_timing_engine import intraday_timing_engine
+            from db_store import db_store
+            from fast_data import fetch_realtime_single
+            from auto_trader import auto_trader
+
+            # 1. 动态评估当前持仓去留
+            active_id = db_store.get_active_account_id() or 1
+            held_positions = db_store.get_positions(active_id) or {}
+            retention_decider = intraday_timing_engine["retention_decider"]
+
+            for sym, pos in held_positions.items():
+                amt = int(pos.get("amount", 0) or 0)
+                if amt <= 0:
+                    continue
+                q = fetch_realtime_single(sym) or {}
+                eval_res = retention_decider.evaluate_retention(pos, q)
+                act = eval_res.get("action", "")
+
+                if act in ["EMERGENCY_STOP_LOSS", "SELL_WEAK_EXIT"]:
+                    logger.warning(f"🚨 [持仓去留] 触发卖出去仓: {sym} 动作={act} 原因={eval_res.get('reason')}")
+                    try:
+                        auto_trader.create_order(sym, "SELL", amt, float(q.get("price", 0.0) or 0.0), reason=f"持仓去留-{act}")
+                    except Exception as ex:
+                        logger.error(f"持仓去仓报单异常: {ex}")
+                elif act == "TRIM_PROTECT_PROFIT":
+                    trim_amt = (amt // 200) * 100
+                    if trim_amt >= 100:
+                        logger.info(f"✂️ [持仓去留] 触发冲高减半止盈: {sym} 股数={trim_amt} 原因={eval_res.get('reason')}")
+                        try:
+                            auto_trader.create_order(sym, "SELL", trim_amt, float(q.get("price", 0.0) or 0.0), reason="持仓冲高回落减半")
+                        except Exception as ex:
+                            logger.error(f"冲高减仓报单异常: {ex}")
+
+            # 2. 未买入重点关注股票时序回踩低吸
+            dip_buyer = intraday_timing_engine["dip_buyer"]
+            for sym, item in list(dip_buyer.watchlist.items())[:10]:
+                q = fetch_realtime_single(sym) or {}
+                if q and q.get("price"):
+                    dip_buyer.update_quote(sym, float(q.get("price")), float(q.get("change_pct", 0.0)),
+                                           high=float(q.get("high", 0.0)), low=float(q.get("low", 0.0)))
+
+            actionable_dips = dip_buyer.get_actionable_dip_candidates(min_dip_score=75.0)
+            if actionable_dips:
+                summary = db_store.get_account_summary(active_id) or {}
+                avail_cash = float(summary.get("ky_fund", summary.get("balance", 0.0)) or 0.0)
+                tot_assets = float(summary.get("total_assets", 200000.0) or 200000.0)
+                cur_pos_cnt = len(held_positions)
+
+                if cur_pos_cnt < 5 and avail_cash >= 3000.0:
+                    best_dip = actionable_dips[0]
+                    dip_sym = best_dip["symbol"]
+                    dip_price = float(best_dip.get("last_price") or 0.0)
+                    if dip_price > 0 and dip_sym not in held_positions:
+                        cost_1lot = dip_price * 100.0
+                        shares = int(min(avail_cash * 0.5, tot_assets * 0.25) // cost_1lot) * 100
+                        if shares >= 100:
+                            logger.info(f"🎯 [时序低吸] 捕捉回踩低吸点买入: {dip_sym} 股数={shares} 现价={dip_price} 回踩={best_dip.get('pullback_pct')}%")
+                            try:
+                                auto_trader.create_order(dip_sym, "BUY", shares, dip_price, reason="时序低吸买入")
+                                dip_buyer.watchlist[dip_sym]["status"] = "BOUGHT"
+                            except Exception as ex:
+                                logger.error(f"时序低吸报单异常: {ex}")
+
+            # 3. 未卖出预期时间合理调控
+            unsold_ctrl = intraday_timing_engine["unsold_controller"]
+            now_str = datetime.now().strftime("%H:%M:%S")
+            for sym, item in list(unsold_ctrl.pending_sells.items()):
+                q = fetch_realtime_single(sym) or {}
+                cur_p = float(q.get("price") or item.get("target_price") or 0.0)
+                chg_p = float(q.get("change_pct") or 0.0)
+                stat = unsold_ctrl.evaluate_unsold_status(sym, cur_p, chg_p, now_time_str=now_str)
+                action = stat.get("tuning_action")
+                if action == "REPRICE_URGENT_SELL":
+                    logger.warning(f"⚡ [超时调控] 卖单超时下探，紧急降价追单卖出: {sym} 原因={stat.get('tuning_reason')}")
+                    try:
+                        pos = held_positions.get(sym, {})
+                        amt = int(pos.get("amount", 0) or 0)
+                        if amt > 0:
+                            auto_trader.create_order(sym, "SELL", amt, cur_p * 0.995, reason="超时紧急调价强平")
+                    except Exception as ex:
+                        logger.error(f"超时调控市价卖出异常: {ex}")
+                elif action == "CANCEL_AND_RIDE":
+                    logger.info(f"🚀 [超时调控] 标的强势涨停，顺延持仓享受溢价: {sym}")
+
+        except Exception as e:
+            logger.debug(f"高频时序巡检逻辑执行异常: {e}")
 
 
 # 全局实例
