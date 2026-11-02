@@ -203,6 +203,24 @@ class THSAccountTrader:
         finally:
             self._order_lock.release()
 
+    def get_orders(self) -> Dict:
+        """查询当前账户委托订单（复用长连接Session + 防死锁超时锁 + 透明自愈）"""
+        if not self._order_lock.acquire(timeout=5.0):
+            return {"success": False, "message": "查询委托获取锁超时"}
+        try:
+            if not self.cookie:
+                self._reload_cookie_if_updated()
+            if not self.cookie:
+                return {"success": False, "message": "未连接"}
+            self.connector.cookie = self.cookie
+            res = self.connector.get_orders()
+            if not res.get("success") and res.get("error_code") == "COOKIE_EXPIRED":
+                if self._reload_cookie_if_updated():
+                    res = self.connector.get_orders()
+            return res
+        finally:
+            self._order_lock.release()
+
     def sync_from_ths(self) -> Dict:
         """从同花顺同步账户数据，返回同步结果"""
         try:

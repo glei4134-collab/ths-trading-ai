@@ -419,7 +419,7 @@ def ai_timing_overview():
 
         # 3. 未卖出超时调控清单
         unsold_controller = intraday_timing_engine["unsold_controller"]
-        unsold_list = unsold_controller.get_unsold_summary_list()
+        unsold_list = unsold_controller.get_unsold_summary_list(account_id=active_id)
 
         return jsonify({
             "success": True,

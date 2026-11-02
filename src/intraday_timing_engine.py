@@ -309,9 +309,12 @@ class UnsoldPositionController:
         self.pending_sells: Dict[str, Dict[str, Any]] = {}
 
     def register_expected_sell(self, symbol: str, name: str, expected_sell_time_str: str, 
-                               target_price: float, reason: str = "时序计划卖出", order_id: str = ""):
-        """登记一笔有预期时间的卖出计划"""
-        self.pending_sells[symbol] = {
+                               target_price: float, reason: str = "时序计划卖出", order_id: str = "", account_id: int = 0):
+        """登记一笔有预期时间的卖出计划（支持 account_id 复合隔离）"""
+        key = f"{account_id}:{symbol}" if account_id else symbol
+        self.pending_sells[key] = {
+            "key": key,
+            "account_id": account_id,
             "symbol": symbol,
             "name": name,
             "expected_sell_time": expected_sell_time_str,
@@ -324,7 +327,7 @@ class UnsoldPositionController:
         }
 
     def evaluate_unsold_status(self, symbol: str, current_price: float, change_pct: float,
-                               now_time_str: Optional[str] = None) -> Dict[str, Any]:
+                               now_time_str: Optional[str] = None, account_id: int = 0) -> Dict[str, Any]:
         """
         对已超预期时间却未卖出的标的进行智能调控
         调控逻辑：
@@ -332,10 +335,11 @@ class UnsoldPositionController:
         2. 若已经超时且价格开始滞涨/跳水 -> 调控：立刻降价至即时买一或市价急卖，坚决止盈/避险；
         3. 若尚未到达预期时间 -> 调控：维持挂单等待时机。
         """
-        if symbol not in self.pending_sells:
+        key = f"{account_id}:{symbol}" if account_id and f"{account_id}:{symbol}" in self.pending_sells else symbol
+        if key not in self.pending_sells:
             return {}
 
-        item = self.pending_sells[symbol]
+        item = self.pending_sells[key]
         if not now_time_str:
             now_time_str = datetime.now().strftime("%H:%M:%S")
 
@@ -381,10 +385,12 @@ class UnsoldPositionController:
             "utilization_weight": 0.20
         }
 
-    def get_unsold_summary_list(self) -> List[Dict[str, Any]]:
-        """获取所有未卖出超时调控清单（供前端与大屏展示）"""
+    def get_unsold_summary_list(self, account_id: Optional[int] = None) -> List[Dict[str, Any]]:
+        """获取未卖出超时调控清单（支持按 account_id 过滤）"""
         res = []
-        for symbol, item in self.pending_sells.items():
+        for key, item in self.pending_sells.items():
+            if account_id is not None and item.get("account_id") and item.get("account_id") != account_id:
+                continue
             res.append(dict(item))
         return res
 

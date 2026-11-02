@@ -299,28 +299,49 @@ def get_trades():
 
 @account_bp.route('/api/account/pending-orders', methods=['GET'])
 def get_pending_orders():
-    """获取当日未成交委托"""
+    """获取当日未成交委托（支持按 account_id 隔离查询或全账户聚合返回）"""
     try:
-        # 优先级1：全局web_connector
-        if web_connector.connected and web_connector.cookie:
-            result = web_connector.get_orders()
-            if result.get("success"):
-                orders = [o for o in result.get("data", []) if o.get("status") in ("未成交", "部分成交", "已报")]
-                return jsonify({"success": True, "data": orders})
-
-        # 优先级2：通过 account_manager 的 trader 实时查询
         from account_manager import account_manager
-        accounts = db_store.list_accounts()
-        if accounts:
-            active_acc = next((a for a in accounts if a.get("ths_gdzh")), accounts[0])
-            trader = account_manager.get_trader(active_acc["id"])
+        from db_store import db_store
+        
+        target_acc_id = request.args.get('account_id', type=int)
+        accounts = db_store.list_accounts() or []
+        
+        if target_acc_id is not None:
+            # 单账户精准隔离查询
+            trader = account_manager.get_trader(target_acc_id)
             if trader and trader.connected:
                 result = trader.get_orders()
                 if result.get("success"):
                     orders = [o for o in result.get("data", []) if o.get("status") in ("未成交", "部分成交", "已报")]
-                    return jsonify({"success": True, "data": orders})
+                    acc_info = next((a for a in accounts if a["id"] == target_acc_id), {})
+                    for o in orders:
+                        o["account_id"] = target_acc_id
+                        o["account_name"] = acc_info.get("name", f"账户#{target_acc_id}")
+                    return jsonify({"success": True, "account_id": target_acc_id, "data": orders})
+            return jsonify({"success": True, "account_id": target_acc_id, "data": []})
 
-        return jsonify({"success": True, "data": []})
+        # 多账户矩阵全景聚合
+        all_pending = []
+        for acc in accounts:
+            acc_id = acc["id"]
+            trader = account_manager.get_trader(acc_id)
+            if trader and trader.connected:
+                res = trader.get_orders()
+                if res.get("success"):
+                    acc_orders = [o for o in res.get("data", []) if o.get("status") in ("未成交", "部分成交", "已报")]
+                    for o in acc_orders:
+                        o["account_id"] = acc_id
+                        o["account_name"] = acc.get("name", f"账户#{acc_id}")
+                    all_pending.extend(acc_orders)
+        
+        # 兜底：若无专属trader但有全局web_connector
+        if not all_pending and web_connector.connected and web_connector.cookie:
+            res = web_connector.get_orders()
+            if res.get("success"):
+                all_pending = [o for o in res.get("data", []) if o.get("status") in ("未成交", "部分成交", "已报")]
+
+        return jsonify({"success": True, "data": all_pending})
     except Exception as e:
         return jsonify({"success": False, "message": str(e)})
 

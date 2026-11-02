@@ -1422,25 +1422,44 @@ class AIScheduler:
             logger.debug(f"每日情绪跟踪整体失败: {e}")
 
     def _handle_pending_orders(self):
-        """检查未成交委托，智能撤单（考虑时间紧迫度 + 持仓盈亏）"""
+        """检查未成交委托，智能撤单（全要素多账户隔离：分账户获取挂单、分账户持仓成本盈亏算值、分账户专属通道撤单）"""
         try:
+            from account_manager import account_manager
+            from db_store import db_store
             from ths_connector import get_active_connector
-            conn, conn_type = get_active_connector()
-            if not conn or not getattr(conn, 'connected', False):
-                return
 
-            orders_result = conn.get_orders()
-            if not orders_result.get("success"):
-                return
+            accounts = db_store.list_accounts() or []
+            self._cached_pending_orders = []
 
-            # 缓存未成交委托（供 _build_context() 共享使用，避免重复请求）
-            all_orders = orders_result.get("data", [])
-            self._cached_pending_orders = [o for o in all_orders if o.get("status") == "未成交"]
+            # 1. 遍历多账户，独立拉取各自委托
+            for acc in accounts:
+                acc_id = acc.get("id")
+                acc_name = acc.get("name", f"账户#{acc_id}")
+                trader = account_manager.get_trader(acc_id)
+                if not trader or not trader.connected:
+                    continue
+                orders_res = trader.get_orders()
+                if orders_res.get("success"):
+                    for o in orders_res.get("data", []):
+                        if o.get("status") in ("未成交", "部分成交", "已报"):
+                            o["account_id"] = acc_id
+                            o["account_name"] = acc_name
+                            self._cached_pending_orders.append(o)
+
+            # 若多账户 trader 暂无挂单，再通过全局活跃连接兜底核验
+            if not self._cached_pending_orders:
+                conn, _ = get_active_connector()
+                if conn and getattr(conn, 'connected', False):
+                    orders_result = conn.get_orders()
+                    if orders_result.get("success"):
+                        for o in orders_result.get("data", []):
+                            if o.get("status") in ("未成交", "部分成交", "已报"):
+                                self._cached_pending_orders.append(o)
 
             if not self._cached_pending_orders:
                 return
 
-            logger.info(f"📋 AI调度器: 发现 {len(self._cached_pending_orders)} 笔未成交委托")
+            logger.info(f"📋 AI调度器: 发现多账户共 {len(self._cached_pending_orders)} 笔未成交委托")
 
             for order in self._cached_pending_orders:
                 symbol = order.get("symbol", "")
@@ -1448,6 +1467,8 @@ class AIScheduler:
                 order_amount = order.get("amount", 0)
                 order_price = order.get("price", 0)
                 order_time = order.get("time", "")
+                acc_id = order.get("account_id")
+                acc_name = order.get("account_name", f"账户#{acc_id}" if acc_id else "主账户")
 
                 if not symbol or not order_price:
                     continue
@@ -1483,52 +1504,71 @@ class AIScheduler:
                 cancel_reason = ""
 
                 if action == "sell":
-                    # --- 卖单：止损紧迫度高 ---
-                    # 检查持仓盈亏
+                    # --- 卖单：严格按该账户持仓成本与盈亏算值 ---
                     is_loss_position = False
                     try:
-                        from auto_trader import auto_trader
-                        if symbol in auto_trader.positions:
-                            pos = auto_trader.positions[symbol]
-                            avg = pos.avg_price
-                            if avg > 0 and current_price < avg:
-                                is_loss_position = True
+                        if acc_id is not None:
+                            pos_dict = db_store.get_positions(acc_id) or {}
+                            if symbol in pos_dict:
+                                cost_price = float(pos_dict[symbol].get("cost_price", 0.0) or 0.0)
+                                if cost_price > 0 and current_price < cost_price:
+                                    is_loss_position = True
+                        else:
+                            from auto_trader import auto_trader
+                            if symbol in auto_trader.positions:
+                                pos = auto_trader.positions[symbol]
+                                avg = pos.avg_price
+                                if avg > 0 and current_price < avg:
+                                    is_loss_position = True
                     except Exception as e:
-                        logger.debug(f"获取 {symbol} 持仓盈亏状态失败: {e}")
+                        logger.debug(f"获取 {symbol} 账户持仓盈亏状态失败: {e}")
 
                     if is_loss_position and elapsed_min >= 3:
                         # 亏损持仓的卖单：3分钟没成交就撤（止损要快）
                         should_cancel = True
-                        cancel_reason = f"亏损止损单超时{elapsed_min}分钟未成交"
+                        cancel_reason = f"[{acc_name}] 亏损止损单超时{elapsed_min}分钟未成交"
                     elif elapsed_min >= 5 and price_diff_pct > 1.0:
                         # 普通卖单：5分钟 + 偏离1%
                         should_cancel = True
-                        cancel_reason = f"挂单{elapsed_min}分钟,偏离{price_diff_pct:.1f}%"
+                        cancel_reason = f"[{acc_name}] 挂单{elapsed_min}分钟,偏离{price_diff_pct:.1f}%"
                     elif elapsed_min >= 20:
                         # 超时兜底：任何卖单超20分钟都撤
                         should_cancel = True
-                        cancel_reason = f"挂单超时{elapsed_min}分钟"
+                        cancel_reason = f"[{acc_name}] 挂单超时{elapsed_min}分钟"
 
                 elif action == "buy":
                     # --- 买单：不急但不能无限等 ---
                     if elapsed_min >= 10 and price_diff_pct > 1.5:
                         # 10分钟 + 偏离1.5%
                         should_cancel = True
-                        cancel_reason = f"挂单{elapsed_min}分钟,偏离{price_diff_pct:.1f}%"
+                        cancel_reason = f"[{acc_name}] 挂单{elapsed_min}分钟,偏离{price_diff_pct:.1f}%"
                     elif elapsed_min >= 30:
                         # 超时兜底：任何买单超30分钟都撤
                         should_cancel = True
-                        cancel_reason = f"挂单超时{elapsed_min}分钟"
+                        cancel_reason = f"[{acc_name}] 挂单超时{elapsed_min}分钟"
 
-                # ===== 执行撤单 =====
+                # ===== 专属账户执行撤单 =====
                 if should_cancel:
                     try:
-                        cancel_result = conn.cancel_order(order.get("order_id", ""), order.get("date", ""))
-                        if cancel_result.get("success"):
-                            logger.info(f"🔄 撤单: {symbol} {action} {order_amount}股 @ ¥{order_price} "
+                        cancel_success = False
+                        if acc_id is not None:
+                            trader = account_manager.get_trader(acc_id)
+                            if trader:
+                                res = trader.cancel_order(order.get("order_id", ""), order.get("date", ""))
+                                cancel_success = res.get("success", False)
+                        if not cancel_success:
+                            conn, _ = get_active_connector()
+                            if conn and hasattr(conn, "cancel_order"):
+                                res = conn.cancel_order(order.get("order_id", ""), order.get("date", ""))
+                                cancel_success = res.get("success", False)
+
+                        if cancel_success:
+                            logger.info(f"🔄 [{acc_name}] 撤单成功: {symbol} {action} {order_amount}股 @ ¥{order_price} "
                                         f"({cancel_reason}, 当前价¥{current_price})")
                             self._trade_log.append({
                                 "time": _dt.now().strftime("%H:%M:%S"),
+                                "account_id": acc_id,
+                                "account_name": acc_name,
                                 "action": f"auto_cancel_{action}",
                                 "symbol": symbol,
                                 "amount": order_amount,
@@ -1541,16 +1581,16 @@ class AIScheduler:
                                 notification_manager.add({
                                     "type": "trade",
                                     "level": "warning",
-                                    "title": "🔄 智能撤单",
+                                    "title": f"🔄 [{acc_name}] 智能撤单",
                                     "message": f"{symbol} {'卖出' if action == 'sell' else '买入'}{order_amount}股\n"
                                                f"{cancel_reason}\n当前价¥{current_price}",
                                 })
                             except Exception as e:
                                 logger.debug(f"推送智能撤单通知失败: {e}")
                     except Exception as e:
-                        logger.warning(f"撤单失败: {e}")
+                        logger.warning(f"[{acc_name}] 撤单失败: {e}")
                 else:
-                    logger.info(f"⏳ {symbol} {action} {order_amount}股 @ ¥{order_price} "
+                    logger.info(f"⏳ [{acc_name}] {symbol} {action} {order_amount}股 @ ¥{order_price} "
                                 f"(挂{elapsed_min}分钟, 偏离{price_diff_pct:.1f}%, 保持)")
 
         except Exception as e:
