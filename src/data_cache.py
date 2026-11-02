@@ -360,12 +360,14 @@ def get_kline_with_indicators(symbol: str, days: int = 60) -> list:
     ma10 = close.rolling(10).mean()
     ma20 = close.rolling(20).mean()
 
-    # RSI
+    # RSI (标准 Wilder RSI)
     delta = close.diff()
-    gain = delta.where(delta > 0, 0).rolling(14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
-    rs = gain / loss
-    rsi = 100 - (100 / (1 + rs))
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+    avg_gain = gain.ewm(alpha=1.0 / 14, min_periods=14, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1.0 / 14, min_periods=14, adjust=False).mean()
+    rs = avg_gain / avg_loss.replace(0, float('nan'))
+    rsi = (100.0 - (100.0 / (1.0 + rs))).fillna(50.0)
 
     # MACD
     ema12 = close.ewm(span=12, adjust=False).mean()
@@ -419,13 +421,16 @@ def compute_indicators(kline_data: list) -> Dict:
         if len(close) >= p:
             indicators[f"ma{p}"] = round(close.rolling(p).mean().iloc[-1], 2)
 
-    # RSI
+    # RSI (标准 Wilder RSI)
     if len(close) >= 15:
         delta = close.diff()
-        gain = delta.where(delta > 0, 0).rolling(14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
-        rs = gain / loss
-        indicators["rsi"] = round((100 - (100 / (1 + rs))).iloc[-1], 2)
+        gain = delta.clip(lower=0)
+        loss = -delta.clip(upper=0)
+        avg_gain = gain.ewm(alpha=1.0 / 14, min_periods=14, adjust=False).mean()
+        avg_loss = loss.ewm(alpha=1.0 / 14, min_periods=14, adjust=False).mean()
+        rs = avg_gain / avg_loss.replace(0, float('nan'))
+        calc_rsi = 100.0 - (100.0 / (1.0 + rs))
+        indicators["rsi"] = round(float(calc_rsi.iloc[-1]), 2) if not calc_rsi.empty and not calc_rsi.isna().iloc[-1] else 50.0
 
     # MACD
     if len(close) >= 26:

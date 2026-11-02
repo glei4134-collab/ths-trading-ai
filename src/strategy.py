@@ -31,12 +31,15 @@ class TechnicalStrategy:
         return df
 
     def calculate_rsi(self, df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
-        """计算RSI指标"""
+        """计算标准 Wilder RSI 指标 (EMA alpha=1/period 平滑, Defect 4)"""
         delta = df['收盘'].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-        rs = gain / loss
-        df['RSI'] = 100 - (100 / (1 + rs))
+        gain = delta.clip(lower=0)
+        loss = -delta.clip(upper=0)
+        avg_gain = gain.ewm(alpha=1.0 / period, min_periods=period, adjust=False).mean()
+        avg_loss = loss.ewm(alpha=1.0 / period, min_periods=period, adjust=False).mean()
+        rs = avg_gain / avg_loss.replace(0, float('nan'))
+        df['RSI'] = 100.0 - (100.0 / (1.0 + rs))
+        df['RSI'] = df['RSI'].fillna(50.0)
         return df
 
     def calculate_macd(self, df: pd.DataFrame) -> pd.DataFrame:
