@@ -225,6 +225,8 @@ class TeamEnsembleStrategy(BaseStrategy):
                 strategy_name=self.name,
                 extra={
                     "votes_buy": votes_buy,
+                    "votes_sell": votes_sell,
+                    "net_votes": net_votes,
                     "target_position_pct": self.params["target_position_pct"]["default"],
                     "is_call_auction": is_auction
                 }
@@ -238,5 +240,10 @@ class TeamEnsembleStrategy(BaseStrategy):
                 target_price=None,
                 stop_loss=round(close * (1 - stop_pct / 100), 2),
                 strategy_name=self.name,
-                extra={"votes_buy": votes_buy, "is_call_auction": is_auction}
+                extra={
+                    "votes_buy": votes_buy,
+                    "votes_sell": votes_sell,
+                    "net_votes": net_votes,
+                    "is_call_auction": is_auction
+                }
             )

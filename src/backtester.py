@@ -384,7 +384,7 @@ class Backtester:
             logger.warning("没有可用策略，使用默认策略")
             strategies = [registry.get("multi_factor")]
 
-        # 5. 模拟交易
+        # 5. 模拟交易 (Defect 1 彻底治理未来函数：T+1 次日开盘成交模式)
         capital = initial_capital
         position = 0
         buy_price = 0
@@ -395,33 +395,110 @@ class Backtester:
         max_drawdown_duration = 0
         current_drawdown_duration = 0
         strategy_stats = {name: {"signals": 0, "wins": 0, "total_profit": 0} for name in strategy_names}
+        pending_action = None
 
         for i in range(20, len(data)):  # 前20天用于计算指标
             day = data[i]
-            price = day["close"]
+            open_p = float(day.get("open") or day["close"])
+            close_p = float(day["close"])
+            low_p = float(day.get("low") or close_p)
             history = data[max(0, i-20):i]  # 前20天历史
 
-            # 构建stock_data
+            # 1. 优先执行上一交易日收盘生成的挂单 (以次日 open 开盘价成交，杜绝未来函数)
+            if pending_action == "BUY" and position == 0:
+                max_shares = int(capital * position_size / open_p / 100) * 100
+                if max_shares >= 100:
+                    exec_price = open_p * (1 + self.slippage)
+                    commission = max(max_shares * exec_price * self.commission_rate, self.min_commission)
+                    cost = max_shares * exec_price + commission
+                    if cost <= capital:
+                        capital -= cost
+                        position = max_shares
+                        buy_price = exec_price
+                        trades.append(BacktestTrade(
+                            date=day["date"],
+                            symbol=symbol,
+                            action="buy",
+                            price=round(exec_price, 2),
+                            amount=max_shares,
+                            value=round(max_shares * exec_price, 2),
+                            commission=round(commission, 2),
+                            strategy=",".join(strategy_names)
+                        ))
+                pending_action = None
+
+            elif pending_action == "SELL" and position > 0:
+                exec_price = open_p * (1 - self.slippage)
+                revenue = position * exec_price
+                commission = max(revenue * self.commission_rate, self.min_commission)
+                tax = revenue * self.stamp_tax_rate
+                capital += revenue - commission - tax
+                profit = (exec_price - buy_price) * position - commission - tax
+                trades.append(BacktestTrade(
+                    date=day["date"],
+                    symbol=symbol,
+                    action="sell",
+                    price=round(exec_price, 2),
+                    amount=position,
+                    value=round(revenue, 2),
+                    commission=round(commission + tax, 2),
+                    profit=round(profit, 2),
+                    strategy=",".join(strategy_names)
+                ))
+                for name in strategy_names:
+                    strategy_stats[name]["signals"] += 1
+                    if profit > 0:
+                        strategy_stats[name]["wins"] += 1
+                        strategy_stats[name]["total_profit"] += profit / buy_price * 100
+                position = 0
+                buy_price = 0
+                pending_action = None
+
+            # 2. 盘中毒瘤硬止损检查 (-8% 硬止损)
+            if position > 0 and buy_price > 0:
+                loss_pct = (low_p - buy_price) / buy_price
+                if loss_pct < -0.08:
+                    exec_price = buy_price * 0.92 * (1 - self.slippage)
+                    revenue = position * exec_price
+                    commission = max(revenue * self.commission_rate, self.min_commission)
+                    tax = revenue * self.stamp_tax_rate
+                    capital += revenue - commission - tax
+                    profit = (exec_price - buy_price) * position - commission - tax
+                    trades.append(BacktestTrade(
+                        date=day["date"],
+                        symbol=symbol,
+                        action="sell",
+                        price=round(exec_price, 2),
+                        amount=position,
+                        value=round(revenue, 2),
+                        commission=round(commission + tax, 2),
+                        profit=round(profit, 2),
+                        strategy="stop_loss"
+                    ))
+                    for name in strategy_names:
+                        strategy_stats[name]["signals"] += 1
+                    position = 0
+                    buy_price = 0
+                    pending_action = None
+
+            # 3. 构建当日收盘行情与技术指标并记录权益
             stock_data = {
-                "price": price,
-                "open": day["open"],
+                "price": close_p,
+                "open": open_p,
                 "high": day["high"],
-                "low": day["low"],
-                "change_pct": ((price - data[i-1]["close"]) / data[i-1]["close"] * 100) if i > 0 else 0,
+                "low": low_p,
+                "change_pct": ((close_p - data[i-1]["close"]) / data[i-1]["close"] * 100) if i > 0 else 0,
                 "volume": day["volume"],
                 "turnover": 0
             }
-
             indicators = self._build_indicators(day)
 
-            # 记录权益
-            total_value = capital + position * price
+            total_value = capital + position * close_p
             equity_curve.append({
                 "date": day["date"],
                 "equity": round(total_value, 2)
             })
 
-            # 更新最大回撤
             if total_value > max_capital:
                 max_capital = total_value
                 current_drawdown_duration = 0
@@ -434,9 +511,8 @@ class Backtester:
             if drawdown > max_drawdown:
                 max_drawdown = drawdown
 
-            # 6. 用策略分析
+            # 4. 用策略分析当日收盘行情，为次日生成挂单信号 (T+1 真实交易时序)
             if position == 0:
-                # 无持仓，看是否买入
                 buy_signals = 0
                 total_score = 0
                 for s in strategies:
@@ -447,33 +523,10 @@ class Backtester:
                             buy_signals += 1
                     except Exception:
                         pass
-
-                # 多数策略看多时买入
                 if buy_signals >= len(strategies) * 0.5 and total_score > 0:
-                    # 计算可买数量
-                    max_shares = int(capital * position_size / price / 100) * 100
-                    if max_shares >= 100:
-                        # 加滑点
-                        exec_price = price * (1 + self.slippage)
-                        commission = max(max_shares * exec_price * self.commission_rate, self.min_commission)
-                        cost = max_shares * exec_price + commission
-                        if cost <= capital:
-                            capital -= cost
-                            position = max_shares
-                            buy_price = exec_price
-                            trades.append(BacktestTrade(
-                                date=day["date"],
-                                symbol=symbol,
-                                action="buy",
-                                price=round(exec_price, 2),
-                                amount=max_shares,
-                                value=round(max_shares * exec_price, 2),
-                                commission=round(commission, 2),
-                                strategy=",".join(strategy_names)
-                            ))
+                    pending_action = "BUY"
 
             elif position > 0:
-                # 有持仓，看是否卖出
                 sell_signals = 0
                 for s in strategies:
                     try:
@@ -482,42 +535,8 @@ class Backtester:
                             sell_signals += 1
                     except Exception:
                         pass
-
-                # 止损检查（-8%）
-                loss_pct = (price - buy_price) / buy_price
-                if loss_pct < -0.08:
-                    sell_signals = len(strategies)  # 强制卖出
-
-                # 多数策略看空时卖出
                 if sell_signals >= len(strategies) * 0.5:
-                    exec_price = price * (1 - self.slippage)
-                    revenue = position * exec_price
-                    commission = max(revenue * self.commission_rate, self.min_commission)
-                    tax = revenue * self.stamp_tax_rate
-                    capital += revenue - commission - tax
-
-                    profit = (exec_price - buy_price) * position - commission - tax
-                    trades.append(BacktestTrade(
-                        date=day["date"],
-                        symbol=symbol,
-                        action="sell",
-                        price=round(exec_price, 2),
-                        amount=position,
-                        value=round(revenue, 2),
-                        commission=round(commission + tax, 2),
-                        profit=round(profit, 2),
-                        strategy=",".join(strategy_names)
-                    ))
-
-                    # 更新策略统计
-                    for name in strategy_names:
-                        strategy_stats[name]["signals"] += 1
-                        if profit > 0:
-                            strategy_stats[name]["wins"] += 1
-                            strategy_stats[name]["total_profit"] += profit / buy_price * 100
-
-                    position = 0
-                    buy_price = 0
+                    pending_action = "SELL"
 
         # 7. 计算最终资金
         final_capital = capital + position * data[-1]["close"]

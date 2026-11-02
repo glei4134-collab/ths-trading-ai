@@ -246,6 +246,12 @@ class StrategyOptimizer:
 
         logger.info(f"滚动窗口: {strategy_name}, {n_windows} 窗口")
 
+        from backtester import Backtester
+        bt = Backtester()
+        symbol = stock_data.get("code", stock_data.get("symbol", "000001"))
+        total_days = train_days + test_days * n_windows + 30
+        full_history = bt.fetch_real_data(symbol, total_days) or []
+
         for i in range(n_windows):
             window_result = {
                 "window": i + 1,
@@ -255,10 +261,19 @@ class StrategyOptimizer:
             }
 
             try:
-                # 训练集优化
+                # 真实时间切片：窗口按步长 test_days 向前真实推进 (Defect 8)
+                if len(full_history) >= train_days + test_days:
+                    start_idx = i * test_days
+                    train_data = full_history[start_idx : start_idx + train_days]
+                    test_data = full_history[start_idx + train_days : start_idx + train_days + test_days]
+                else:
+                    train_data = None
+                    test_data = None
+
+                # 训练集参数优化
                 opt_result = self.optimize(
                     strategy_name, stock_data, indicators,
-                    n_trials=20, days=train_days
+                    n_trials=15, days=train_days
                 )
                 if opt_result.get("success"):
                     window_result["train_params"] = opt_result["best_params"]
@@ -268,10 +283,11 @@ class StrategyOptimizer:
                         "sharpe_ratio": opt_result["best_result"].get("sharpe_ratio", 0)
                     }
 
-                    # 测试集验证
+                    # 样本外测试集验证 (严格按真实时间段样本外检验)
                     test_result = self._run_backtest(
                         strategy_name, stock_data, indicators,
-                        opt_result["best_params"], test_days
+                        opt_result["best_params"], test_days,
+                        history_data=test_data
                     )
                     window_result["test_result"] = {
                         "total_return": test_result.get("total_return", 0),
@@ -425,8 +441,9 @@ class StrategyOptimizer:
     # ========== 内部回测 ==========
 
     def _run_backtest(self, strategy_name: str, stock_data: Dict,
-                      indicators: Dict, params: Dict, days: int) -> Dict:
-        """运行单次回测"""
+                      indicators: Dict, params: Dict, days: int = 60,
+                      history_data: Optional[List[Dict]] = None) -> Dict:
+        """运行单次回测 (支持传入指定切片数据 history_data, 杜绝时间假滚动)"""
         from strategy_registry import registry
         from backtester import Backtester
 
@@ -438,7 +455,10 @@ class StrategyOptimizer:
 
         # 获取历史数据
         symbol = stock_data.get("code", stock_data.get("symbol", "000001"))
-        history = backtester.fetch_real_data(symbol, days)
+        if history_data is not None and len(history_data) >= 20:
+            history = list(history_data)
+        else:
+            history = backtester.fetch_real_data(symbol, days)
 
         if not history or len(history) < 20:
             return {"total_return": 0, "win_rate": 0, "max_drawdown": 0, "sharpe_ratio": 0}
