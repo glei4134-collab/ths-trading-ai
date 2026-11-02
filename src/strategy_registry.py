@@ -149,13 +149,12 @@ class StrategyRegistry:
         logger.info(f"保存自定义策略: {filepath}")
 
     def reload(self):
-        """重新加载所有策略"""
+        """重新加载所有策略 (Defect 13: 清除后重新执行自动注册与自定义策略装载)"""
         self._strategies.clear()
         self._instances.clear()
-        # 触发重新导入
-        import importlib
-        from . import strategies as pkg
-        importlib.reload(pkg)
+        _auto_register()
+        self.load_custom_strategies()
+        logger.info(f"重新加载策略完成，共注册 {len(self._strategies)} 个策略")
 
 
 # 全局策略注册表
