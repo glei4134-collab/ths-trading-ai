@@ -10,7 +10,12 @@ import math
 import logging
 from typing import Dict, List, Optional, Tuple, Union
 import numpy as np
-import scipy.stats as stats
+try:
+    import scipy.stats as stats
+    _HAS_SCIPY = True
+except ImportError:
+    stats = None
+    _HAS_SCIPY = False
 
 logger = logging.getLogger(__name__)
 
@@ -166,7 +171,7 @@ def calc_probabilistic_sharpe_ratio(
     std_sr = np.sqrt(variance_sr)
     z_score = (sr_hat - sr_star) / std_sr
 
-    psr = float(stats.norm.cdf(z_score))
+    psr = float(norm_cdf(z_score))
     return max(0.0, min(1.0, psr))
 
 
@@ -198,8 +203,8 @@ def calc_expected_max_sharpe(
     p1 = max(1e-12, min(1.0 - 1e-12, 1.0 - 1.0 / n_trials))
     p2 = max(1e-12, min(1.0 - 1e-12, 1.0 - 1.0 / (n_trials * math.e)))
 
-    z1 = float(stats.norm.ppf(p1))
-    z2 = float(stats.norm.ppf(p2))
+    z1 = norm_ppf(p1)
+    z2 = norm_ppf(p2)
 
     expected_max = std_sharpe_ann * ((1.0 - EULER_MASCHERONI) * z1 + EULER_MASCHERONI * z2)
     return float(expected_max)
@@ -349,7 +354,26 @@ def calc_distribution_moments(returns):
     return {'mean': m, 'std': s, 'skewness': sk, 'kurtosis': ku}
 
 def norm_cdf(x):
-    return float(stats.norm.cdf(x))
+    if _HAS_SCIPY and stats is not None:
+        return float(stats.norm.cdf(x))
+    return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
 
 def norm_ppf(p):
-    return float(stats.norm.ppf(p))
+    if _HAS_SCIPY and stats is not None:
+        return float(stats.norm.ppf(p))
+    if p <= 0.0:
+        return -8.0
+    if p >= 1.0:
+        return 8.0
+    if abs(p - 0.5) < 1e-12:
+        return 0.0
+    x = 2.0 * p - 1.0
+    sgn = 1.0 if x > 0 else -1.0
+    x_abs = abs(x)
+    a = 0.147
+    log_term = math.log(1.0 - x_abs ** 2)
+    part1 = (2.0 / (math.pi * a)) + (log_term / 2.0)
+    part2 = log_term / a
+    inner = math.sqrt(part1 ** 2 - part2) - part1
+    erf_inv = sgn * math.sqrt(max(inner, 0.0))
+    return math.sqrt(2.0) * erf_inv
