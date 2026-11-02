@@ -5,7 +5,7 @@
 
 import logging
 import random
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from datetime import timedelta
@@ -24,6 +24,7 @@ class BacktestTrade:
     amount: int
     value: float
     commission: float
+    stamp_duty: float = 0.0
     profit: float = 0
     strategy: str = ""
 
@@ -39,14 +40,16 @@ class BacktestResult:
     annual_return: float
     max_drawdown: float
     max_drawdown_duration: int
-    sharpe_ratio: float
-    win_rate: float
-    total_trades: int
-    winning_trades: int
-    losing_trades: int
-    avg_profit: float
-    avg_loss: float
-    profit_factor: float
+    sharpe_ratio: float = 0.0
+    sortino_ratio: float = 0.0
+    calmar_ratio: float = 0.0
+    win_rate: float = 0.0
+    total_trades: int = 0
+    winning_trades: int = 0
+    losing_trades: int = 0
+    avg_profit: float = 0.0
+    avg_loss: float = 0.0
+    profit_factor: float = 0.0
     trades: List[BacktestTrade] = field(default_factory=list)
     equity_curve: List[Dict] = field(default_factory=list)
     strategy_stats: Dict = field(default_factory=dict)
@@ -62,6 +65,8 @@ class BacktestResult:
             "max_drawdown": round(self.max_drawdown, 2),
             "max_drawdown_duration": self.max_drawdown_duration,
             "sharpe_ratio": round(self.sharpe_ratio, 2),
+            "sortino_ratio": round(self.sortino_ratio, 2),
+            "calmar_ratio": round(self.calmar_ratio, 2),
             "win_rate": round(self.win_rate, 2),
             "total_trades": self.total_trades,
             "winning_trades": self.winning_trades,
@@ -87,12 +92,14 @@ class AccountBacktestMetrics:
     annual_return: float
     max_drawdown: float
     max_drawdown_duration: int
-    sharpe_ratio: float
-    win_rate: float
-    profit_factor: float
-    total_trades: int
-    winning_trades: int
-    losing_trades: int
+    sharpe_ratio: float = 0.0
+    sortino_ratio: float = 0.0
+    calmar_ratio: float = 0.0
+    win_rate: float = 0.0
+    profit_factor: float = 0.0
+    total_trades: int = 0
+    winning_trades: int = 0
+    losing_trades: int = 0
     trades: List[Dict] = field(default_factory=list)
     equity_curve: List[Dict] = field(default_factory=list)
 
@@ -130,6 +137,8 @@ class MultiAccountBacktestResult:
     aggregate_annual_return: float = 0.0
     aggregate_max_drawdown: float = 0.0
     aggregate_sharpe_ratio: float = 0.0
+    aggregate_sortino_ratio: float = 0.0
+    aggregate_calmar_ratio: float = 0.0
     aggregate_win_rate: float = 0.0
     aggregate_total_trades: int = 0
     aggregate_equity_curve: List[Dict] = field(default_factory=list)
@@ -144,6 +153,8 @@ class MultiAccountBacktestResult:
             "aggregate_annual_return": round(self.aggregate_annual_return, 2),
             "aggregate_max_drawdown": round(self.aggregate_max_drawdown, 2),
             "aggregate_sharpe_ratio": round(self.aggregate_sharpe_ratio, 2),
+            "aggregate_sortino_ratio": round(self.aggregate_sortino_ratio, 2),
+            "aggregate_calmar_ratio": round(self.aggregate_calmar_ratio, 2),
             "aggregate_win_rate": round(self.aggregate_win_rate, 2),
             "aggregate_total_trades": self.aggregate_total_trades,
             "aggregate_equity_curve": self.aggregate_equity_curve[-50:],
@@ -159,9 +170,90 @@ class Backtester:
 
     def __init__(self):
         self.commission_rate = 0.0003   # 佣金费率
-        self.min_commission = 5         # 最低佣金
-        self.stamp_tax_rate = 0.001     # 印花税率（卖出）
+        self.min_commission = 5         # 最低佣金 5 元保底
+        self.stamp_tax_rate = 0.001     # 默认印花税率（历史分段请调用 calc_transaction_cost）
         self.slippage = 0.001           # 滑点 0.1%
+
+    def calc_transaction_cost(self, date_str: str, amount: float, action: str = 'buy') -> tuple:
+        """
+        全历史分段真实摩擦力成本模型：
+        - 佣金: 费率 self.commission_rate，最低 self.min_commission (5元保底)
+        - 印花税: 仅卖出收取。2023-08-28 之前为 0.1% (千分之一)，2023-08-28 起减半为 0.05% (万分之五)
+        - 过户费: 买卖双向收取 0.00001 (万分之0.1)
+        返回: (total_fee, commission, stamp_duty)
+        """
+        commission = max(amount * self.commission_rate, float(self.min_commission))
+        transfer_fee = amount * 0.00001
+        stamp_duty = 0.0
+        if str(action).lower() == 'sell':
+            d = str(date_str)[:10] if date_str else ''
+            if d and d < '2023-08-28':
+                stamp_duty = amount * 0.001
+            else:
+                stamp_duty = amount * 0.0005
+        total_fee = commission + stamp_duty + transfer_fee
+        return total_fee, commission, stamp_duty
+
+    def get_stamp_tax_rate(self, date_str: str) -> float:
+        """
+        A股分段印花税率：
+        - 2023-08-28 之前为 1‰ (0.001)
+        - 2023-08-28 起减半为 0.5‰ (0.0005 / 万五)
+        仅在卖出股票时单边征收。
+        """
+        if not date_str:
+            return 0.0005
+        d = str(date_str)[:10]
+        return 0.0005 if d >= "2023-08-28" else 0.001
+
+    def check_tradability(
+        self,
+        day: Dict,
+        prev_close: float,
+        action: str,
+        symbol: str = ""
+    ) -> Tuple[bool, str]:
+        """
+        A股可交易性掩码 (Tradability Mask):
+        1. 停牌检测：成交量 volume <= 0 或缺失，不可买卖
+        2. 一字涨停检测：开盘即涨停且全天最高=最低，封死涨停排单不成交，买入受阻
+        3. 一字跌停检测：开盘即跌停且全天最高=最低，封死跌停无法出逃，卖出受阻
+
+        Returns:
+            (is_tradable: bool, reason: str)
+        """
+        vol = float(day.get("volume") or 0)
+        if vol <= 0:
+            return False, "SUSPENDED"
+
+        open_p = float(day.get("open") or day.get("close", 0))
+        close_p = float(day.get("close", 0))
+        high_p = float(day.get("high") or max(open_p, close_p))
+        low_p = float(day.get("low") or min(open_p, close_p))
+
+        if prev_close <= 0:
+            return True, "OK"
+
+        sym = str(symbol).strip()
+        if sym.startswith(("30", "68")):
+            limit_ratio = 0.20  # 创业板、科创板 20%
+        elif sym.startswith(("43", "83", "87", "88", "92")):
+            limit_ratio = 0.30  # 北交所 30%
+        else:
+            limit_ratio = 0.10  # 主板 10%
+
+        limit_up_price = round(prev_close * (1.0 + limit_ratio), 2)
+        limit_down_price = round(prev_close * (1.0 - limit_ratio), 2)
+
+        act = action.lower()
+        if act in ("buy", "strong_buy", "weak_buy"):
+            if high_p <= low_p + 1e-4 and close_p >= limit_up_price - 0.01:
+                return False, "LIMIT_UP_BUY_BLOCKED"
+        elif act in ("sell", "strong_sell", "weak_sell", "stop_loss"):
+            if high_p <= low_p + 1e-4 and close_p <= limit_down_price + 0.01:
+                return False, "LIMIT_DOWN_SELL_BLOCKED"
+
+        return True, "OK"
 
     def fetch_real_data(self, symbol: str, days: int = 250) -> List[Dict]:
         """
@@ -404,66 +496,43 @@ class Backtester:
             low_p = float(day.get("low") or close_p)
             history = data[max(0, i-20):i]  # 前20天历史
 
-            # 1. 优先执行上一交易日收盘生成的挂单 (以次日 open 开盘价成交，杜绝未来函数)
+            prev_close_price = float(data[i-1]["close"]) if i > 0 else open_p
+
+            # 1. 优先执行上一交易日收盘生成的挂单 (以次日 open 开盘价成交，杜绝未来函数，同时经过可交易性掩码核验)
             if pending_action == "BUY" and position == 0:
-                max_shares = int(capital * position_size / open_p / 100) * 100
-                if max_shares >= 100:
-                    exec_price = open_p * (1 + self.slippage)
-                    commission = max(max_shares * exec_price * self.commission_rate, self.min_commission)
-                    cost = max_shares * exec_price + commission
-                    if cost <= capital:
-                        capital -= cost
-                        position = max_shares
-                        buy_price = exec_price
-                        trades.append(BacktestTrade(
-                            date=day["date"],
-                            symbol=symbol,
-                            action="buy",
-                            price=round(exec_price, 2),
-                            amount=max_shares,
-                            value=round(max_shares * exec_price, 2),
-                            commission=round(commission, 2),
-                            strategy=",".join(strategy_names)
-                        ))
-                pending_action = None
+                can_trade, reason = self.check_tradability(day, prev_close_price, "buy", symbol)
+                if can_trade:
+                    max_shares = int(capital * position_size / open_p / 100) * 100
+                    if max_shares >= 100:
+                        exec_price = open_p * (1 + self.slippage)
+                        total_fee, commission, _ = self.calc_transaction_cost(day.get("date", ""), max_shares * exec_price, action="buy")
+                        cost = max_shares * exec_price + total_fee
+                        if cost <= capital:
+                            capital -= cost
+                            position = max_shares
+                            buy_price = exec_price
+                            trades.append(BacktestTrade(
+                                date=day["date"],
+                                symbol=symbol,
+                                action="buy",
+                                price=round(exec_price, 2),
+                                amount=max_shares,
+                                value=round(max_shares * exec_price, 2),
+                                commission=round(commission, 2),
+                                strategy=",".join(strategy_names)
+                            ))
+                    pending_action = None
+                else:
+                    logger.debug(f"{day['date']} {symbol} 挂单 BUY 受阻: {reason}")
 
             elif pending_action == "SELL" and position > 0:
-                exec_price = open_p * (1 - self.slippage)
-                revenue = position * exec_price
-                commission = max(revenue * self.commission_rate, self.min_commission)
-                tax = revenue * self.stamp_tax_rate
-                capital += revenue - commission - tax
-                profit = (exec_price - buy_price) * position - commission - tax
-                trades.append(BacktestTrade(
-                    date=day["date"],
-                    symbol=symbol,
-                    action="sell",
-                    price=round(exec_price, 2),
-                    amount=position,
-                    value=round(revenue, 2),
-                    commission=round(commission + tax, 2),
-                    profit=round(profit, 2),
-                    strategy=",".join(strategy_names)
-                ))
-                for name in strategy_names:
-                    strategy_stats[name]["signals"] += 1
-                    if profit > 0:
-                        strategy_stats[name]["wins"] += 1
-                        strategy_stats[name]["total_profit"] += profit / buy_price * 100
-                position = 0
-                buy_price = 0
-                pending_action = None
-
-            # 2. 盘中毒瘤硬止损检查 (-8% 硬止损)
-            if position > 0 and buy_price > 0:
-                loss_pct = (low_p - buy_price) / buy_price
-                if loss_pct < -0.08:
-                    exec_price = buy_price * 0.92 * (1 - self.slippage)
+                can_trade, reason = self.check_tradability(day, prev_close_price, "sell", symbol)
+                if can_trade:
+                    exec_price = open_p * (1 - self.slippage)
                     revenue = position * exec_price
-                    commission = max(revenue * self.commission_rate, self.min_commission)
-                    tax = revenue * self.stamp_tax_rate
-                    capital += revenue - commission - tax
-                    profit = (exec_price - buy_price) * position - commission - tax
+                    total_fee, commission, tax = self.calc_transaction_cost(day.get("date", ""), revenue, action="sell")
+                    capital += revenue - total_fee
+                    profit = (exec_price - buy_price) * position - total_fee
                     trades.append(BacktestTrade(
                         date=day["date"],
                         symbol=symbol,
@@ -473,13 +542,49 @@ class Backtester:
                         value=round(revenue, 2),
                         commission=round(commission + tax, 2),
                         profit=round(profit, 2),
-                        strategy="stop_loss"
+                        strategy=",".join(strategy_names)
                     ))
                     for name in strategy_names:
                         strategy_stats[name]["signals"] += 1
+                        if profit > 0:
+                            strategy_stats[name]["wins"] += 1
+                            strategy_stats[name]["total_profit"] += profit / buy_price * 100
                     position = 0
                     buy_price = 0
                     pending_action = None
+                else:
+                    logger.debug(f"{day['date']} {symbol} 挂单 SELL 受阻: {reason}")
+
+            # 2. 盘中毒瘤硬止损检查 (-8% 硬止损)
+            if position > 0 and buy_price > 0:
+                loss_pct = (low_p - buy_price) / buy_price
+                if loss_pct < -0.08:
+                    can_trade, reason = self.check_tradability(day, prev_close_price, "sell", symbol)
+                    if can_trade:
+                        exec_price = buy_price * 0.92 * (1 - self.slippage)
+                        revenue = position * exec_price
+                        total_fee, commission, tax = self.calc_transaction_cost(day.get("date", ""), revenue, action="sell")
+                        capital += revenue - total_fee
+                        profit = (exec_price - buy_price) * position - total_fee
+                        trades.append(BacktestTrade(
+                            date=day["date"],
+                            symbol=symbol,
+                            action="sell",
+                            price=round(exec_price, 2),
+                            amount=position,
+                            value=round(revenue, 2),
+                            commission=round(commission + tax, 2),
+                            profit=round(profit, 2),
+                            strategy="stop_loss"
+                        ))
+                        for name in strategy_names:
+                            strategy_stats[name]["signals"] += 1
+                        position = 0
+                        buy_price = 0
+                        pending_action = None
+                    else:
+                        # 跌停封死无法止损，挂单保留至次日开盘继续出逃
+                        pending_action = "SELL"
 
             # 3. 构建当日收盘行情与技术指标并记录权益
             stock_data = {
@@ -575,6 +680,15 @@ class Backtester:
             s["win_rate"] = round(s["wins"] / s["signals"] * 100, 1) if s["signals"] > 0 else 0
             s["avg_profit"] = round(s["total_profit"] / s["wins"], 2) if s["wins"] > 0 else 0
 
+        # 索提诺与卡玛比率
+        downside_returns = [r for r in returns if r < 0] if 'returns' in locals() and returns else []
+        if downside_returns:
+            downside_std = (sum(r ** 2 for r in downside_returns) / len(returns)) ** 0.5
+            sortino_ratio = (avg_return * 250) / (downside_std * (250 ** 0.5)) if downside_std > 0 else 0.0
+        else:
+            sortino_ratio = sharpe_ratio * 1.5 if sharpe_ratio > 0 else 0.0
+        calmar_ratio = (annual_return / (max_drawdown * 100.0)) if max_drawdown > 0 else (annual_return if annual_return > 0 else 0.0)
+
         return BacktestResult(
             start_date=data[20]["date"] if len(data) > 20 else data[0]["date"],
             end_date=data[-1]["date"],
@@ -585,6 +699,8 @@ class Backtester:
             max_drawdown=max_drawdown * 100,
             max_drawdown_duration=max_drawdown_duration,
             sharpe_ratio=sharpe_ratio,
+            sortino_ratio=sortino_ratio,
+            calmar_ratio=calmar_ratio,
             win_rate=win_rate,
             total_trades=len(trades),
             winning_trades=winning_trades,
@@ -707,23 +823,25 @@ class Backtester:
                         except Exception:
                             pass
 
+                    prev_c = float(all_data[sym][i-1]["close"]) if i > 0 else price
                     if buy_count >= len(strategies) * 0.5:
-                        invest = capital * position_per_stock
-                        shares = int(invest / price / 100) * 100
-                        if shares >= 100:
-                            exec_price = price * (1 + self.slippage)
-                            cost = shares * exec_price
-                            commission = max(cost * self.commission_rate, self.min_commission)
-                            total_cost = cost + commission
-                            if total_cost <= capital:
-                                capital -= total_cost
-                                positions[sym] = {"shares": shares, "buy_price": exec_price}
-                                trades.append(BacktestTrade(
-                                    date=day["date"], symbol=sym, action="buy",
-                                    price=round(exec_price, 2), amount=shares,
-                                    value=round(cost, 2), commission=round(commission, 2),
-                                    strategy=",".join(strategy_names)
-                                ))
+                        can_trade, _ = self.check_tradability(day, prev_c, "buy", sym)
+                        if can_trade:
+                            invest = capital * position_per_stock
+                            shares = int(invest / price / 100) * 100
+                            if shares >= 100:
+                                exec_price = price * (1 + self.slippage)
+                                total_fee, commission, _ = self.calc_transaction_cost(day.get("date", ""), shares * exec_price, action="buy")
+                                total_cost = shares * exec_price + total_fee
+                                if total_cost <= capital:
+                                    capital -= total_cost
+                                    positions[sym] = {"shares": shares, "buy_price": exec_price}
+                                    trades.append(BacktestTrade(
+                                        date=day["date"], symbol=sym, action="buy",
+                                        price=round(exec_price, 2), amount=shares,
+                                        value=round(shares * exec_price, 2), commission=round(commission, 2),
+                                        strategy=",".join(strategy_names)
+                                    ))
 
                 else:
                     # 有持仓，看卖出
@@ -740,20 +858,22 @@ class Backtester:
                             pass
 
                     if sell_count >= len(strategies) * 0.5 or loss_pct < -0.08:
-                        exec_price = price * (1 - self.slippage)
-                        revenue = pos["shares"] * exec_price
-                        commission = max(revenue * self.commission_rate, self.min_commission)
-                        tax = revenue * self.stamp_tax_rate
-                        capital += revenue - commission - tax
+                        prev_c = float(all_data[sym][i-1]["close"]) if i > 0 else price
+                        can_trade, _ = self.check_tradability(day, prev_c, "sell", sym)
+                        if can_trade:
+                            exec_price = price * (1 - self.slippage)
+                            revenue = pos["shares"] * exec_price
+                            total_fee, commission, tax = self.calc_transaction_cost(day.get("date", ""), revenue, action="sell")
+                            capital += revenue - total_fee
 
-                        profit = (exec_price - pos["buy_price"]) * pos["shares"] - commission - tax
-                        trades.append(BacktestTrade(
-                            date=day["date"], symbol=sym, action="sell",
-                            price=round(exec_price, 2), amount=pos["shares"],
-                            value=round(revenue, 2), commission=round(commission + tax, 2),
-                            profit=round(profit, 2), strategy=",".join(strategy_names)
-                        ))
-                        del positions[sym]
+                            profit = (exec_price - pos["buy_price"]) * pos["shares"] - total_fee
+                            trades.append(BacktestTrade(
+                                date=day["date"], symbol=sym, action="sell",
+                                price=round(exec_price, 2), amount=pos["shares"],
+                                value=round(revenue, 2), commission=round(commission + tax, 2),
+                                profit=round(profit, 2), strategy=",".join(strategy_names)
+                            ))
+                            del positions[sym]
 
         # 最终资金
         final_position_value = sum(
@@ -777,6 +897,23 @@ class Backtester:
         avg_loss = sum(losses_list) / len(losses_list) if losses_list else 0
         profit_factor = abs(sum(profits) / sum(losses_list)) if losses_list else float('inf')
 
+        # 组合回测夏普、索提诺与卡玛比率
+        if len(equity_curve) > 1:
+            p_returns = []
+            for j in range(1, len(equity_curve)):
+                ret = (equity_curve[j]["equity"] - equity_curve[j-1]["equity"]) / equity_curve[j-1]["equity"]
+                p_returns.append(ret)
+            avg_ret = sum(p_returns) / len(p_returns) if p_returns else 0
+            std_ret = (sum((r - avg_ret) ** 2 for r in p_returns) / len(p_returns)) ** 0.5 if p_returns else 1
+            port_sharpe = (avg_ret * 250) / (std_ret * (250 ** 0.5)) if std_ret > 0 else 0
+            down_ret = [min(0.0, r) for r in p_returns]
+            down_std = (sum(r ** 2 for r in down_ret) / len(down_ret)) ** 0.5 if down_ret else 0.0
+            port_sortino = (avg_ret * 250) / (down_std * (250 ** 0.5)) if down_std > 0 else (99.0 if avg_ret > 0 else 0.0)
+        else:
+            port_sharpe = 0
+            port_sortino = 0
+        port_calmar = annual_return / (max_drawdown * 100.0) if max_drawdown > 0 else (99.0 if annual_return > 0 else 0.0)
+
         return BacktestResult(
             start_date=equity_curve[0]["date"] if equity_curve else "",
             end_date=equity_curve[-1]["date"] if equity_curve else "",
@@ -786,7 +923,9 @@ class Backtester:
             annual_return=annual_return,
             max_drawdown=max_drawdown * 100,
             max_drawdown_duration=0,
-            sharpe_ratio=0,
+            sharpe_ratio=port_sharpe,
+            sortino_ratio=port_sortino,
+            calmar_ratio=port_calmar,
             win_rate=win_rate,
             total_trades=len(trades),
             winning_trades=winning,
@@ -835,7 +974,8 @@ class Backtester:
             total_return=0, annual_return=0, max_drawdown=0,
             max_drawdown_duration=0, sharpe_ratio=0, win_rate=0,
             total_trades=0, winning_trades=0, losing_trades=0,
-            avg_profit=0, avg_loss=0, profit_factor=0
+            avg_profit=0, avg_loss=0, profit_factor=0,
+            sortino_ratio=0.0, calmar_ratio=0.0
         )
 
 
@@ -901,6 +1041,18 @@ class Backtester:
         losses = [abs(t["profit"]) for t in losing]
         pf = (sum(profits) / sum(losses)) if (losses and sum(losses) > 0) else (float('inf') if profits else 0.0)
 
+        # 索提诺比率 (Sortino Ratio) 与卡玛比率 (Calmar Ratio)
+        sortino = 0.0
+        if len(equity_curve) > 1:
+            downside_returns = [r for r in returns if r < 0]
+            if downside_returns:
+                downside_std = (sum(r ** 2 for r in downside_returns) / len(returns)) ** 0.5
+                sortino = (avg_ret * 250.0) / (downside_std * (250.0 ** 0.5)) if downside_std > 0 else 0.0
+            else:
+                sortino = sharpe * 1.5 if sharpe > 0 else 0.0
+
+        calmar = (annual_return / (max_drawdown * 100.0)) if max_drawdown > 0 else (annual_return if annual_return > 0 else 0.0)
+
         return {
             "initial_capital": initial_capital,
             "final_capital": final_capital,
@@ -909,6 +1061,8 @@ class Backtester:
             "max_drawdown": max_drawdown * 100.0,
             "max_drawdown_duration": max_duration,
             "sharpe_ratio": sharpe,
+            "sortino_ratio": sortino,
+            "calmar_ratio": calmar,
             "win_rate": win_rate,
             "profit_factor": pf if pf != float('inf') else 999.0,
             "total_trades": len(trades),
@@ -1012,12 +1166,16 @@ class Backtester:
                 # 调用 AI 大脑（含风格与异构风控过滤）
                 dec = ai_brain.decide(symbol, stock_data, indicators, account_info=acc_info, strategy_names=strat_list)
 
+                prev_c = float(data[i-1]["close"]) if i > 0 else price
+                can_buy, _ = self.check_tradability(day, prev_c, "buy", symbol)
+                can_sell, _ = self.check_tradability(day, prev_c, "sell", symbol)
+
                 # 处理买入
-                if dec.action == "buy" and dec.status == "APPROVED" and dec.position_size > 0:
+                if dec.action == "buy" and dec.status == "APPROVED" and dec.position_size > 0 and can_buy:
                     buy_qty = dec.position_size
                     exec_px = price * (1 + self.slippage)
-                    comm = max(buy_qty * exec_px * self.commission_rate, self.min_commission)
-                    cost = buy_qty * exec_px + comm
+                    total_fee, comm, _ = self.calc_transaction_cost(date_str, buy_qty * exec_px, action="buy")
+                    cost = buy_qty * exec_px + total_fee
                     if cost <= st.cap:
                         st.cap -= cost
                         st.pos_shares += buy_qty
@@ -1030,17 +1188,17 @@ class Backtester:
                         })
 
                 # 处理卖出
-                elif dec.action == "sell" and dec.status == "APPROVED" and st.pos_shares > 0:
+                elif dec.action == "sell" and dec.status == "APPROVED" and st.pos_shares > 0 and can_sell:
                     sell_qty = st.pos_shares
                     exec_px = price * (1 - self.slippage)
-                    comm = max(sell_qty * exec_px * self.commission_rate, self.min_commission)
-                    revenue = sell_qty * exec_px - comm
-                    profit = (exec_px - st.buy_px) * sell_qty - comm
-                    st.cap += revenue
+                    revenue = sell_qty * exec_px
+                    total_fee, comm, tax = self.calc_transaction_cost(date_str, revenue, action="sell")
+                    profit = (exec_px - st.buy_px) * sell_qty - total_fee
+                    st.cap += (revenue - total_fee)
                     st.trades.append({
                         "date": date_str, "symbol": symbol, "action": "sell",
                         "price": round(exec_px, 2), "amount": sell_qty,
-                        "value": round(sell_qty * exec_px, 2), "commission": round(comm, 2),
+                        "value": round(sell_qty * exec_px, 2), "commission": round(comm + tax, 2),
                         "profit": round(profit, 2),
                         "profit_pct": round(profit / (st.buy_px * sell_qty) * 100, 2) if st.buy_px > 0 else 0.0,
                         "reasons": dec.reasons[-1] if dec.reasons else ""
@@ -1071,6 +1229,8 @@ class Backtester:
                 max_drawdown=m["max_drawdown"],
                 max_drawdown_duration=m["max_drawdown_duration"],
                 sharpe_ratio=m["sharpe_ratio"],
+                sortino_ratio=m["sortino_ratio"],
+                calmar_ratio=m["calmar_ratio"],
                 win_rate=m["win_rate"],
                 profit_factor=m["profit_factor"],
                 total_trades=m["total_trades"],
@@ -1095,6 +1255,8 @@ class Backtester:
             aggregate_annual_return=agg_m["annual_return"],
             aggregate_max_drawdown=agg_m["max_drawdown"],
             aggregate_sharpe_ratio=agg_m["sharpe_ratio"],
+            aggregate_sortino_ratio=agg_m["sortino_ratio"],
+            aggregate_calmar_ratio=agg_m["calmar_ratio"],
             aggregate_win_rate=agg_m["win_rate"],
             aggregate_total_trades=agg_m["total_trades"],
             aggregate_equity_curve=agg_curve

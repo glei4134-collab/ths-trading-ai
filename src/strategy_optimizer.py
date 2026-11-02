@@ -157,6 +157,20 @@ class StrategyOptimizer:
                 "state": str(t.state)
             })
 
+        # 针对多重测试进行 Deflated Sharpe Ratio (DSR) 贴现防过拟合
+        dsr_metrics = {}
+        try:
+            from statistical_tests import deflated_sharpe_ratio
+            trials_values = [float(t.value) for t in study.trials if t.value is not None and t.value > -900]
+            if trials_values:
+                dsr_metrics = deflated_sharpe_ratio(
+                    observed_sr=float(best_value) if best_value else 0.0,
+                    trials_sr_list=trials_values,
+                    n_samples=days
+                )
+        except Exception as e:
+            logger.debug(f"DSR 贴现计算跳过: {e}")
+
         return {
             "success": True,
             "strategy": strategy_name,
@@ -164,6 +178,7 @@ class StrategyOptimizer:
             "n_trials": len(study.trials),
             "best_params": best_params,
             "best_value": round(best_value, 4) if best_value else 0,
+            "dsr_metrics": dsr_metrics,
             "importance": {k: round(v, 4) for k, v in importance.items()},
             "all_trials": all_trials,
             "best_result": self._run_backtest(strategy_name, stock_data, indicators, best_params, days)
