@@ -446,16 +446,43 @@ class StrategyOptimizer:
         # 计算指标
         history = backtester.calculate_indicators_for_data(history)
 
-        # 模拟交易
+        # 模拟交易 (Defect 1 彻底治理未来函数, Defect 3 线程安全传参, Defect 5 FIFO 胜率配对)
         capital = 1000000
         position = 0
         trades = []
         equity = [capital]
 
+        # 时序解耦：第 i 天收盘决策，次日第 i+1 天开盘以 open 价格执行成交，杜绝未来函数
+        pending_signal = None
+
         for i in range(20, len(history)):
             day = history[i]
+            open_price = float(day.get("open") or day["close"])
+            close_price = float(day["close"])
+
+            # 1. 优先执行上一交易日生成的挂单信号 (以当日 open 成交，杜绝未来函数)
+            if pending_signal:
+                action = pending_signal.value
+                if action in ("STRONG_BUY", "BUY") and position == 0:
+                    shares = (capital // (open_price * 100)) * 100
+                    if shares >= 100:
+                        exec_price = open_price * 1.0003  # 包含滑点/冲击成本
+                        capital -= shares * exec_price
+                        position = shares
+                        trades.append({"action": "buy", "price": exec_price, "date": day.get("date")})
+                elif action in ("STRONG_SELL", "SELL") and position > 0:
+                    exec_price = open_price * 0.999
+                    capital += position * exec_price
+                    trades.append({"action": "sell", "price": exec_price, "date": day.get("date")})
+                    position = 0
+                pending_signal = None
+
+            # 2. 当日收盘指标构建
             day_indicators = {
-                "close": day.get("close"),
+                "close": close_price,
+                "open": open_price,
+                "high": day.get("high"),
+                "low": day.get("low"),
                 "ma5": day.get("ma5"), "ma10": day.get("ma10"),
                 "ma20": day.get("ma20"), "rsi": day.get("rsi"),
                 "macd": day.get("macd"), "signal": day.get("signal"),
@@ -463,46 +490,38 @@ class StrategyOptimizer:
                 "bb_upper": day.get("bb_upper"), "bb_lower": day.get("bb_lower"),
             }
 
-            # 临时覆盖参数
-            original_params = {}
-            for k, v in params.items():
-                if k in strategy.params:
-                    original_params[k] = strategy.params[k].get("default")
-                    strategy.params[k]["default"] = v
-
+            # 3. 线程安全传参 (Defect 3)
             try:
                 result = strategy.analyze(
-                    {"price": day["close"], "volume": day.get("volume", 0)},
+                    {"price": close_price, "volume": day.get("volume", 0)},
+                    day_indicators,
+                    history=history[max(0, i-20):i+1],
+                    params=params
+                )
+            except TypeError:
+                result = strategy.analyze(
+                    {"price": close_price, "volume": day.get("volume", 0)},
                     day_indicators,
                     history=history[max(0, i-20):i+1]
                 )
-            finally:
-                for k, v in original_params.items():
-                    strategy.params[k]["default"] = v
 
-            price = day["close"]
+            pending_signal = result.signal
+            equity.append(capital + position * close_price)
 
-            if result.signal.value in ("STRONG_BUY", "BUY") and position == 0:
-                shares = (capital // (price * 100)) * 100
-                if shares >= 100:
-                    capital -= shares * price * 1.0003
-                    position = shares
-                    trades.append({"action": "buy", "price": price})
-
-            elif result.signal.value in ("STRONG_SELL", "SELL") and position > 0:
-                capital += position * price * 0.999
-                trades.append({"action": "sell", "price": price})
-                position = 0
-
-            equity.append(capital + position * price)
-
-        # 计算指标
+        # 4. 计算指标 (Defect 5: FIFO 先进先出配对真实胜率)
         total_return = (equity[-1] / equity[0] - 1) * 100 if equity[0] > 0 else 0
-        buy_trades = [t for t in trades if t["action"] == "buy"]
-        sell_trades = [t for t in trades if t["action"] == "sell"]
-        wins = sum(1 for i in range(min(len(buy_trades), len(sell_trades)))
-                   if sell_trades[i]["price"] > buy_trades[i]["price"])
-        win_rate = (wins / len(buy_trades) * 100) if buy_trades else 0
+        buy_queue = []
+        wins = 0
+        total_completed = 0
+        for t in trades:
+            if t["action"] == "buy":
+                buy_queue.append(t["price"])
+            elif t["action"] == "sell" and buy_queue:
+                buy_p = buy_queue.pop(0)
+                total_completed += 1
+                if t["price"] > buy_p:
+                    wins += 1
+        win_rate = (wins / total_completed * 100) if total_completed > 0 else 0
 
         max_dd = 0
         peak = equity[0]
