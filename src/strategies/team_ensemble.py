@@ -115,6 +115,7 @@ class TeamEnsembleStrategy(BaseStrategy):
         weights = self._get_regime_weights(market_data, is_auction=is_auction)
 
         votes_buy = 0
+        votes_sell = 0
         total_weighted_score = 0.0
         total_weighted_conf = 0.0
         total_weight = sum(weights.values())
@@ -137,8 +138,11 @@ class TeamEnsembleStrategy(BaseStrategy):
                 if sub_res.signal in (Signal.BUY, Signal.STRONG_BUY):
                     votes_buy += 1
                     sub_reasons.append(f"[{strat.name}:赞成({sub_res.score:+.2f})]")
+                elif sub_res.signal in (Signal.SELL, Signal.STRONG_SELL):
+                    votes_sell += 1
+                    sub_reasons.append(f"[{strat.name}:做空否决({sub_res.score:+.2f})]")
                 else:
-                    sub_reasons.append(f"[{strat.name}:中立或否决]")
+                    sub_reasons.append(f"[{strat.name}:中立]")
 
                 total_weighted_score += sub_res.score * w
                 total_weighted_conf += sub_res.confidence * w
@@ -147,6 +151,7 @@ class TeamEnsembleStrategy(BaseStrategy):
 
         final_score = total_weighted_score / total_weight if total_weight > 0 else 0
         final_conf = total_weighted_conf / total_weight if total_weight > 0 else 0
+        net_votes = votes_buy - votes_sell
 
         min_votes = self.params["min_votes"]["default"]
         min_conf = self.params["min_confidence"]["default"]
@@ -154,23 +159,25 @@ class TeamEnsembleStrategy(BaseStrategy):
 
         mode_desc = "集合竞价定盘模式" if is_auction else "盘中K线常规模式"
         reasons = [
-            f"团队策略投票({mode_desc}): {votes_buy}/{len(self.sub_strategies)} 赞成",
+            f"团队策略投票({mode_desc}): 赞成 {votes_buy} 票, 反对 {votes_sell} 票 (净票数 {net_votes:+d})",
             f"综合评分: {final_score:+.2f}, 置信度: {final_conf:.2f}",
             "子策略明细: " + " ".join(sub_reasons)
         ]
 
-        # 判定表决通过门槛
+        # 判定表决通过门槛 (Defect 9: 考量 SELL 强度与做空否决)
         vote_passed = False
-        if is_auction:
+        if votes_sell >= 2 and votes_sell >= votes_buy:
+            reasons.append(f"⚠️ 多策略集成被做空票数否决: 反对({votes_sell}) >= 赞成({votes_buy})")
+        elif is_auction:
             # 集合竞价时段：若 >=2 票赞成且置信度>=0.55且评分>0.20；或 >=1 票且置信度>=0.75与评分>0.38 (高确定性突破加速)
-            if votes_buy >= 2 and final_conf >= 0.55 and final_score > 0.20:
+            if votes_buy >= 2 and final_conf >= 0.55 and final_score > 0.20 and votes_sell == 0:
                 vote_passed = True
                 reasons.append("⚡ 集合竞价多策略集成赞成表决通过")
-            elif votes_buy >= 1 and final_conf >= 0.72 and final_score >= 0.35:
+            elif votes_buy >= 1 and final_conf >= 0.72 and final_score >= 0.35 and votes_sell == 0:
                 vote_passed = True
                 reasons.append("⚡ 集合竞价高确定性放量突破/趋势加速表决通过")
         else:
-            if votes_buy >= min_votes and final_conf >= min_conf and final_score > 0.25:
+            if net_votes >= min_votes and final_conf >= min_conf and final_score > 0.25 and votes_sell <= 1:
                 vote_passed = True
 
         # 核心风控校验1: 三级共振（大盘 × 板块 × 个股），早盘集合竞价仅允许前 5 主线板块或主力净流入为正
@@ -190,8 +197,9 @@ class TeamEnsembleStrategy(BaseStrategy):
             except Exception as se:
                 logger.debug(f"三级共振校验异常: {se}")
 
-        # 核心风控校验2: 主力资金背离校验（舆情分 >= 75 但主力大单净流出超过流通市值 0.8%，一票否决防诱多）
-        sentiment_score = 50
+        # 核心风控校验2: 主力资金背离校验 (Defect 10: 抽离复用公共函数 check_capital_divergence)
+        from .base import check_capital_divergence
+        sentiment_score = 50.0
         if market_data and market_data.get("sentiment_score") is not None:
             sentiment_score = float(market_data["sentiment_score"])
         elif "sentiment" in kwargs and isinstance(kwargs["sentiment"], dict):
@@ -199,16 +207,10 @@ class TeamEnsembleStrategy(BaseStrategy):
         elif stock_data.get("sentiment_score") is not None:
             sentiment_score = float(stock_data["sentiment_score"])
 
-        net_outflow_ratio = float(stock_data.get("main_net_outflow_ratio", 0) or stock_data.get("large_order_net_outflow_pct", 0) or 0)
-        if net_outflow_ratio <= 0 and stock_data.get("main_net_outflow") and stock_data.get("float_market_cap"):
-            try:
-                net_outflow_ratio = float(stock_data["main_net_outflow"]) / float(stock_data["float_market_cap"])
-            except (KeyError, ValueError, TypeError, ZeroDivisionError) as e:
-                logger.debug(f"计算主力净流出比例失败: {e}")
-
-        if sentiment_score >= 75 and net_outflow_ratio >= 0.008:
+        is_div, net_outflow_ratio, div_reason = check_capital_divergence(stock_data, sentiment_score)
+        if is_div:
             vote_passed = False
-            reasons.append(f"🚨 主力资金背离一票否决: 舆情分高达{sentiment_score:.0f}分，但主力大单净流出占流通市值{net_outflow_ratio*100:.2f}% (>=0.80%)，判定为高位诱多出货！")
+            reasons.append(f"🚨 {div_reason}")
 
         if vote_passed:
             sig = Signal.STRONG_BUY if (votes_buy >= 3 or (is_auction and final_conf >= 0.70)) else Signal.BUY
