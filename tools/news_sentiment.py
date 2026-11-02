@@ -82,6 +82,7 @@ _session.trust_env = False
 _MEM_CACHE: Dict = {}
 _MEM_CACHE_TIME: float = 0.0
 _MEM_CACHE_TTL: float = 600.0  # 10 分钟
+DEFAULT_HTTP_TIMEOUT: float = 5.0  # HTTP 请求默认防挂起超时
 
 # ========== 新闻源抓取器（单源超时严格 <= 4.0 秒） ==========
 
@@ -273,23 +274,28 @@ def fetch_all_news_concurrent(timeout_per_source: float = 4.0, max_workers: int 
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_map = {executor.submit(fn): name for name, fn in ALL_FETCHERS}
-        for future in as_completed(future_map, timeout=timeout_per_source + 2.0):
-            src_name = future_map[future]
-            try:
-                titles = future.result(timeout=timeout_per_source)
-                added = 0
-                for t in titles:
-                    if not t or len(t) < 5:
-                        continue
-                    # 标题特征指纹去重
-                    h = hashlib.md5(t[:30].encode("utf-8")).hexdigest()
-                    if h not in seen_hashes:
-                        seen_hashes.add(h)
-                        all_news.append((t, src_name))
-                        added += 1
-            except Exception as e:
-                # 即使单源超时或异常，直接捕获跳过，绝不阻塞整体抓取
-                pass
+        try:
+            for future in as_completed(future_map, timeout=timeout_per_source + 2.0):
+                src_name = future_map[future]
+                try:
+                    titles = future.result(timeout=timeout_per_source)
+                    added = 0
+                    for t in titles:
+                        if not t or len(t) < 5:
+                            continue
+                        # 标题特征指纹去重
+                        h = hashlib.md5(t[:30].encode("utf-8")).hexdigest()
+                        if h not in seen_hashes:
+                            seen_hashes.add(h)
+                            all_news.append((t, src_name))
+                            added += 1
+                except Exception as e:
+                    # 单源超时或异常捕获跳过
+                    pass
+        except TimeoutError:
+            pass  # 达到外层总超时上限，安全返回已收集的部分新闻
+        except Exception:
+            pass
 
     return all_news
 

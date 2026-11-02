@@ -64,9 +64,10 @@ class TimingDipBuyer:
                                      reason: str = "资金受限/等待回踩", 
                                      target_price: float = 0.0,
                                      industry: str = "",
-                                     initial_price: float = 0.0):
-        """登记或更新未买入重点关注标的"""
-        now_ts = time.time()
+                                     initial_price: float = 0.0,
+                                     now: Optional[datetime] = None):
+        """登记或更新未买入重点关注标的（支持 M8: now 回测时钟注入）"""
+        now_ts = now.timestamp() if now else time.time()
         init_p = float(initial_price or target_price or 0.0)
         if symbol not in self.watchlist:
             self.watchlist[symbol] = {
@@ -101,14 +102,14 @@ class TimingDipBuyer:
 
     def update_quote(self, symbol: str, current_price: float, change_pct: float, 
                      high: float = 0.0, low: float = 0.0, volume: float = 0.0,
-                     quote: Optional[Dict[str, Any]] = None, **kwargs) -> Dict[str, Any]:
-        """更新个股即时行情并计算时序微观低吸信号 (支持OBI/量比/错过涨幅统计)"""
+                     quote: Optional[Dict[str, Any]] = None, now: Optional[datetime] = None, **kwargs) -> Dict[str, Any]:
+        """更新个股即时行情并计算时序微观低吸信号 (T9: 涨跌幅安全区间校验 [-7.0%, +5.0%], M8: now 回测时钟注入)"""
         try:
             if symbol not in self.watchlist:
                 return {}
 
             item = self.watchlist[symbol]
-            now_ts = time.time()
+            now_ts = now.timestamp() if now else time.time()
             
             # 补全初始登记价格
             if item.get("initial_price", 0.0) <= 0:
@@ -168,8 +169,19 @@ class TimingDipBuyer:
             suggested_action = "CONTINUE_OBSERVE"
 
             if item["score"] >= DIP_SCORE_THRESHOLD:
-                if PULLBACK_MIN <= pullback_pct <= PULLBACK_MAX and current_price >= item["vwap"] * 0.995:
-                    # 触发优质低吸黄金点 (结合OBI微观调节)
+                # ===== T9 (低吸风控边界保护)：严格校验涨跌幅安全区间 [-7.0%, +5.0%] =====
+                if change_pct > 5.0:
+                    # 日内冲高幅度过大 (>5.0%)，判定为追高风险，拒绝低吸买入
+                    dip_score = 45.0
+                    signal = "OVERBOUGHT_HIGH"
+                    suggested_action = "REJECT_CHASE_HIGH"
+                elif change_pct < -7.0:
+                    # 重挫破位形态 (<-7.0%)，判定为严重下行破位，拒绝盲目抄底接飞刀
+                    dip_score = 30.0
+                    signal = "AVOID_DEEP_FALL"
+                    suggested_action = "REJECT_FALLING_KNIFE"
+                elif PULLBACK_MIN <= pullback_pct <= PULLBACK_MAX and current_price >= item["vwap"] * 0.995:
+                    # 仅在 -7.0% <= change_pct <= 5.0% 且满足回踩与支撑条件时才触发买入
                     obi_bonus = 5.0 if obi > OBI_BULLISH else (0.0 if obi >= OBI_BEARISH else -5.0)
                     dip_score = round(item["score"] * 0.5 + 45.0 + (PULLBACK_MAX - pullback_pct) * 5.0 + obi_bonus, 1)
                     signal = "TIMING_DIP_BUY"
@@ -179,8 +191,8 @@ class TimingDipBuyer:
                     dip_score = 40.0
                     signal = "AVOID_DEEP_FALL"
                     suggested_action = "WAIT_FOR_STABILIZE"
-                elif pullback_pct < 1.0 and change_pct > 5.0:
-                    # 依然处于冲高顶部，追高风险大
+                elif pullback_pct < 1.0 and change_pct > 3.0:
+                    # 处于冲高顶部，追高风险大
                     dip_score = 50.0
                     signal = "OVERBOUGHT_HIGH"
                     suggested_action = "WAIT_FOR_PULLBACK"
@@ -216,6 +228,15 @@ class TimingDipBuyer:
             logger.warning(f"[update_quote] 标的 {symbol} 行情更新异常，跳过该标的: {e}")
             return {}
 
+    def evaluate_dip_candidate(self, symbol: str, current_price: float, change_pct: float,
+                               high: float = 0.0, low: float = 0.0, volume: float = 0.0,
+                               quote: Optional[Dict[str, Any]] = None, now: Optional[datetime] = None,
+                               **kwargs) -> Dict[str, Any]:
+        """
+        评估低吸标的资格 (T9: 严格校验涨跌幅安全区间 [-7.0%, +5.0%], M8: 支持 now 注入)
+        """
+        return self.update_quote(symbol, current_price, change_pct, high=high, low=low, volume=volume, quote=quote, now=now, **kwargs)
+
     update_quote_and_check = update_quote
 
     def get_actionable_dip_candidates(self, min_dip_score: float = 75.0) -> List[Dict[str, Any]]:
@@ -228,10 +249,10 @@ class TimingDipBuyer:
         actionable.sort(key=lambda x: x.get("dip_score", 0), reverse=True)
         return actionable
 
-    def get_summary_list(self) -> List[Dict[str, Any]]:
-        """获取所有未买入追踪标的详细结构（供前端与大屏展示）"""
+    def get_summary_list(self, now: Optional[datetime] = None) -> List[Dict[str, Any]]:
+        """获取所有未买入追踪标的详细结构（支持 M8: now 回测时钟注入）"""
         res = []
-        now_ts = time.time()
+        now_ts = now.timestamp() if now else time.time()
         for symbol, item in self.watchlist.items():
             res.append({
                 "symbol": symbol,
@@ -264,7 +285,7 @@ class PositionRetentionDecider:
         pass
 
     def evaluate_retention(self, position: Dict[str, Any], quote: Dict[str, Any], 
-                           news_sentiment_score: float = 50.0) -> Dict[str, Any]:
+                           news_sentiment_score: float = 50.0, now: Optional[datetime] = None) -> Dict[str, Any]:
         """
         全要素评估现有持仓去留决策 (支持成本价三级兜底与新闻舆情权重修正)
         :param position: 当前账户持仓数据 (symbol, amount, cost_price, avg_price, total_cost, profit_rate, held_days, etc.)
@@ -414,20 +435,27 @@ class PositionRetentionDecider:
 
 
 class UnsoldPositionController:
-    """未卖出预期时间合理调控模块 (Unsold Position Controller) - 支持多账户 (account_id, symbol) 复合键严格隔离"""
+    """未卖出预期时间合理调控模块 (Unsold Position Controller) - 支持多账户与订单维度 (account_id, symbol, order_id) 复合键严格隔离与防覆盖"""
 
     def __init__(self):
-        # 跟踪预期卖出指令：(account_id, symbol) -> {expected_sell_time, target_price, reason, order_id, register_time}
-        self.pending_sells: Dict[Tuple[int, str], Dict[str, Any]] = {}
+        # 跟踪预期卖出指令：(account_id, symbol, order_id) -> {expected_sell_time, target_price, reason, order_id, register_time}
+        self.pending_sells: Dict[Any, Dict[str, Any]] = {}
 
     def register_expected_sell(self, symbol: str, name: str, expected_sell_time_str: str, 
-                               target_price: float, reason: str = "时序计划卖出", order_id: str = "", account_id: int = 1):
-        """登记一笔有预期时间的卖出计划（采用 (account_id, symbol) 复合键严格隔离）"""
+                               target_price: float, reason: str = "时序计划卖出", order_id: str = "", account_id: int = 1,
+                               now: Optional[datetime] = None):
+        """登记一笔有预期时间的卖出计划（采用 (account_id, symbol, order_id) 复合键隔离，防止多笔分批挂单相互覆盖，支持 now 回测时钟注入）"""
         acc_id = int(account_id) if account_id is not None else 1
         sym = str(symbol).strip()
-        comp_key = (acc_id, sym)
+        ord_id = str(order_id).strip() if order_id is not None else ""
+        if not ord_id:
+            count = sum(1 for k in self.pending_sells if (isinstance(k, tuple) and len(k) >= 2 and k[0] == acc_id and k[1] == sym))
+            ord_id = f"auto_{count + 1}_{int(time.time()*1000)}"
+
+        comp_key = (acc_id, sym, ord_id)
+        now_ts = now.timestamp() if now else time.time()
         self.pending_sells[comp_key] = {
-            "key": f"{acc_id}:{sym}",
+            "key": f"{acc_id}:{sym}:{ord_id}",
             "composite_key": comp_key,
             "account_id": acc_id,
             "symbol": sym,
@@ -435,38 +463,62 @@ class UnsoldPositionController:
             "expected_sell_time": expected_sell_time_str,
             "target_price": target_price,
             "reason": reason,
-            "order_id": order_id,
-            "registered_at": time.time(),
+            "order_id": ord_id,
+            "registered_at": now_ts,
             "status": "AWAITING_TIME",
             "tuning_action": "NONE"
         }
+        return comp_key
 
-    def cancel_expected_sell(self, symbol: str, account_id: Optional[int] = None) -> bool:
-        """撤销预期卖出计划（支持指定 account_id 或全量匹配标的撤销）"""
+    def cancel_expected_sell(self, symbol: str, account_id: Optional[int] = None, order_id: Optional[str] = None) -> bool:
+        """撤销预期卖出计划（支持指定 order_id、account_id 或全量匹配标的撤销）"""
         sym = str(symbol).strip()
+        target_ord = str(order_id).strip() if order_id is not None and str(order_id).strip() != "" else None
         removed = False
-        if account_id is not None:
-            key = (int(account_id), sym)
-            if key in self.pending_sells:
-                del self.pending_sells[key]
-                removed = True
-            str_key = f"{account_id}:{sym}"
-            if str_key in self.pending_sells:
-                del self.pending_sells[str_key]
-                removed = True
-        else:
-            keys_to_del = [
-                k for k in list(self.pending_sells.keys())
-                if (isinstance(k, tuple) and len(k) == 2 and k[1] == sym) or k == sym or (isinstance(k, str) and k.endswith(f":{sym}"))
-            ]
-            for k in keys_to_del:
+
+        keys_to_del = []
+        for k, item in list(self.pending_sells.items()):
+            # 校验 symbol
+            k_sym = item.get("symbol", "")
+            if not k_sym:
+                if isinstance(k, tuple) and len(k) >= 2:
+                    k_sym = str(k[1])
+                elif isinstance(k, str) and ":" in k:
+                    parts = k.split(":")
+                    k_sym = parts[1] if len(parts) > 1 else parts[0]
+                else:
+                    k_sym = str(k)
+            if k_sym != sym:
+                continue
+
+            # 校验 account_id
+            if account_id is not None:
+                item_acc = item.get("account_id")
+                if item_acc is None and isinstance(k, tuple) and len(k) >= 1:
+                    item_acc = k[0]
+                if item_acc is not None and int(item_acc) != int(account_id):
+                    continue
+
+            # 校验 order_id
+            if target_ord is not None:
+                item_ord = str(item.get("order_id", ""))
+                k_ord = str(k[2]) if isinstance(k, tuple) and len(k) >= 3 else ""
+                if item_ord != target_ord and k_ord != target_ord:
+                    continue
+
+            keys_to_del.append(k)
+
+        for k in keys_to_del:
+            if k in self.pending_sells:
                 del self.pending_sells[k]
                 removed = True
+
         return removed
 
     def evaluate_unsold_status(self, symbol: str, current_price: float, change_pct: float,
                                now_time_str: Optional[str] = None, account_id: Optional[int] = None,
-                               quote: Optional[Dict[str, Any]] = None, **kwargs) -> Optional[Dict[str, Any]]:
+                               order_id: Optional[str] = None,
+                               quote: Optional[Dict[str, Any]] = None, now: Optional[datetime] = None, **kwargs) -> Optional[Dict[str, Any]]:
         """
         对已超预期时间却未卖出的标的进行智能调控 (记录滑点损失率与买一支撑占比)
         调控逻辑：
@@ -476,18 +528,36 @@ class UnsoldPositionController:
         """
         try:
             sym = str(symbol).strip()
+            target_ord = str(order_id).strip() if order_id is not None and str(order_id).strip() != "" else kwargs.get("order_id")
             target_item = None
-            if account_id is not None:
-                key = (int(account_id), sym)
-                target_item = self.pending_sells.get(key)
+
+            # 1. 精确匹配复合键 (account_id, symbol, order_id)
+            if account_id is not None and target_ord:
+                exact_key = (int(account_id), sym, str(target_ord))
+                target_item = self.pending_sells.get(exact_key)
                 if not target_item:
-                    target_item = self.pending_sells.get(f"{account_id}:{sym}") or self.pending_sells.get(sym)
-            else:
-                # 若未传入 account_id，遍历寻找对应 symbol 的首个匹配记录
+                    target_item = self.pending_sells.get(f"{account_id}:{sym}:{target_ord}")
+
+            # 2. 遍历查找匹配项
+            if not target_item:
                 for k, val in self.pending_sells.items():
-                    if (isinstance(k, tuple) and len(k) == 2 and k[1] == sym) or (isinstance(k, str) and (k == sym or k.endswith(f":{sym}"))):
+                    k_sym = val.get("symbol") or (k[1] if isinstance(k, tuple) and len(k) >= 2 else str(k))
+                    if k_sym != sym:
+                        continue
+                    if account_id is not None:
+                        k_acc = val.get("account_id") or (k[0] if isinstance(k, tuple) and len(k) >= 1 else None)
+                        if k_acc is not None and int(k_acc) != int(account_id):
+                            continue
+                    if target_ord:
+                        k_ord = val.get("order_id") or (k[2] if isinstance(k, tuple) and len(k) >= 3 else "")
+                        if str(k_ord) != str(target_ord):
+                            continue
+                    # 优先挑选尚未处理完成/处于等待或超时的单据
+                    if val.get("status") not in ("COMPLETED", "EXECUTED"):
                         target_item = val
                         break
+                    if not target_item:
+                        target_item = val
 
             if not target_item:
                 return {}
@@ -500,6 +570,7 @@ class UnsoldPositionController:
                     "account_id": item.get("account_id", account_id or 1),
                     "symbol": sym,
                     "name": item.get("name", sym),
+                    "order_id": item.get("order_id", ""),
                     "status": item.get("status"),
                     "tuning_action": "ALREADY_ORDERED",
                     "tuning_reason": f"该标的已下发 {item.get('status')} 指令，跳过重复触发",
@@ -508,7 +579,7 @@ class UnsoldPositionController:
 
             acc_id = item.get("account_id", account_id or 1)
             if not now_time_str:
-                now_time_str = datetime.now().strftime("%H:%M:%S")
+                now_time_str = (now or datetime.now()).strftime("%H:%M:%S")
 
             # 滑点损失率计算 (Slippage %): 相对目标卖出价的滑点
             target_p = float(item.get("target_price", 0.0) or 0.0)
@@ -606,15 +677,15 @@ intraday_timing_engine = {
 }
 
 
-def get_detailed_timing_metrics(account_id: Optional[int] = None) -> Dict[str, Any]:
+def get_detailed_timing_metrics(account_id: Optional[int] = None, now: Optional[datetime] = None) -> Dict[str, Any]:
     """
-    全局时序微观量化指标汇聚输出
+    全局时序微观量化指标汇聚输出 (支持 M8: now 回测时钟注入)
     涵盖未买入低吸监控、未卖出超时调控、订单簿不平衡(OBI)、错过涨幅及滑点统计
     """
     dip_buyer: TimingDipBuyer = intraday_timing_engine["dip_buyer"]
     unsold_ctrl: UnsoldPositionController = intraday_timing_engine["unsold_controller"]
 
-    unbought_summary = dip_buyer.get_summary_list()
+    unbought_summary = dip_buyer.get_summary_list(now=now)
     actionable_dips = dip_buyer.get_actionable_dip_candidates()
     unsold_summary = unsold_ctrl.get_unsold_summary_list(account_id=account_id)
 
@@ -629,7 +700,7 @@ def get_detailed_timing_metrics(account_id: Optional[int] = None) -> Dict[str, A
 
     return {
         "status": "success",
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": (now or datetime.now()).isoformat(),
         "account_id": account_id,
         "statistics": {
             "total_tracked_unbought": total_unbought,

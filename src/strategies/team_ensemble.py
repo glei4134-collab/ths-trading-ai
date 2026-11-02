@@ -203,8 +203,8 @@ class TeamEnsembleStrategy(BaseStrategy):
         if net_outflow_ratio <= 0 and stock_data.get("main_net_outflow") and stock_data.get("float_market_cap"):
             try:
                 net_outflow_ratio = float(stock_data["main_net_outflow"]) / float(stock_data["float_market_cap"])
-            except Exception:
-                pass
+            except (KeyError, ValueError, TypeError, ZeroDivisionError) as e:
+                logger.debug(f"计算主力净流出比例失败: {e}")
 
         if sentiment_score >= 75 and net_outflow_ratio >= 0.008:
             vote_passed = False

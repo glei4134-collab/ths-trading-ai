@@ -8,7 +8,11 @@ import logging
 import time
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple, Any
+
+# ==================== 本地撤单防频发与幂等缓存 (T12) ====================
+_cancelling_orders: Dict[str, Tuple[float, Dict]] = {}
+_cancelling_lock = threading.Lock()
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -168,7 +172,25 @@ class THSAccountTrader:
             self._order_lock.release()
 
     def cancel_order(self, order_id: str, date: str = "") -> Dict:
-        """撤销委托（复用长连接Session + 防死锁超时锁）"""
+        """撤销委托（复用长连接Session + 防死锁超时锁 + 5秒本地撤单幂等防频发）"""
+        order_key = str(order_id).strip()
+        now = time.time()
+        with _cancelling_lock:
+            # 清理超过 30 秒的过期记录
+            expired = [k for k, (t, _) in _cancelling_orders.items() if now - t > 30.0]
+            for k in expired:
+                del _cancelling_orders[k]
+
+            if order_key in _cancelling_orders:
+                last_t, last_res = _cancelling_orders[order_key]
+                if now - last_t < 5.0:
+                    logger.info(f"⏳ [撤单防频发] 账户 #{self.account_id} order_id={order_key} 在 5 秒内已触发撤单 ({now - last_t:.1f}s前)，直接返回缓存结果")
+                    cached = dict(last_res) if isinstance(last_res, dict) else {"success": True, "message": "撤单请求已在处理中(5秒防频发)"}
+                    cached["dedup"] = True
+                    return cached
+
+            _cancelling_orders[order_key] = (now, {"success": True, "message": "撤单已受理中(防频发)", "order_id": order_key})
+
         if not self._order_lock.acquire(timeout=5.0):
             return {"success": False, "message": "撤单获取锁超时"}
         try:
@@ -181,6 +203,12 @@ class THSAccountTrader:
             if not res.get("success") and res.get("error_code") == "COOKIE_EXPIRED":
                 if self._reload_cookie_if_updated():
                     res = self.connector.cancel_order(order_id, date)
+
+            with _cancelling_lock:
+                _cancelling_orders[order_key] = (time.time(), res)
+
+            if not res.get("success"):
+                logger.warning(f"⚠️ 账户 #{self.account_id} 撤单失败: order_id={order_id} 原因={res.get('message')}")
             return res
         finally:
             self._order_lock.release()
@@ -228,7 +256,9 @@ class THSAccountTrader:
             pos_result = self.get_positions()
 
             if not fund_result["success"]:
-                return {"success": False, "message": f"获取资金失败: {fund_result['message']}"}
+                msg = f"获取资金失败: {fund_result['message']}"
+                logger.warning(f"⚠️ 账户 #{self.account_id} 从同花顺同步资金失败: {msg}")
+                return {"success": False, "message": msg}
 
             ky_fund = fund_result.get("data", 0)
             positions = pos_result.get("data", {}).get("positions", []) if pos_result["success"] else []
@@ -298,7 +328,7 @@ class THSAccountTrader:
                             account_id=self.account_id
                         )
             except Exception as snap_err:
-                logger.debug(f"账户 {self.account_id} 快照写入忽略: {snap_err}")
+                logger.warning(f"⚠️ 账户 #{self.account_id} 补充资产快照异常: {snap_err}")
 
             self._positions = {p["symbol"]: p for p in positions}
             logger.info(f"账户 {self.account_id} 同步完成: 余额={ky_fund}, 市值={market_value}, 总资产={total_assets}, 持仓={len(positions)}只")
@@ -587,7 +617,7 @@ class AccountManager:
                 if row and row["account_id"]:
                     return int(row["account_id"])
         except Exception as e:
-            logger.debug(f"通过数据库查找 order_id 所属账户失败: {e}")
+            logger.warning(f"⚠️ 通过数据库查找 order_id 所属账户失败: {e}")
         return None
 
     def cancel_order(self, account_id: Optional[int], order_id: str, date: str = "") -> Dict:
@@ -606,6 +636,8 @@ class AccountManager:
         res = trader.cancel_order(order_id, date)
         if isinstance(res, dict):
             res["account_id"] = target_id
+            if not res.get("success"):
+                logger.warning(f"⚠️ [专属通道撤单失败] 账户#{target_id} order_id={order_id} 错误: {res.get('message')}")
         return res
 
     def cancel_all_orders(self, account_id: Optional[int] = None, all_accounts: bool = False) -> Dict:
@@ -714,7 +746,7 @@ class AccountManager:
                             existing_shares = int(float(p.get("amount") or existing_shares))
                             break
             except Exception as e:
-                logger.debug(f"获取卖出持仓可卖数量失败: {e}")
+                logger.warning(f"⚠️ 账户 #{account_id} 获取持仓可卖数量异常: {e}")
 
         quote = fetch_quote_silent(symbol)
         guard = validate_pre_trade(
@@ -809,9 +841,11 @@ class AccountManager:
             try:
                 trader.sync_from_ths()
             except Exception as e:
-                logger.debug(f"下单后同步同花顺账户失败: {e}")
+                logger.warning(f"⚠️ 账户 #{account_id} 下单后同步同花顺账户失败: {e}")
         else:
             result["recorded"] = False
+            if not dry_run and not result.get("success"):
+                logger.error(f"❌ 账户 #{account_id} 下单被拒绝/失败: {action} {symbol} 价格={price} 数量={amount} 错误={result.get('message')}")
         return result
 
     @staticmethod

@@ -13,6 +13,7 @@ import time
 import logging
 import requests
 from typing import Dict, List, Optional, Tuple, Any
+from collections import OrderedDict
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from datetime import timedelta
@@ -118,7 +119,8 @@ def _rate_limit(min_interval: float = 0.05):
         _last_request_time = time.time()
 
 # ==================== K线内存 TTL 缓存 ====================
-_kline_cache: Dict[str, Tuple[List[Dict], float]] = {}
+MAX_KLINE_CACHE_ENTRIES = 500  # 最大 K 线缓存条目数，防止无限制增长 OOM
+_kline_cache: OrderedDict[str, Tuple[List[Dict], float]] = OrderedDict()
 _kline_cache_lock = threading.Lock()
 
 TTL_KLINE_DAILY = 1800   # 日K/周K/月K 缓存 30 分钟 (1800s)
@@ -129,14 +131,20 @@ def get_cached_kline(cache_key: str) -> Optional[List[Dict]]:
         if cache_key in _kline_cache:
             data, exp = _kline_cache[cache_key]
             if time.time() < exp:
+                _kline_cache.move_to_end(cache_key)
                 return data
             del _kline_cache[cache_key]
     return None
 
 def set_cached_kline(cache_key: str, data: List[Dict], period: str):
     ttl = TTL_KLINE_DAILY if period in ("daily", "weekly", "monthly") else TTL_KLINE_INTRADAY
+    now = time.time()
     with _kline_cache_lock:
-        _kline_cache[cache_key] = (data, time.time() + ttl)
+        if cache_key in _kline_cache:
+            _kline_cache.move_to_end(cache_key)
+        _kline_cache[cache_key] = (data, now + ttl)
+        while len(_kline_cache) > MAX_KLINE_CACHE_ENTRIES:
+            _kline_cache.popitem(last=False)
 
 def clear_kline_cache():
     with _kline_cache_lock:

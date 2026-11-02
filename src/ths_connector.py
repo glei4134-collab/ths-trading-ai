@@ -777,7 +777,10 @@ class THSWebConnector:
             error_code = classify_ths_error(exc=e)
         finally:
             duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
-            logger.info(f"⚡ [HTTP-KeepAlive] {action_name} 耗时: {duration_ms}ms 状态: {status_code or 'ERR'} 成功: {success} 错误类型: {error_code}")
+            if success:
+                logger.info(f"⚡ [HTTP-KeepAlive] {action_name} 耗时: {duration_ms}ms 状态: {status_code} 成功: True")
+            else:
+                logger.error(f"❌ [同花顺通信失败] 动作: {action_name} 耗时: {duration_ms}ms 状态: {status_code or 'ERR'} 错误类型: {error_code} 详情: {err_msg}")
             try:
                 from db_store import db_store
                 db_store.record_api_metric(
@@ -790,7 +793,7 @@ class THSWebConnector:
                     error_message=err_msg
                 )
             except Exception as e:
-                logger.debug(f"记录 API 指标失败: {e}")
+                logger.warning(f"⚠️ 记录 API 指标失败: {e}")
 
         if error_code == THSErrorCode.COOKIE_EXPIRED:
             self.trigger_cookie_expired_alert(err_msg)
@@ -1098,6 +1101,7 @@ class THSWebConnector:
                     ec = classify_ths_error(status_code=200, errorcode=inner_ec, errormsg=inner_msg)
                     if ec == THSErrorCode.COOKIE_EXPIRED:
                         self.trigger_cookie_expired_alert(inner_msg)
+                    logger.error(f"❌ [同花顺买入委托被拒] symbol={symbol} 价格={price} 数量={amount} 错误码={inner_ec} 原因={inner_msg}")
                     return {
                         "success": False,
                         "error_code": ec,
@@ -1110,6 +1114,7 @@ class THSWebConnector:
                 "message": f"买入委托成功: {symbol} {price}元 x{amount}股",
                 "data": result["data"]
             }
+        logger.error(f"❌ [同花顺买入请求失败] symbol={symbol} 价格={price} 数量={amount} 错误: {result.get('message')}")
         return result
 
     def sell(self, symbol: str, price: float, amount: int, mkcode: str = "", gdzh: str = "") -> Dict:
@@ -1185,6 +1190,7 @@ class THSWebConnector:
                     ec = classify_ths_error(status_code=200, errorcode=inner_ec, errormsg=inner_msg)
                     if ec == THSErrorCode.COOKIE_EXPIRED:
                         self.trigger_cookie_expired_alert(inner_msg)
+                    logger.error(f"❌ [同花顺卖出委托被拒] symbol={symbol} 价格={price} 数量={amount} 错误码={inner_ec} 原因={inner_msg}")
                     return {
                         "success": False,
                         "error_code": ec,
@@ -1197,6 +1203,7 @@ class THSWebConnector:
                 "message": f"卖出委托成功: {symbol} {price}元 x{amount}股",
                 "data": result["data"]
             }
+        logger.error(f"❌ [同花顺卖出请求失败] symbol={symbol} 价格={price} 数量={amount} 错误: {result.get('message')}")
         return result
 
     def cancel_order(self, order_id: str, date: str = "") -> Dict:
@@ -1211,6 +1218,7 @@ class THSWebConnector:
         result = self._api_post(url, data, action_name="cancel_order")
         if result["success"]:
             return {"success": True, "message": "撤单成功"}
+        logger.warning(f"⚠️ [同花顺撤单失败] order_id={order_id} 错误: {result.get('message')}")
         return result
 
     def cancel_all_orders(self) -> Dict:

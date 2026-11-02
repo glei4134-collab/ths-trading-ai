@@ -7,6 +7,8 @@
 import time
 import hashlib
 import logging
+import threading
+from collections import OrderedDict
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -22,45 +24,78 @@ TTL_INTRADAY = 30       # 分时数据：30秒
 TTL_WEEKLY = 600        # 周线数据：10分钟
 
 
-class DataCache:
-    """内存缓存 + TTL 过期"""
+MAX_CACHE_ENTRIES = 2000  # 最大缓存条目数，防止无限制增长 OOM
 
-    def __init__(self):
-        self._store: Dict[str, tuple] = {}  # key -> (value, expire_time)
+
+class DataCache:
+    """内存缓存 + TTL 过期 + 容量淘汰保护 (LRU / FIFO)"""
+
+    def __init__(self, max_entries: int = MAX_CACHE_ENTRIES):
+        self.max_entries = max_entries
+        self._store: OrderedDict[str, tuple] = OrderedDict()  # key -> (value, expire_time)
+        self._lock = threading.RLock()
+
+    def cleanup_expired(self) -> int:
+        """主动清理所有已过期的缓存项，返回被清理的数量"""
+        now = time.time()
+        with self._lock:
+            expired_keys = [k for k, (_, exp) in self._store.items() if exp <= now]
+            for k in expired_keys:
+                self._store.pop(k, None)
+            return len(expired_keys)
 
     def get(self, key: str) -> Optional[Any]:
         """获取缓存，过期返回 None"""
-        if key in self._store:
-            value, expire = self._store[key]
-            if time.time() < expire:
-                return value
-            del self._store[key]
+        now = time.time()
+        with self._lock:
+            if key in self._store:
+                value, expire = self._store[key]
+                if now < expire:
+                    self._store.move_to_end(key)
+                    return value
+                del self._store[key]
         return None
 
     def set(self, key: str, value: Any, ttl: int = 30):
-        """设置缓存，ttl 秒后过期"""
-        self._store[key] = (value, time.time() + ttl)
+        """设置缓存，ttl 秒后过期，包含容量保护与过期主动淘汰"""
+        now = time.time()
+        with self._lock:
+            if key in self._store:
+                self._store.move_to_end(key)
+            self._store[key] = (value, now + ttl)
+
+            # 当超出容量阈值时，先做一次轻量级清理过期项
+            if len(self._store) > self.max_entries:
+                self.cleanup_expired()
+
+            # 如果清理完过期项依然超出容量上限，按 FIFO/LRU 剔除最旧条目
+            while len(self._store) > self.max_entries:
+                self._store.popitem(last=False)
 
     def invalidate(self, pattern: str = ""):
         """按前缀清除缓存"""
-        keys_to_delete = [k for k in self._store if k.startswith(pattern)]
-        for k in keys_to_delete:
-            del self._store[k]
+        with self._lock:
+            keys_to_delete = [k for k in self._store if k.startswith(pattern)]
+            for k in keys_to_delete:
+                self._store.pop(k, None)
 
     def clear(self):
         """清除所有缓存"""
-        self._store.clear()
+        with self._lock:
+            self._store.clear()
 
     def status(self) -> Dict:
         """获取缓存状态"""
         now = time.time()
-        active = sum(1 for _, (_, exp) in self._store.items() if exp > now)
-        expired = len(self._store) - active
-        return {
-            "total_keys": len(self._store),
-            "active": active,
-            "expired": expired
-        }
+        with self._lock:
+            active = sum(1 for _, (_, exp) in self._store.items() if exp > now)
+            expired = len(self._store) - active
+            return {
+                "total_keys": len(self._store),
+                "active": active,
+                "expired": expired,
+                "max_entries": self.max_entries,
+            }
 
 
 # 全局缓存实例

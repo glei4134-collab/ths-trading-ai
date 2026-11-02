@@ -1,0 +1,16 @@
+{
+  "enabled": false,
+  "feishu": {
+    "enabled": false,
+    "webhook_url": "https://open.feishu.cn/open-apis/bot/v2/hook/YOUR_FEISHU_WEBHOOK_KEY"
+  },
+  "wechat": {
+    "enabled": false,
+    "webhook_url": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=YOUR_WECHAT_KEY"
+  },
+  "bark": {
+    "enabled": false,
+    "server_url": "https://api.day.app",
+    "device_key": "YOUR_BARK_DEVICE_KEY"
+  }
+}

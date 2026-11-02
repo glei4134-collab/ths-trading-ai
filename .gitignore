@@ -32,3 +32,5 @@ legacy_api_monolith.py
 *.bak*
 *.log*
 scratch/
+config/*.local.json
+config/webhook_config.json

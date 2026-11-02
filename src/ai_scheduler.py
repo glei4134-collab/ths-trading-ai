@@ -2903,7 +2903,8 @@ A股交易时段: 上午9:30-11:30, 下午13:00-15:00
                     try:
                         acc_id = int(parts[0])
                         sym = parts[1]
-                    except Exception:
+                    except (ValueError, IndexError) as pe:
+                        logger.debug(f"解析复合键异常: {pe}")
                         acc_id = active_id
                         sym = key
                 else:

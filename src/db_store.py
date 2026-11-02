@@ -233,23 +233,32 @@ class DBStore:
         self.conn.commit()
 
     def _ensure_account_id_columns(self):
-        """确保旧表有 account_id 列（兼容升级）"""
+        """确保旧表有 account_id 列（兼容升级，使用安全白名单）"""
         c = self.conn.cursor()
+        VALID_TABLES = {'trades', 'signals', 'account_snapshots', 'positions'}
         for table in ['trades', 'signals', 'account_snapshots', 'positions']:
+            if table not in VALID_TABLES:
+                continue
             try:
                 c.execute(f"SELECT account_id FROM {table} LIMIT 1")
             except sqlite3.OperationalError:
                 c.execute(f"ALTER TABLE {table} ADD COLUMN account_id INTEGER DEFAULT 1")
                 logger.info(f"为 {table} 表添加 account_id 列")
-        # 确保 accounts 表有新列
-        for col, default in [('cookie', ''), ('ths_gdzh', ''), ('ths_competition_id', ''),
-                              ('ky_fund', 0), ('market_value', 0), ('total_assets', 0),
-                              ('last_sync_at', '')]:
+        # 确保 accounts 表有新列（白名单静态映射，杜绝未知动态注入）
+        VALID_COLUMNS = {
+            'cookie': "TEXT DEFAULT ''",
+            'ths_gdzh': "TEXT DEFAULT ''",
+            'ths_competition_id': "TEXT DEFAULT ''",
+            'ky_fund': "REAL DEFAULT 0",
+            'market_value': "REAL DEFAULT 0",
+            'total_assets': "REAL DEFAULT 0",
+            'last_sync_at': "TEXT DEFAULT ''",
+        }
+        for col, col_def in VALID_COLUMNS.items():
             try:
                 c.execute(f"SELECT {col} FROM accounts LIMIT 1")
             except sqlite3.OperationalError:
-                c.execute(f"ALTER TABLE accounts ADD COLUMN {col} DEFAULT '{default}'" if isinstance(default, str)
-                          else f"ALTER TABLE accounts ADD COLUMN {col} DEFAULT {default}")
+                c.execute(f"ALTER TABLE accounts ADD COLUMN {col} {col_def}")
         # active_account_id: 追踪当前活跃账户
         try:
             c.execute("SELECT active_account_id FROM accounts LIMIT 1")
@@ -1182,9 +1191,15 @@ class DBStore:
 
     def checkpoint_wal(self, mode: str = "TRUNCATE") -> Dict:
         """执行 WAL 检查点，将 WAL 事务日志压缩截断合并至主库"""
+        clean_mode = str(mode).upper().strip()
+        ALLOWED_MODES = {"PASSIVE", "FULL", "RESTART", "TRUNCATE"}
+        if clean_mode not in ALLOWED_MODES:
+            logger.warning(f"无效的 WAL Checkpoint 模式: {mode}，自动回退到 PASSIVE")
+            clean_mode = "PASSIVE"
+
         with self._lock:
             try:
-                res = self.conn.execute(f"PRAGMA wal_checkpoint({mode})").fetchone()
+                res = self.conn.execute(f"PRAGMA wal_checkpoint({clean_mode})").fetchone()
                 logger.info(f"✅ WAL Checkpoint({mode}) 执行完成: busy={res[0]}, log={res[1]}, checkpointed={res[2]}")
                 return {"success": True, "busy": res[0], "log": res[1], "checkpointed": res[2]}
             except Exception as e:

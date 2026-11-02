@@ -94,14 +94,39 @@
         if (nextEl) nextEl.textContent = nextWindow;
     }
 
-    // 网关 RTT 测速
+    // 网关 RTT 测速与弱网平滑自愈机制
+    let _rttFailCount = 0;
+    let _wasNetworkOffline = false;
+
     async function pingGatewayRtt() {
         const start = performance.now();
+        const rttEl = document.getElementById('hudRttText');
+        const rttDot = document.getElementById('hudRttDot');
         try {
-            await fetch('/api/connection/info?_t=' + Date.now(), { cache: 'no-store' });
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 4000); // 4秒超时保护
+            const resp = await fetch('/api/connection/info?_t=' + Date.now(), { 
+                cache: 'no-store',
+                signal: controller.signal 
+            });
+            clearTimeout(timeoutId);
+
+            if (!resp.ok) {
+                throw new Error(`HTTP ${resp.status}`);
+            }
+
             const rtt = Math.round(performance.now() - start);
-            const rttEl = document.getElementById('hudRttText');
-            const rttDot = document.getElementById('hudRttDot');
+
+            // 网络自愈恢复：若先前因连续失败被标记为离线/波动，恢复后自动触发一次全量数据面板重刷
+            if (_wasNetworkOffline || _rttFailCount >= 3) {
+                console.log("🟢 [P5 ENGINE] 网关连接已平滑恢复，自动触发全量面板数据重刷...");
+                if (typeof window.refreshAllCockpitPanels === 'function') {
+                    window.refreshAllCockpitPanels();
+                }
+            }
+            _rttFailCount = 0;
+            _wasNetworkOffline = false;
+
             if (rttEl) {
                 rttEl.textContent = `${rtt} ms`;
                 if (rtt < 80) {
@@ -116,10 +141,24 @@
                 }
             }
         } catch(e) {
-            const rttEl = document.getElementById('hudRttText');
-            if (rttEl) {
-                rttEl.textContent = '超时';
-                rttEl.style.color = '#ff1824';
+            _rttFailCount++;
+            if (_rttFailCount >= 3) {
+                _wasNetworkOffline = true;
+                if (rttEl) {
+                    rttEl.textContent = '⚠️ 网关连接波动，自动重试中...';
+                    rttEl.style.color = '#ffe600';
+                }
+                if (rttDot) {
+                    rttDot.style.background = '#ffe600';
+                }
+            } else {
+                if (rttEl) {
+                    rttEl.textContent = '重试中...';
+                    rttEl.style.color = '#ff9900';
+                }
+                if (rttDot) {
+                    rttDot.style.background = '#ff9900';
+                }
             }
         }
     }

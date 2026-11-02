@@ -31,6 +31,27 @@ logger = logging.getLogger(__name__)
 
 system_bp = Blueprint('system', __name__)
 
+
+def is_loopback_request() -> bool:
+    """检查是否为来自 127.0.0.1 / ::1 / localhost 的本地回环请求"""
+    ip = request.headers.get("X-Forwarded-For", "").split(",")[0].strip() or request.remote_addr or ""
+    return ip in ("127.0.0.1", "::1", "localhost", "testclient")
+
+
+def sanitize_sensitive_data(val: Any) -> Any:
+    """深度脱敏服务器绝对路径、物理位置及凭证 token 片段，防止敏感信息外泄"""
+    import re
+    if isinstance(val, str):
+        s = re.sub(r"[A-Za-z]:\\[^\s\"'<>]+", "[PROTECTED_PATH]", val)
+        s = re.sub(r"/(?:home|root|var|etc|usr|opt|tmp)/[^\s\"'<>]+", "[PROTECTED_PATH]", s)
+        s = re.sub(r'ghp_[a-zA-Z0-9]{15,}', '[PROTECTED_TOKEN]', s)
+        return s
+    elif isinstance(val, dict):
+        return {k: sanitize_sensitive_data(v) for k, v in val.items()}
+    elif isinstance(val, list):
+        return [sanitize_sensitive_data(item) for item in val]
+    return val
+
 @system_bp.route('/api/health', methods=['GET'])
 def health_check():
     """轻量健康检查端点（部署状态检测）"""
@@ -606,13 +627,16 @@ def system_diagnose():
         from tools.auto_debugger import QuantAutoDebugger
         debugger = QuantAutoDebugger()
         report = debugger.run_all_checks()
+        if not is_loopback_request():
+            report = sanitize_sensitive_data(report)
         return jsonify({
             "success": True,
             "data": report
         })
     except Exception as e:
         logger.error(f"系统自动诊断异常: {e}")
-        return jsonify({"success": False, "message": str(e)})
+        err_msg = str(e) if is_loopback_request() else sanitize_sensitive_data(str(e))
+        return jsonify({"success": False, "message": err_msg})
 
 
 @system_bp.route('/api/system/fix', methods=['POST'])
@@ -624,10 +648,13 @@ def system_fix():
         from tools.auto_debugger import QuantAutoDebugger
         debugger = QuantAutoDebugger()
         res = debugger.run_auto_fix(action)
+        if not is_loopback_request():
+            res = sanitize_sensitive_data(res)
         return jsonify(res)
     except Exception as e:
         logger.error(f"执行自动修复异常: {e}")
-        return jsonify({"success": False, "message": str(e)})
+        err_msg = str(e) if is_loopback_request() else sanitize_sensitive_data(str(e))
+        return jsonify({"success": False, "message": err_msg})
 
 
 @system_bp.route('/api/system/performance', methods=['GET'])
@@ -1598,7 +1625,13 @@ def sync_from_github():
 
 @system_bp.route('/api/debug/github-token', methods=['GET'])
 def debug_github_token():
-    """调试：检查配置状态"""
+    """调试：检查配置状态（严禁向外部非本地回环 IP 暴露，统一拦截）"""
+    if not is_loopback_request():
+        return jsonify({
+            "success": False,
+            "message": "Access restricted: debug endpoints are only accessible from 127.0.0.1"
+        }), 403
+
     cookie_file = Path(__file__).parent / "config" / "cookies.json"
     return jsonify({
         "cookie_file_exists": cookie_file.exists(),
