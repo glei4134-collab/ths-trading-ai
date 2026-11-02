@@ -167,7 +167,7 @@ class THSAccountTrader:
         finally:
             self._order_lock.release()
 
-    def cancel_order(self, order_id: str, date: str) -> Dict:
+    def cancel_order(self, order_id: str, date: str = "") -> Dict:
         """撤销委托（复用长连接Session + 防死锁超时锁）"""
         if not self._order_lock.acquire(timeout=5.0):
             return {"success": False, "message": "撤单获取锁超时"}
@@ -549,6 +549,99 @@ class AccountManager:
         except Exception as e:
             logger.error(f"自动加载 trader 失败: {e}")
         return None
+
+    def get_orders(self, account_id: Optional[int] = None) -> Dict:
+        """查询指定账户委托（未指定时取当前活跃主账户，100%隔离防串号）"""
+        target_id = account_id
+        if target_id is None:
+            from db_store import db_store
+            target_id = db_store.get_active_account_id() or 1
+        trader = self.get_trader(target_id)
+        if not trader:
+            return {"success": False, "message": f"未找到账户 #{target_id}", "data": []}
+        res = trader.get_orders()
+        if isinstance(res, dict):
+            res["account_id"] = target_id
+        return res
+
+    def find_account_by_order_id(self, order_id: str) -> Optional[int]:
+        """根据委托合同编号精确定位所属账户（防跨账户串号撤单）"""
+        if not order_id:
+            return None
+        # 1. 优先从数据库查询交易归属
+        try:
+            from db_store import db_store
+            with db_store._get_conn() as conn:
+                row = conn.execute(
+                    "SELECT account_id FROM trades WHERE order_id = ? ORDER BY id DESC LIMIT 1",
+                    (str(order_id),)
+                ).fetchone()
+                if row and row["account_id"]:
+                    return int(row["account_id"])
+        except Exception as e:
+            logger.debug(f"通过数据库查找 order_id 所属账户失败: {e}")
+
+        # 2. 若本地无记录，遍历当前所有已连接账户的实时挂单
+        for acc_id, trader in list(self.traders.items()):
+            if trader and trader.connected:
+                try:
+                    orders_res = trader.get_orders()
+                    if orders_res.get("success"):
+                        for o in orders_res.get("data", []):
+                            if str(o.get("order_id", "")) == str(order_id):
+                                return acc_id
+                except Exception:
+                    pass
+        return None
+
+    def cancel_order(self, account_id: Optional[int], order_id: str, date: str = "") -> Dict:
+        """专属通道撤单（自动寻址账户通道，严防跨账户串号）"""
+        target_id = account_id
+        if target_id is None:
+            target_id = self.find_account_by_order_id(order_id)
+        if target_id is None:
+            from db_store import db_store
+            target_id = db_store.get_active_account_id() or 1
+
+        trader = self.get_trader(target_id)
+        if not trader:
+            return {"success": False, "message": f"未找到对应交易账户 #{target_id}", "account_id": target_id}
+
+        res = trader.cancel_order(order_id, date)
+        if isinstance(res, dict):
+            res["account_id"] = target_id
+        return res
+
+    def cancel_all_orders(self, account_id: Optional[int] = None, all_accounts: bool = False) -> Dict:
+        """撤销未成交委托（单账户专属通道或全账户并发撤单）"""
+        if all_accounts:
+            results = {}
+            with ThreadPoolExecutor(max_workers=min(len(self.traders) or 1, 8), thread_name_prefix="cancel-all") as executor:
+                future_map = {
+                    executor.submit(trader.cancel_all_orders): acc_id
+                    for acc_id, trader in self.traders.items() if trader and trader.connected
+                }
+                for future in as_completed(future_map):
+                    acc_id = future_map[future]
+                    try:
+                        res = future.result()
+                        results[acc_id] = dict(res) if isinstance(res, dict) else {"success": True, "message": str(res)}
+                    except Exception as e:
+                        results[acc_id] = {"success": False, "message": str(e)}
+            return {"success": True, "results": results, "message": f"并发撤销 {len(results)} 个账户的未成交委托"}
+
+        target_id = account_id
+        if target_id is None:
+            from db_store import db_store
+            target_id = db_store.get_active_account_id() or 1
+        trader = self.get_trader(target_id)
+        if not trader:
+            return {"success": False, "message": f"未找到对应交易账户 #{target_id}", "account_id": target_id}
+
+        res = trader.cancel_all_orders()
+        if isinstance(res, dict):
+            res["account_id"] = target_id
+        return res
 
     def decide_for_account(self, account_id: int, symbol: str, stock_data: Dict,
                            indicators: Dict) -> Dict:

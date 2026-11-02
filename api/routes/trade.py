@@ -376,20 +376,20 @@ def _detect_and_execute_trade(message: str):
     # --- 撤单检测 ---
     if _re.search(r'撤销?全部|撤所有|全部撤单', msg):
         try:
-            conn, _ = _get_active_conn()
-            if conn and hasattr(conn, 'cancel_all_orders'):
-                result = conn.cancel_all_orders()
-                return f"🚫 {result.get('message', '撤单完成')}"
+            from account_manager import account_manager
+            active_id = db_store.get_active_account_id() or 1
+            result = account_manager.cancel_all_orders(account_id=active_id)
+            return f"🚫 {result.get('message', '撤单完成')}"
         except Exception as e:
             return f"❌ 撤单失败: {e}"
 
     cancel_m = _re.search(r'撤销?订单?\s*(\d+)', msg)
     if cancel_m:
         try:
-            conn, _ = _get_active_conn()
-            if conn and hasattr(conn, 'cancel_order'):
-                result = conn.cancel_order(cancel_m.group(1), datetime.now(ZoneInfo('Asia/Shanghai')).strftime("%Y-%m-%d"))
-                return f"🚫 撤单 {cancel_m.group(1)} → {result.get('message', '完成')}"
+            from account_manager import account_manager
+            order_id = cancel_m.group(1)
+            result = account_manager.cancel_order(account_id=None, order_id=order_id)
+            return f"🚫 撤单 {order_id} → {result.get('message', '完成')}"
         except Exception as e:
             return f"❌ 撤单失败: {e}"
 
@@ -730,11 +730,12 @@ def _parse_and_execute_ai_trades(ai_response: str) -> str:
         elif groups[3] is not None:  # CANCEL
             target = groups[3]
             try:
-                conn, _ = _get_active_conn()
+                from account_manager import account_manager
+                active_id = db_store.get_active_account_id() or 1
                 if target.upper() == "ALL":
-                    result = conn.cancel_all_orders() if conn and hasattr(conn, 'cancel_all_orders') else {"success": False, "message": "不支持"}
+                    result = account_manager.cancel_all_orders(account_id=active_id)
                 else:
-                    result = conn.cancel_order(target, datetime.now(ZoneInfo('Asia/Shanghai')).strftime("%Y-%m-%d")) if conn and hasattr(conn, 'cancel_order') else {"success": False, "message": "不支持"}
+                    result = account_manager.cancel_order(account_id=None, order_id=target)
                 msg = result.get("message", "未知") if isinstance(result, dict) else str(result)
                 results.append(f"🚫 撤单 {target} → {msg}")
             except Exception as e:
@@ -743,15 +744,15 @@ def _parse_and_execute_ai_trades(ai_response: str) -> str:
         elif groups[4] is not None:  # MODIFY (cancel + new order)
             order_id, new_price, new_amount = groups[4], groups[5], groups[6]
             try:
-                conn, _ = _get_active_conn()
-                # 1. 先撤旧单
-                if conn and hasattr(conn, 'cancel_order'):
-                    cancel_result = conn.cancel_order(order_id, datetime.now(ZoneInfo('Asia/Shanghai')).strftime("%Y-%m-%d"))
-                    if not cancel_result.get("success"):
-                        results.append(f"❌ 改单失败（撤单）: {cancel_result.get('message','')}")
-                        continue
-                # 2. 下新单（需要知道股票代码和方向，从挂单列表查）
-                orders_result = conn.get_orders() if conn and hasattr(conn, 'get_orders') else {"success": False}
+                from account_manager import account_manager
+                # 1. 先撤旧单（专属账户防串号）
+                cancel_result = account_manager.cancel_order(account_id=None, order_id=order_id)
+                if not cancel_result.get("success"):
+                    results.append(f"❌ 改单失败（撤单）: {cancel_result.get('message','')}")
+                    continue
+                # 2. 下新单（定位该订单所属账户查挂单信息）
+                target_acc_id = cancel_result.get("account_id") or db_store.get_active_account_id() or 1
+                orders_result = account_manager.get_orders(account_id=target_acc_id)
                 old_order = None
                 if orders_result.get("success"):
                     for o in orders_result.get("data", []):

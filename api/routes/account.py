@@ -267,7 +267,7 @@ def get_trades():
                 if not trader.cookie:
                     trader._reload_cookie_if_updated()
                 if trader.cookie:
-                    result = trader.connector.get_orders()
+                    result = trader.get_orders()
                     if result.get("success"):
                         return jsonify({
                             "success": True,
@@ -310,64 +310,95 @@ def get_pending_orders():
         if target_acc_id is not None:
             # 单账户精准隔离查询
             trader = account_manager.get_trader(target_acc_id)
-            if trader and trader.connected:
-                result = trader.get_orders()
-                if result.get("success"):
-                    orders = [o for o in result.get("data", []) if o.get("status") in ("未成交", "部分成交", "已报")]
-                    acc_info = next((a for a in accounts if a["id"] == target_acc_id), {})
-                    for o in orders:
-                        o["account_id"] = target_acc_id
-                        o["account_name"] = acc_info.get("name", f"账户#{target_acc_id}")
-                    return jsonify({"success": True, "account_id": target_acc_id, "data": orders})
+            acc_info = next((a for a in accounts if a.get("id") == target_acc_id), {})
+            acc_name = acc_info.get("name", f"账户#{target_acc_id}")
+            if trader:
+                if not trader.cookie:
+                    try:
+                        trader._reload_cookie_if_updated()
+                    except Exception:
+                        pass
+                if trader.connected or trader.cookie:
+                    result = trader.get_orders()
+                    if result and result.get("success"):
+                        orders = [o for o in result.get("data", []) if o.get("status") in ("未成交", "部分成交", "已报")]
+                        for o in orders:
+                            o["account_id"] = target_acc_id
+                            o["account_name"] = acc_name
+                        return jsonify({"success": True, "account_id": target_acc_id, "data": orders})
             return jsonify({"success": True, "account_id": target_acc_id, "data": []})
 
         # 多账户矩阵全景聚合
         all_pending = []
         for acc in accounts:
-            acc_id = acc["id"]
-            trader = account_manager.get_trader(acc_id)
-            if trader and trader.connected:
-                res = trader.get_orders()
-                if res.get("success"):
-                    acc_orders = [o for o in res.get("data", []) if o.get("status") in ("未成交", "部分成交", "已报")]
-                    for o in acc_orders:
-                        o["account_id"] = acc_id
-                        o["account_name"] = acc.get("name", f"账户#{acc_id}")
-                    all_pending.extend(acc_orders)
+            acc_id = acc.get("id")
+            if acc_id is None:
+                continue
+            acc_name = acc.get("name", f"账户#{acc_id}")
+            try:
+                trader = account_manager.get_trader(acc_id)
+                if trader:
+                    if not trader.cookie:
+                        try:
+                            trader._reload_cookie_if_updated()
+                        except Exception:
+                            pass
+                    if trader.connected or trader.cookie:
+                        res = trader.get_orders()
+                        if res and res.get("success"):
+                            acc_orders = [o for o in res.get("data", []) if o.get("status") in ("未成交", "部分成交", "已报")]
+                            for o in acc_orders:
+                                o["account_id"] = acc_id
+                                o["account_name"] = acc_name
+                            all_pending.extend(acc_orders)
+            except Exception as err:
+                logger.warning(f"[PendingOrders] 查询账户 {acc_id} 异常: {err}")
         
-        # 兜底：若无专属trader但有全局web_connector
+        # 兜底：若无专属trader挂单但有全局web_connector
         if not all_pending and web_connector.connected and web_connector.cookie:
-            res = web_connector.get_orders()
-            if res.get("success"):
-                all_pending = [o for o in res.get("data", []) if o.get("status") in ("未成交", "部分成交", "已报")]
+            try:
+                res = web_connector.get_orders()
+                if res and res.get("success"):
+                    for o in res.get("data", []):
+                        if o.get("status") in ("未成交", "部分成交", "已报"):
+                            item = dict(o)
+                            item.setdefault("account_id", 0)
+                            item.setdefault("account_name", "默认交易账户")
+                            all_pending.append(item)
+            except Exception as err:
+                logger.warning(f"[PendingOrders] web_connector 查询异常: {err}")
 
         return jsonify({"success": True, "data": all_pending})
     except Exception as e:
+        logger.exception(f"获取未成交委托异常: {e}")
         return jsonify({"success": False, "message": str(e)})
 
 
 @account_bp.route('/api/account/cancel-order', methods=['POST'])
 def cancel_order():
-    """撤单"""
+    """撤单（严格通过专属账户通道执行，杜绝跨账户串号）"""
     try:
         data = request.json or {}
-        order_id = data.get("order_id", "")
-        date = data.get("date", "")
+        order_id = str(data.get("order_id", "")).strip()
+        date = str(data.get("date", "")).strip()
+        acc_id = data.get("account_id")
+        target_acc_id = int(acc_id) if acc_id is not None else None
+
         if not order_id:
             return jsonify({"success": False, "message": "缺少 order_id"})
-        conn, _ = _get_active_conn()
-        if not conn:
-            return jsonify({"success": False, "message": "未连接交易系统"})
-        if not hasattr(conn, 'cancel_order'):
-            return jsonify({"success": False, "message": "当前连接器不支持撤单"})
-        result = conn.cancel_order(order_id, date)
+
+        from account_manager import account_manager
+        result = account_manager.cancel_order(account_id=target_acc_id, order_id=order_id, date=date)
+        
         # 推送撤单通知
         if result.get("success"):
             try:
+                real_acc = result.get("account_id", target_acc_id)
+                acc_label = f"账户 #{real_acc} " if real_acc else ""
                 notification_manager.add({
                     "type": "trade", "level": "warning",
                     "title": "🚫 撤单成功",
-                    "message": f"委托 {order_id} 已撤销",
+                    "message": f"{acc_label}委托 {order_id} 已撤销",
                 })
             except Exception:
                 pass
@@ -378,14 +409,15 @@ def cancel_order():
 
 @account_bp.route('/api/account/cancel-all', methods=['POST'])
 def cancel_all_orders():
-    """撤销所有未成交委托"""
+    """撤销未成交委托（严格支持指定专属账户通道或全账户并发隔离撤单）"""
     try:
-        conn, _ = _get_active_conn()
-        if not conn:
-            return jsonify({"success": False, "message": "未连接交易系统"})
-        if not hasattr(conn, 'cancel_all_orders'):
-            return jsonify({"success": False, "message": "当前连接器不支持撤单"})
-        result = conn.cancel_all_orders()
+        data = request.json or {}
+        acc_id = data.get("account_id")
+        all_accounts = bool(data.get("all_accounts", False))
+        target_acc_id = int(acc_id) if acc_id is not None else None
+
+        from account_manager import account_manager
+        result = account_manager.cancel_all_orders(account_id=target_acc_id, all_accounts=all_accounts)
         if result.get("success"):
             try:
                 notification_manager.add({
