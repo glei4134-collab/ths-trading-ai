@@ -910,7 +910,7 @@ class THSWebConnector:
             "type": "cmd_qu_chedan",
             "updateClass": "qryzijin|qryChedan|"
         }
-        result = self._api_post(url, data, action_name="get_positions")
+        result = self._api_post(url, data, action_name="get_orders")
         if result["success"]:
             try:
                 api_data = result["data"]
@@ -1199,12 +1199,14 @@ class THSWebConnector:
             }
         return result
 
-    def cancel_order(self, order_id: str, date: str) -> Dict:
-        """撤单"""
+    def cancel_order(self, order_id: str, date: str = "") -> Dict:
+        """撤单（支持日期自动兜底补齐）"""
+        if not date:
+            date = datetime.now(ZoneInfo('Asia/Shanghai')).strftime("%Y%m%d")
         url = f"{THS_API_BASE}/cgiwt/delegate/cancelDelegated/"
         data = {
-            "htbh": order_id,
-            "wtrq": date
+            "htbh": str(order_id),
+            "wtrq": str(date)
         }
         result = self._api_post(url, data, action_name="cancel_order")
         if result["success"]:
@@ -1212,22 +1214,31 @@ class THSWebConnector:
         return result
 
     def cancel_all_orders(self) -> Dict:
-        """撤销所有未成交委托"""
+        """撤销所有未成交委托（全量覆盖未成交、已报、部成等挂单状态）"""
         orders_result = self.get_orders()
         if not orders_result["success"]:
             return orders_result
 
         cancelled = 0
         failed = 0
-        for order in orders_result["data"]:
-            if order["status"] == "未成交":
-                result = self.cancel_order(order["order_id"], order["date"])
-                if result["success"]:
-                    cancelled += 1
-                else:
-                    failed += 1
+        for order in orders_result.get("data", []):
+            st = str(order.get("status", "")).strip()
+            if st in ("未成交", "已报", "部分成交", "部成", "待报", "正报") or not st:
+                oid = order.get("order_id", "")
+                odate = order.get("date", "")
+                if oid:
+                    result = self.cancel_order(oid, odate)
+                    if result.get("success"):
+                        cancelled += 1
+                    else:
+                        failed += 1
 
-        return {"success": True, "message": f"撤单完成: 成功{cancelled}笔, 失败{failed}笔"}
+        return {
+            "success": True,
+            "message": f"撤单完成: 成功{cancelled}笔, 失败{failed}笔",
+            "cancelled": cancelled,
+            "failed": failed
+        }
 
     def get_user_info(self) -> Dict:
         """

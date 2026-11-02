@@ -64,6 +64,10 @@ class ReleaseGatekeeper:
         if now is None:
             now = cls.get_shanghai_now()
 
+        # 0. 紧急特权环境变量快速放行 (用于生产事故热更或运维调度指令)
+        if os.environ.get("RELEASE_GATEKEEPER_FORCE") in ("1", "true", "True", "FORCE"):
+            return False, "检测到 RELEASE_GATEKEEPER_FORCE 紧急特权环境变量，强制放行发布/热重载", 0
+
         # 1. 检查是否为交易日
         if not cls.is_trading_day(now.date()):
             return False, "当前非交易日 (周末或法定节假日)，允许执行发布部署", 0
