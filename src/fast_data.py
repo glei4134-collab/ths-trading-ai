@@ -45,6 +45,56 @@ _session.headers.update({
 # 国内行情API（东方财富/腾讯/新浪）不走代理，避免被本地代理拦截
 _session.trust_env = False
 
+# ==================== 数据源断路器（Circuit Breaker） ====================
+# 为每个数据源维护连续失败计数；连续失败 >= FAILURE_THRESHOLD 次后，
+# 在 COOLDOWN_SECONDS 冷却期内跳过该源，直接降级到下一级。
+_CIRCUIT_FAILURE_THRESHOLD = 3
+_CIRCUIT_COOLDOWN_SECONDS = 60
+
+_circuit_breaker: Dict[str, Dict[str, float]] = {
+    "eastmoney": {"failures": 0, "cooldown_until": 0.0},
+    "tencent": {"failures": 0, "cooldown_until": 0.0},
+    "sina": {"failures": 0, "cooldown_until": 0.0},
+    "akshare": {"failures": 0, "cooldown_until": 0.0},
+}
+_circuit_lock = threading.Lock()
+
+
+def _is_circuit_open(source: str) -> bool:
+    """判断指定数据源是否处于熔断冷却期（返回 True 表示应跳过该源）"""
+    with _circuit_lock:
+        state = _circuit_breaker.get(source)
+        if not state:
+            return False
+        return time.time() < state["cooldown_until"]
+
+
+def _record_source_failure(source: str) -> None:
+    """记录数据源一次失败；连续失败达到阈值则触发冷却"""
+    with _circuit_lock:
+        state = _circuit_breaker.get(source)
+        if not state:
+            return
+        state["failures"] += 1
+        if state["failures"] >= _CIRCUIT_FAILURE_THRESHOLD:
+            state["cooldown_until"] = time.time() + _CIRCUIT_COOLDOWN_SECONDS
+            logger.warning(
+                f"[断路器] 数据源 {source} 连续失败 {state['failures']} 次，"
+                f"熔断 {_CIRCUIT_COOLDOWN_SECONDS}s"
+            )
+
+
+def _record_source_success(source: str) -> None:
+    """记录数据源一次成功，重置失败计数"""
+    with _circuit_lock:
+        state = _circuit_breaker.get(source)
+        if not state:
+            return
+        if state["failures"] > 0:
+            state["failures"] = 0
+        state["cooldown_until"] = 0.0
+
+
 def get_random_headers(referer: str = "") -> dict:
     h = {
         "User-Agent": random.choice(USER_AGENTS),
@@ -727,66 +777,86 @@ def fetch_kline(symbol: str, period: str = "daily", days: int = 60,
         return mock_data
 
     # Tier 1: 东方财富
-    try:
-        data = fetch_eastmoney_kline(symbol, period=period, days=days,
-                                    start_date=start_date, end_date=end_date,
-                                    is_index=is_index)
-        if data and len(data) > 0:
-            set_cached_kline(cache_key, data, period)
-            return data
-    except Exception as e:
-        logger.warning(f"[Tier 1 东方财富] K线获取失败 {symbol}: {e}")
+    if not _is_circuit_open("eastmoney"):
+        try:
+            data = fetch_eastmoney_kline(symbol, period=period, days=days,
+                                        start_date=start_date, end_date=end_date,
+                                        is_index=is_index)
+            if data and len(data) > 0:
+                _record_source_success("eastmoney")
+                set_cached_kline(cache_key, data, period)
+                return data
+        except Exception as e:
+            _record_source_failure("eastmoney")
+            logger.warning(f"[Tier 1 东方财富] K线获取失败 {symbol}: {e}")
+    else:
+        logger.debug(f"[断路器] 跳过东方财富数据源（冷却中），symbol={symbol}")
 
     # Tier 2: 腾讯证券
-    try:
-        data = fetch_tencent_kline(symbol, period=period, days=days, is_index=is_index)
-        if data and len(data) > 0:
-            set_cached_kline(cache_key, data, period)
-            return data
-    except Exception as e:
-        logger.warning(f"[Tier 2 腾讯] K线获取失败 {symbol}: {e}")
+    if not _is_circuit_open("tencent"):
+        try:
+            data = fetch_tencent_kline(symbol, period=period, days=days, is_index=is_index)
+            if data and len(data) > 0:
+                _record_source_success("tencent")
+                set_cached_kline(cache_key, data, period)
+                return data
+        except Exception as e:
+            _record_source_failure("tencent")
+            logger.warning(f"[Tier 2 腾讯] K线获取失败 {symbol}: {e}")
+    else:
+        logger.debug(f"[断路器] 跳过腾讯数据源（冷却中），symbol={symbol}")
 
     # Tier 3: 新浪财经
-    try:
-        data = fetch_sina_kline(symbol, period=period, days=days, is_index=is_index)
-        if data and len(data) > 0:
-            set_cached_kline(cache_key, data, period)
-            return data
-    except Exception as e:
-        logger.warning(f"[Tier 3 新浪] K线获取失败 {symbol}: {e}")
+    if not _is_circuit_open("sina"):
+        try:
+            data = fetch_sina_kline(symbol, period=period, days=days, is_index=is_index)
+            if data and len(data) > 0:
+                _record_source_success("sina")
+                set_cached_kline(cache_key, data, period)
+                return data
+        except Exception as e:
+            _record_source_failure("sina")
+            logger.warning(f"[Tier 3 新浪] K线获取失败 {symbol}: {e}")
+    else:
+        logger.debug(f"[断路器] 跳过新浪数据源（冷却中），symbol={symbol}")
 
     # Tier 4: akshare 或 Mock兜底
-    try:
-        import akshare as ak
-        if not start_date:
-            end_date_val = end_date or datetime.now(ZoneInfo('Asia/Shanghai')).strftime("%Y%m%d")
-            start_date_val = (datetime.now(ZoneInfo('Asia/Shanghai')) - timedelta(days=days + 30)).strftime("%Y%m%d")
-        else:
-            start_date_val = start_date
-            end_date_val = end_date or "20500101"
+    if not _is_circuit_open("akshare"):
+        try:
+            import akshare as ak
+            if not start_date:
+                end_date_val = end_date or datetime.now(ZoneInfo('Asia/Shanghai')).strftime("%Y%m%d")
+                start_date_val = (datetime.now(ZoneInfo('Asia/Shanghai')) - timedelta(days=days + 30)).strftime("%Y%m%d")
+            else:
+                start_date_val = start_date
+                end_date_val = end_date or "20500101"
 
-        df = ak.stock_zh_a_hist(
-            symbol=symbol, period=period, adjust="qfq",
-            start_date=start_date_val, end_date=end_date_val
-        )
-        if df is not None and not df.empty:
-            result = []
-            for _, row in df.iterrows():
-                d = str(row['日期'])[:10]
-                result.append({
-                    "date": d,
-                    "open": round(float(row['开盘']), 2),
-                    "close": round(float(row['收盘']), 2),
-                    "high": round(float(row['最高']), 2),
-                    "low": round(float(row['最低']), 2),
-                    "volume": int(row['成交量']),
-                    "change_pct": round(float(row['涨跌幅']), 2) if '涨跌幅' in row else 0.0,
-                })
-            final_res = result[-days:] if len(result) > days else result
-            set_cached_kline(cache_key, final_res, period)
-            return final_res
-    except Exception as e:
-        logger.warning(f"[Tier 4 akshare] K线获取失败 {symbol}: {e}")
+            df = ak.stock_zh_a_hist(
+                symbol=symbol, period=period, adjust="qfq",
+                start_date=start_date_val, end_date=end_date_val
+            )
+            if df is not None and not df.empty:
+                result = []
+                for _, row in df.iterrows():
+                    d = str(row['日期'])[:10]
+                    result.append({
+                        "date": d,
+                        "open": round(float(row['开盘']), 2),
+                        "close": round(float(row['收盘']), 2),
+                        "high": round(float(row['最高']), 2),
+                        "low": round(float(row['最低']), 2),
+                        "volume": int(row['成交量']),
+                        "change_pct": round(float(row['涨跌幅']), 2) if '涨跌幅' in row else 0.0,
+                    })
+                final_res = result[-days:] if len(result) > days else result
+                _record_source_success("akshare")
+                set_cached_kline(cache_key, final_res, period)
+                return final_res
+        except Exception as e:
+            _record_source_failure("akshare")
+            logger.warning(f"[Tier 4 akshare] K线获取失败 {symbol}: {e}")
+    else:
+        logger.debug(f"[断路器] 跳过akshare数据源（冷却中），symbol={symbol}")
 
     mock_fallback = MockMarketDataProvider.generate_mock_kline(symbol, days)
     set_cached_kline(cache_key, mock_fallback, period)

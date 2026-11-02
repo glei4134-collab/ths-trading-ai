@@ -321,18 +321,20 @@ class AccountManager:
 
     def __init__(self):
         self.traders: Dict[int, THSAccountTrader] = {}  # account_id -> trader
+        self._traders_lock = threading.Lock()  # P5: traders 字典并发读写互斥锁
 
     def _load_traders(self):
         """加载已有账户的trader"""
         from db_store import db_store
         accounts = db_store.list_accounts()
-        for acc in accounts:
-            cookie = db_store.get_account_cookie(acc["id"])
-            if cookie:
-                trader = THSAccountTrader(acc["id"])
-                trader.cookie = cookie
-                trader.connected = True
-                self.traders[acc["id"]] = trader
+        with self._traders_lock:
+            for acc in accounts:
+                cookie = db_store.get_account_cookie(acc["id"])
+                if cookie:
+                    trader = THSAccountTrader(acc["id"])
+                    trader.cookie = cookie
+                    trader.connected = True
+                    self.traders[acc["id"]] = trader
 
     def add_account(self, name: str, cookie: str) -> Dict:
         """
@@ -419,7 +421,8 @@ class AccountManager:
             trader = THSAccountTrader(acc_id)
             trader.cookie = cookie
             trader.connected = True
-            self.traders[acc_id] = trader
+            with self._traders_lock:
+                self.traders[acc_id] = trader
             sync_result = trader.sync_from_ths()
             logger.info(f"安全识别并原地更新已绑定账号 Cookie: {acc_name} (ID={acc_id}, gdzh={gdzh}, 资金={ky_fund})")
             return {
@@ -442,7 +445,8 @@ class AccountManager:
         trader = THSAccountTrader(acc_id)
         trader.cookie = cookie
         trader.connected = True
-        self.traders[acc_id] = trader
+        with self._traders_lock:
+            self.traders[acc_id] = trader
         sync_result = trader.sync_from_ths()
         try:
             if sync_result.get("success"):
@@ -471,8 +475,10 @@ class AccountManager:
         """删除账户"""
         from db_store import db_store
         ok = db_store.delete_account(account_id)
-        if ok and account_id in self.traders:
-            del self.traders[account_id]
+        if ok:
+            with self._traders_lock:
+                if account_id in self.traders:
+                    del self.traders[account_id]
         return ok
 
     def rename(self, account_id: int, name: str):
@@ -532,8 +538,9 @@ class AccountManager:
 
     def get_trader(self, account_id: int) -> Optional[THSAccountTrader]:
         """获取指定账户的交易器（自动加载未缓存的账户，确保100%穿透对齐）"""
-        if account_id in self.traders:
-            return self.traders[account_id]
+        with self._traders_lock:
+            if account_id in self.traders:
+                return self.traders[account_id]
         # 自动加载: 新创建或未缓存的账户，只要数据库存在即创建专属 Trader
         try:
             from db_store import db_store
@@ -543,7 +550,8 @@ class AccountManager:
                 trader = THSAccountTrader(account_id)
                 trader.cookie = cookie
                 trader.connected = bool(cookie)
-                self.traders[account_id] = trader
+                with self._traders_lock:
+                    self.traders[account_id] = trader
                 logger.info(f"自动加载账户 {account_id} 的 trader (connected={trader.connected})")
                 return trader
         except Exception as e:
@@ -568,7 +576,7 @@ class AccountManager:
         """根据委托合同编号精确定位所属账户（防跨账户串号撤单）"""
         if not order_id:
             return None
-        # 1. 优先从数据库查询交易归属
+        # T3/T7: 优先用 SQL 精确查询 trades.order_id，不再遍历所有账户
         try:
             from db_store import db_store
             with db_store._get_conn() as conn:
@@ -580,18 +588,6 @@ class AccountManager:
                     return int(row["account_id"])
         except Exception as e:
             logger.debug(f"通过数据库查找 order_id 所属账户失败: {e}")
-
-        # 2. 若本地无记录，遍历当前所有已连接账户的实时挂单
-        for acc_id, trader in list(self.traders.items()):
-            if trader and trader.connected:
-                try:
-                    orders_res = trader.get_orders()
-                    if orders_res.get("success"):
-                        for o in orders_res.get("data", []):
-                            if str(o.get("order_id", "")) == str(order_id):
-                                return acc_id
-                except Exception:
-                    pass
         return None
 
     def cancel_order(self, account_id: Optional[int], order_id: str, date: str = "") -> Dict:
@@ -616,10 +612,12 @@ class AccountManager:
         """撤销未成交委托（单账户专属通道或全账户并发撤单）"""
         if all_accounts:
             results = {}
-            with ThreadPoolExecutor(max_workers=min(len(self.traders) or 1, 8), thread_name_prefix="cancel-all") as executor:
+            with self._traders_lock:
+                connected_pairs = [(acc_id, trader) for acc_id, trader in self.traders.items() if trader and trader.connected]
+            with ThreadPoolExecutor(max_workers=min(len(connected_pairs) or 1, 8), thread_name_prefix="cancel-all") as executor:
                 future_map = {
                     executor.submit(trader.cancel_all_orders): acc_id
-                    for acc_id, trader in self.traders.items() if trader and trader.connected
+                    for acc_id, trader in connected_pairs
                 }
                 for future in as_completed(future_map):
                     acc_id = future_map[future]
@@ -654,7 +652,8 @@ class AccountManager:
 
         # 获取该账户独立的资金和持仓信息
         summary = db_store.get_account_summary(account_id)
-        trader = self.traders.get(account_id)
+        with self._traders_lock:
+            trader = self.traders.get(account_id)
         if trader:
             summary["positions"] = {s: p for s, p in trader._positions.items()}
         else:
@@ -667,7 +666,9 @@ class AccountManager:
     def decide_for_all(self, symbol: str, stock_data: Dict, indicators: Dict) -> Dict:
         """AI为所有账户做决策（每个账户独立决策）"""
         results = {}
-        for acc_id in self.traders:
+        with self._traders_lock:
+            acc_ids = list(self.traders.keys())
+        for acc_id in acc_ids:
             try:
                 results[acc_id] = self.decide_for_account(acc_id, symbol, stock_data, indicators)
             except Exception as e:
@@ -731,6 +732,39 @@ class AccountManager:
             return {"success": False, "message": guard.message, "code": guard.code, "recorded": False, "amount": 0}
 
         amount = guard.amount
+
+        # ===== T2: 总仓位统一前置风控门禁（仅对买入生效）=====
+        if action == "buy" and tot_assets > 0:
+            cur_market_value = float(acc.get("market_value") or 0.0)
+            buy_amount = float(price) * amount
+            # 总仓位上限：买入后总仓位市值 / 总资产 > 80% 则拒绝
+            if (cur_market_value + buy_amount) / tot_assets > 0.80:
+                msg = (f"总仓位超过 80% 限制 (当前市值 {cur_market_value:.2f} + 本次买入 "
+                       f"{buy_amount:.2f}) / 总资产 {tot_assets:.2f} > 80%)")
+                logger.info(f"下单闸门拒绝 账户#{account_id} 买入 {symbol}: {msg}")
+                return {"success": False, "message": msg, "code": "TOTAL_POSITION_CAP", "recorded": False, "amount": 0}
+            # 单票上限：买入后该票市值 / 总资产 > 25%（低吸极值）则拒绝（35% 硬顶由 order_guard 保证）
+            if (existing_val + buy_amount) / tot_assets > 0.25:
+                msg = (f"单票仓位超过 25% 低吸极值 (当前市值 {existing_val:.2f} + 本次买入 "
+                       f"{buy_amount:.2f}) / 总资产 {tot_assets:.2f} > 25%)")
+                logger.info(f"下单闸门拒绝 账户#{account_id} 买入 {symbol}: {msg}")
+                return {"success": False, "message": msg, "code": "SINGLE_POSITION_CAP", "recorded": False, "amount": 0}
+
+        # ===== T4: 盘中 place_order 应用滑点（与回测口径一致）=====
+        try:
+            from auto_trader import auto_trader
+            slippage_rate = float(getattr(auto_trader, "slippage_rate", None) or
+                                  (auto_trader.config.get("slippage_rate", 0.001) if hasattr(auto_trader, "config") else 0.001))
+        except Exception:
+            slippage_rate = 0.001
+        original_price = price
+        if action == "buy":
+            price = round(price * (1 + slippage_rate), 2)
+        elif action == "sell":
+            price = round(price * (1 - slippage_rate), 2)
+        if price != original_price:
+            logger.debug(f"[SLIPPAGE] 账户#{account_id} {action} {symbol}: 原价 {original_price:.2f} -> 滑点后 {price:.2f} (rate={slippage_rate})")
+
         if dry_run:
             return {
                 "success": True, "message": "演练通过闸门，未向券商发单",
@@ -749,6 +783,14 @@ class AccountManager:
 
         result = dict(result or {})
         result["amount"] = amount
+
+        # ===== T3/T7: 从同花顺返回结果提取委托号 order_id，供撤单路由精确定位 =====
+        order_id = ""
+        if result.get("success"):
+            order_id = self._extract_order_id(result.get("data"))
+            if order_id:
+                result["order_id"] = order_id
+
         if result.get("success") and persist:
             now_s = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S")
             db_store.add_trade({
@@ -761,6 +803,7 @@ class AccountManager:
                 "total": round(float(price) * amount, 2),
                 "balance": round(cash - (price * amount if action == "buy" else -price * amount), 2),
                 "mode": "real" if trader and trader.connected else "simulated",
+                "order_id": order_id,
             }, account_id=account_id)
             result["recorded"] = True
             try:
@@ -770,6 +813,36 @@ class AccountManager:
         else:
             result["recorded"] = False
         return result
+
+    @staticmethod
+    def _extract_order_id(data) -> str:
+        """从同花顺 buy/sell 返回的 data 中稳健提取委托合同编号 (order_id/entrust_no)"""
+        if not data:
+            return ""
+        # data 可能是 dict、str、list 或其他结构
+        if isinstance(data, dict):
+            for key in ("order_id", "entrust_no", "htbh", "d_2135", "wtbh", "contract_no"):
+                val = data.get(key)
+                if val:
+                    return str(val).strip()
+            # 嵌套一层 result/data
+            for nested_key in ("result", "data"):
+                nested = data.get(nested_key)
+                if isinstance(nested, dict):
+                    for key in ("order_id", "entrust_no", "htbh", "d_2135", "wtbh", "contract_no"):
+                        val = nested.get(key)
+                        if val:
+                            return str(val).strip()
+        elif isinstance(data, str):
+            return data.strip()
+        elif isinstance(data, (list, tuple)) and data:
+            first = data[0]
+            if isinstance(first, dict):
+                for key in ("order_id", "entrust_no", "htbh", "d_2135", "wtbh", "contract_no"):
+                    val = first.get(key)
+                    if val:
+                        return str(val).strip()
+        return ""
 
     def execute_for_account(self, account_id: int, symbol: str, action: str,
                             price: float, amount: int) -> Dict:
@@ -906,7 +979,8 @@ class AccountManager:
         """
         start_t = time.perf_counter()
         results = {}
-        acc_ids = list(self.traders.keys())
+        with self._traders_lock:
+            acc_ids = list(self.traders.keys())
         if not acc_ids:
             return results
 

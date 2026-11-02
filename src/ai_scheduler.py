@@ -848,7 +848,7 @@ class AIScheduler:
             from competition import competition_manager
             from strategy_registry import registry
             from auto_trader import auto_trader
-            from data_cache import get_kline
+            from data_cache import get_kline, compute_indicators
 
             # 1. 扫描池与时序低吸冲击池主动灌入
             pool = competition_manager.get_stock_pool(limit=40, sort_by="change_pct")
@@ -870,32 +870,31 @@ class AIScheduler:
                 gap_pct = (open_p - pre_close) / pre_close * 100
                 hist = get_kline(sym, days=25)
                 
-                # 基于历史K线计算真实指标（均线、RSI与MACD）
+                # 统一指标口径：复用 data_cache.compute_indicators 的 pandas 标准算法
+                # (MA 滚动均值 / RSI Wilder 平滑 / MACD EMA)，避免与 strategy.py 产生算法分歧。
+                # 集合竞价无当日K线，合成一根以 open_p 为收盘的虚拟bar使指标包含最新价。
                 indicators = {
                     "close": open_p,
                     "open": open_p,
                 }
                 if hist and len(hist) >= 5:
-                    closes_with_open = [h.get("close", 0) for h in hist] + [open_p]
-                    indicators["ma5"] = sum(closes_with_open[-5:]) / 5.0
-                    indicators["ma10"] = sum(closes_with_open[-10:]) / 10.0 if len(closes_with_open) >= 10 else indicators["ma5"] * 0.99
-                    indicators["ma20"] = sum(closes_with_open[-20:]) / 20.0 if len(closes_with_open) >= 20 else indicators["ma10"] * 0.99
-                    if len(closes_with_open) >= 15:
-                        gains = [max(0, closes_with_open[j] - closes_with_open[j-1]) for j in range(-14, 0)]
-                        losses = [max(0, closes_with_open[j-1] - closes_with_open[j]) for j in range(-14, 0)]
-                        avg_g = sum(gains) / 14.0
-                        avg_l = sum(losses) / 14.0 or 0.0001
-                        indicators["rsi"] = round(100.0 - (100.0 / (1.0 + avg_g / avg_l)), 2)
-                    else:
-                        indicators["rsi"] = 55.0
-                    if len(closes_with_open) >= 26:
-                        ema12 = sum(closes_with_open[-12:]) / 12.0
-                        ema26 = sum(closes_with_open[-26:]) / 26.0
-                        macd_val = ema12 - ema26
-                        indicators["macd"] = macd_val
-                        indicators["histogram"] = round(macd_val * 0.5, 4)
-                    else:
-                        indicators["histogram"] = 0.02
+                    hist_with_open = list(hist) + [{
+                        "date": "TODAY_OPEN",
+                        "open": open_p,
+                        "close": open_p,
+                        "high": open_p,
+                        "low": open_p,
+                        "volume": 0,
+                        "change_pct": gap_pct,
+                    }]
+                    std_ind = compute_indicators(hist_with_open) or {}
+                    indicators["ma5"] = std_ind.get("ma5") or (open_p * 0.99)
+                    indicators["ma10"] = std_ind.get("ma10") or (indicators["ma5"] * 0.99)
+                    indicators["ma20"] = std_ind.get("ma20") or (indicators["ma10"] * 0.99)
+                    indicators["rsi"] = std_ind.get("rsi") or 55.0
+                    if "macd" in std_ind:
+                        indicators["macd"] = std_ind["macd"]
+                    indicators["histogram"] = std_ind.get("histogram") or 0.02
                 else:
                     indicators["ma5"] = open_p * 0.99
                     indicators["ma10"] = open_p * 0.98
@@ -2692,16 +2691,33 @@ A股交易时段: 上午9:30-11:30, 下午13:00-15:00
         try:
             from intraday_timing_engine import intraday_timing_engine
             from db_store import db_store
-            from fast_data import fetch_realtime_single
-            from account_manager import account_manager
 
             retention_decider = intraday_timing_engine["retention_decider"]
+            dip_buyer = intraday_timing_engine["dip_buyer"]
+            unsold_ctrl = intraday_timing_engine["unsold_controller"]
+
             accounts = db_store.list_accounts() or []
             if not accounts:
                 active_id = db_store.get_active_account_id() or 1
                 accounts = [{"id": active_id, "name": "默认主账户"}]
 
-            # 1. 动态评估多账户持仓去留（全面穿透 account_manager.place_order 真实交易通道）
+            # 1. 持仓去留评估与卖出
+            self._tick_retention_control(accounts, retention_decider, unsold_ctrl)
+            # 2. 未买入标的低吸买入（多账户独立分配）
+            self._tick_dip_buying(accounts, dip_buyer)
+            # 3. 未卖出超时调控
+            self._tick_unsold_reprice(unsold_ctrl)
+
+        except Exception as e:
+            logger.warning(f"高频时序巡检逻辑执行异常: {e}")
+
+    def _tick_retention_control(self, accounts, retention_decider, unsold_ctrl):
+        """持仓去留评估与卖出：遍历多账户持仓，按 evaluate_retention 决策执行去/留/减/换"""
+        try:
+            from db_store import db_store
+            from fast_data import fetch_realtime_single
+            from account_manager import account_manager
+
             for acc in accounts:
                 acc_id = acc.get("id")
                 if acc_id is None:
@@ -2745,7 +2761,6 @@ A股交易时段: 上午9:30-11:30, 下午13:00-15:00
                             )
                             logger.info(f"✅ [{acc_name}] 真实通道去留止损委托结果: {order_res.get('message')}")
                             # 闭环追踪：自动登记到 unsold_controller，若一定时间未成交将触发超时调控
-                            unsold_ctrl = intraday_timing_engine["unsold_controller"]
                             exp_time = (datetime.now() + timedelta(minutes=3)).strftime("%H:%M:%S")
                             unsold_ctrl.register_expected_sell(
                                 symbol=sym,
@@ -2776,11 +2791,16 @@ A股交易时段: 上午9:30-11:30, 下午13:00-15:00
                                 logger.info(f"✅ [{acc_name}] 冲高减半止盈委托结果: {order_res.get('message')}")
                             except Exception as ex:
                                 logger.error(f"[{acc_name}] 冲高减仓报单异常: {ex}")
+        except Exception as e:
+            logger.warning(f"[持仓去留] 子流程执行异常: {e}")
 
-            # 2. 未买入重点关注股票时序回踩低吸
-            active_id = db_store.get_active_account_id() or 1
-            held_positions_active = db_store.get_positions(active_id) or {}
-            dip_buyer = intraday_timing_engine["dip_buyer"]
+    def _tick_dip_buying(self, accounts, dip_buyer):
+        """未买入标的低吸买入：遍历所有账户，对每个账户独立计算可买量并执行低吸"""
+        try:
+            from db_store import db_store
+            from fast_data import fetch_realtime_single
+            from account_manager import account_manager
+
             if not dip_buyer.watchlist:
                 self._init_dip_buyer_watchlist()
             for sym, item in list(dip_buyer.watchlist.items())[:10]:
@@ -2803,37 +2823,77 @@ A股交易时段: 上午9:30-11:30, 下午13:00-15:00
                 eff_min_dip_score = 75.0
 
             actionable_dips = dip_buyer.get_actionable_dip_candidates(min_dip_score=eff_min_dip_score)
-            if actionable_dips:
-                summary = db_store.get_account_summary(active_id) or {}
+            if not actionable_dips:
+                return
+
+            # T6: 多账户低吸平衡分配 —— 遍历所有账户，每账户独立核算可用资金与持仓
+            bought_syms = set()
+            for acc in accounts:
+                acc_id = acc.get("id")
+                if acc_id is None:
+                    continue
+                acc_name = acc.get("name", f"账户#{acc_id}")
+
+                held_positions = db_store.get_positions(acc_id) or {}
+                cur_pos_cnt = len(held_positions)
+                if cur_pos_cnt >= 5:
+                    continue
+
+                summary = db_store.get_account_summary(acc_id) or {}
                 avail_cash = float(summary.get("ky_fund", summary.get("balance", 0.0)) or 0.0)
+                if avail_cash < 3000.0:
+                    continue
                 tot_assets = float(summary.get("total_assets", 200000.0) or 200000.0)
-                cur_pos_cnt = len(held_positions_active)
 
-                if cur_pos_cnt < 5 and avail_cash >= 3000.0:
-                    best_dip = actionable_dips[0]
-                    dip_sym = best_dip["symbol"]
-                    dip_price = float(best_dip.get("last_price") or 0.0)
-                    if dip_price > 0 and dip_sym not in held_positions_active:
-                        cost_1lot = dip_price * 100.0
-                        shares = int(min(avail_cash * 0.5, tot_assets * 0.25) // cost_1lot) * 100
-                        if shares >= 100:
-                            logger.info(f"🎯 [时序低吸] 捕捉回踩低吸点买入: {dip_sym} 股数={shares} 现价={dip_price} 回踩={best_dip.get('pullback_pct')}%")
-                            try:
-                                buy_res = account_manager.place_order(
-                                    account_id=active_id,
-                                    symbol=dip_sym,
-                                    action="buy",
-                                    price=dip_price,
-                                    amount=shares,
-                                    notes="时序低吸买入"
-                                )
-                                if buy_res.get("success"):
-                                    dip_buyer.watchlist[dip_sym]["status"] = "BOUGHT"
-                            except Exception as ex:
-                                logger.error(f"时序低吸报单异常: {ex}")
+                # 选择该账户尚未持有的最优低吸标的
+                best_dip = None
+                for cand in actionable_dips:
+                    if cand["symbol"] not in held_positions and cand["symbol"] not in bought_syms:
+                        best_dip = cand
+                        break
+                if best_dip is None:
+                    continue
 
-            # 3. 未卖出预期时间合理调控（全要素支持 (account_id, symbol) 复合键，穿透 place_order 真实通道）
-            unsold_ctrl = intraday_timing_engine["unsold_controller"]
+                dip_sym = best_dip["symbol"]
+                dip_price = float(best_dip.get("last_price") or 0.0)
+                if dip_price <= 0:
+                    continue
+
+                cost_1lot = dip_price * 100.0
+                shares = int(min(avail_cash * 0.5, tot_assets * 0.25) // cost_1lot) * 100
+                if shares < 100:
+                    continue
+
+                logger.info(f"🎯 [时序低吸][{acc_name}] 捕捉回踩低吸点买入: {dip_sym} 股数={shares} 现价={dip_price} 回踩={best_dip.get('pullback_pct')}%")
+                try:
+                    buy_res = account_manager.place_order(
+                        account_id=acc_id,
+                        symbol=dip_sym,
+                        action="buy",
+                        price=dip_price,
+                        amount=shares,
+                        notes="时序低吸买入"
+                    )
+                    if buy_res.get("success"):
+                        bought_syms.add(dip_sym)
+                except Exception as ex:
+                    logger.error(f"[{acc_name}] 时序低吸报单异常: {ex}")
+
+            # 全部账户处理完毕后统一标记已买入，避免单账户买入后阻塞其他账户参与
+            for sym in bought_syms:
+                if sym in dip_buyer.watchlist:
+                    dip_buyer.watchlist[sym]["status"] = "BOUGHT"
+        except Exception as e:
+            logger.warning(f"[时序低吸] 子流程执行异常: {e}")
+
+    def _tick_unsold_reprice(self, unsold_ctrl):
+        """未卖出超时调控：对超时未成交卖单执行涨停顺延或降价追单"""
+        try:
+            from db_store import db_store
+            from fast_data import fetch_realtime_single
+            from account_manager import account_manager
+
+            active_id = db_store.get_active_account_id() or 1
             now_str = datetime.now().strftime("%H:%M:%S")
             for key, item in list(unsold_ctrl.pending_sells.items()):
                 if isinstance(key, tuple) and len(key) == 2:
@@ -2854,6 +2914,8 @@ A股交易时段: 上午9:30-11:30, 下午13:00-15:00
                 cur_p = float(q.get("price") or item.get("target_price") or 0.0)
                 chg_p = float(q.get("change_pct") or 0.0)
                 stat = unsold_ctrl.evaluate_unsold_status(sym, cur_p, chg_p, now_time_str=now_str, account_id=acc_id)
+                if not stat:
+                    continue
                 action = stat.get("tuning_action")
                 if action == "REPRICE_URGENT_SELL":
                     tuning_reason = stat.get('tuning_reason', '超时紧急调价强平')
@@ -2878,9 +2940,8 @@ A股交易时段: 上午9:30-11:30, 下午13:00-15:00
                         logger.error(f"超时调控市价卖出异常: {ex}")
                 elif action == "CANCEL_AND_RIDE":
                     logger.info(f"🚀 [超时调控] 账户#{acc_id} 标的强势涨停，顺延持仓享受溢价: {sym}")
-
         except Exception as e:
-            logger.debug(f"高频时序巡检逻辑执行异常: {e}")
+            logger.warning(f"[未卖出调控] 子流程执行异常: {e}")
 
 
 # 全局实例

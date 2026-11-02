@@ -25,6 +25,17 @@
         return `${sign}${n.toFixed(2)}%`;
     }
 
+    // XSS 防护：对插入 innerHTML 的动态文本进行 HTML 转义
+    function escapeHtml(str) {
+        if (str === null || str === undefined) return '';
+        return String(str)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
     // 1. 全局 HUD 态势时钟与网关 RTT 测速
     function tickHudClock() {
         const now = new Date();
@@ -169,8 +180,8 @@
                 <div class="pipeline-step-card" style="background: rgba(18, 14, 20, 0.85); border: 1px solid rgba(255, 255, 255, 0.08); border-left: 3px solid ${st.color}; border-radius: 6px; padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; transition: all 0.2s;" onmouseover="this.style.background='rgba(30,20,28,0.95)'" onmouseout="this.style.background='rgba(18, 14, 20, 0.85)'">
                     <div style="display: flex; justify-content: space-between; align-items: center;">
                         <div style="display: flex; align-items: center; gap: 8px;">
-                            <span style="font-family: var(--font-mono); font-size: 11px; font-weight: 800; color: #ffe600; background: rgba(255,230,0,0.12); padding: 1px 6px; border-radius: 4px;">${e.window || `W${idx}`}</span>
-                            <span style="font-size: 12px; font-weight: 700; color: #f8fafc;">${e.step_name || e.step_id}</span>
+                            <span style="font-family: var(--font-mono); font-size: 11px; font-weight: 800; color: #ffe600; background: rgba(255,230,0,0.12); padding: 1px 6px; border-radius: 4px;">${escapeHtml(e.window || `W${idx}`)}</span>
+                            <span style="font-size: 12px; font-weight: 700; color: #f8fafc;">${escapeHtml(e.step_name || e.step_id)}</span>
                         </div>
                         <div style="display: flex; align-items: center; gap: 6px;">
                             ${dur ? `<span style="font-size: 10px; color: #94a3b8; font-family: var(--font-mono);">${dur}</span>` : ''}
@@ -179,9 +190,9 @@
                     </div>
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 2px;">
                         <div style="font-size: 11px; color: #94a3b8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 78%;">
-                            ${summary}
+                            ${escapeHtml(summary)}
                         </div>
-                        <button onclick="triggerStepRun('${e.step_id}', true)" style="background: rgba(255,24,36,0.12); border: 1px solid rgba(255,24,36,0.3); color: #ff1824; font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 4px; cursor: pointer; white-space: nowrap;">
+                        <button onclick="triggerStepRun('${escapeHtml(e.step_id)}', true)" style="background: rgba(255,24,36,0.12); border: 1px solid rgba(255,24,36,0.3); color: #ff1824; font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 4px; cursor: pointer; white-space: nowrap;">
                             单步演练
                         </button>
                     </div>
@@ -271,14 +282,14 @@
             const weight = item.recommended_weight !== undefined ? item.recommended_weight : 26.5;
 
             return `
-                <tr style="border-bottom: 1px solid rgba(255,255,255,0.06); cursor: pointer; transition: background 0.15s;" onmouseover="this.style.background='rgba(255,24,36,0.06)'" onmouseout="this.style.background='transparent'" onclick="if(typeof selectStock==='function') selectStock('${item.code}')">
+                <tr style="border-bottom: 1px solid rgba(255,255,255,0.06); cursor: pointer; transition: background 0.15s;" onmouseover="this.style.background='rgba(255,24,36,0.06)'" onmouseout="this.style.background='transparent'" onclick="if(typeof selectStock==='function') selectStock('${escapeHtml(item.code)}')">
                     <td style="padding: 10px 14px; white-space: nowrap;">
-                        <div style="font-weight: 700; color: #f8fafc; font-size: 13px;">${item.name}</div>
-                        <div style="font-size: 11px; color: #94a3b8; font-family: var(--font-mono);">${item.code}</div>
+                        <div style="font-weight: 700; color: #f8fafc; font-size: 13px;">${escapeHtml(item.name)}</div>
+                        <div style="font-size: 11px; color: #94a3b8; font-family: var(--font-mono);">${escapeHtml(item.code)}</div>
                     </td>
                     <td style="padding: 10px 14px; white-space: nowrap;">
                         <span style="font-size: 11px; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1); color: #cbd5e1; padding: 2px 7px; border-radius: 4px;">
-                            ${item.industry || item.sector || '主线热门'}
+                            ${escapeHtml(item.industry || item.sector || '主线热门')}
                         </span>
                     </td>
                     <td style="padding: 10px 14px; text-align: right; font-family: var(--font-mono); font-weight: 700; color: #f8fafc; font-size: 13px;">
@@ -337,13 +348,13 @@
                     : (c.ensemble_votes || '3/5 赞成');
 
                 return `
-                    <div class="mobile-stock-card" onclick="if(typeof selectStock==='function') selectStock('${c.code}')">
+                    <div class="mobile-stock-card" onclick="if(typeof selectStock==='function') selectStock('${escapeHtml(c.code)}')">
                         <div class="m-card-header">
                             <div class="m-stock-title">
-                                <span class="m-stock-name">${c.name}</span>
+                                <span class="m-stock-name">${escapeHtml(c.name)}</span>
                                 <div class="m-stock-sub">
-                                    <span class="m-stock-code">${c.code}</span>
-                                    <span class="m-stock-sector">${sector}</span>
+                                    <span class="m-stock-code">${escapeHtml(c.code)}</span>
+                                    <span class="m-stock-sector">${escapeHtml(sector)}</span>
                                 </div>
                             </div>
                             <div class="m-stock-quote">
@@ -641,7 +652,7 @@
                     <div onclick="switchAccount(${acc.id})" style="${activeStyle} border-radius: 6px; padding: 8px 8px; cursor: pointer; transition: all 0.2s; min-width: 0; overflow: hidden;" onmouseover="this.style.transform='translateY(-2px)'" onmouseout="this.style.transform='none'">
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; gap: 2px;">
                             <div style="display: flex; align-items: center; gap: 3px; min-width: 0; overflow: hidden;">
-                                <span style="font-size: 11px; font-weight: 800; color: #f8fafc; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${dispName}</span>
+                                <span style="font-size: 11px; font-weight: 800; color: #f8fafc; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(dispName)}</span>
                                 ${isActive ? '<span style="font-size: 9px; color: #00f59b; font-weight: 800; flex-shrink: 0;">●</span>' : ''}
                             </div>
                             <span style="font-size: 8px; font-weight: 800; font-family: var(--font-mono); padding: 1px 4px; border-radius: 3px; color: ${cfg.themeColor}; background: ${cfg.bgGrad}; flex-shrink: 0;">${cfg.label}</span>
@@ -750,8 +761,8 @@
                 return `
                     <div style="background: rgba(18, 14, 20, 0.7); border: 1px solid rgba(255,255,255,0.06); border-radius: 6px; padding: 6px 10px; display: flex; justify-content: space-between; align-items: center; font-size: 11px;">
                         <div>
-                            <span style="font-weight: 700; color: #f8fafc;">${p.name || p.symbol}</span>
-                            <span style="color: #94a3b8; font-family: var(--font-mono); margin-left: 4px;">${p.symbol}</span>
+                            <span style="font-weight: 700; color: #f8fafc;">${escapeHtml(p.name || p.symbol)}</span>
+                            <span style="color: #94a3b8; font-family: var(--font-mono); margin-left: 4px;">${escapeHtml(p.symbol)}</span>
                         </div>
                         <div style="text-align: right; font-family: var(--font-mono);">
                             <span style="color: ${color}; font-weight: 700;">${sign}${pnlPct.toFixed(2)}%</span>
@@ -786,7 +797,7 @@
                     if (log.includes('成功') || log.includes('买入') || log.includes('成交')) col = '#00f59b';
                     else if (log.includes('警告') || log.includes('观望')) col = '#ffe600';
                     else if (log.includes('失败') || log.includes('止损') || log.includes('违规')) col = '#ff1824';
-                    return `<div style="color:${col};margin-bottom:4px;word-break:break-all;">${log}</div>`;
+                    return `<div style="color:${col};margin-bottom:4px;word-break:break-all;">${escapeHtml(log)}</div>`;
                 }).join('');
                 execLogEl.scrollTop = execLogEl.scrollHeight;
                 if (execCountEl) execCountEl.textContent = `${d.recent_logs.length} 笔动作`;

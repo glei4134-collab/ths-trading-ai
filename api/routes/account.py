@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any
 
 from flask import Blueprint, jsonify, request, Response, send_file
+from markupsafe import escape as _html_escape
 
 from api.context import (
     engine, broker, trader, _device_manager, trading_mode, trading_state,
@@ -1150,7 +1151,7 @@ def quick_bind_ths_account():
             return resp
 
         if "userid=ths_gu_" in cookie:
-            msg = "❌ 检测到当前处于未登录访客状态 (ths_gu_)！<br><br>请在同花顺网页先登录您的正式账号，并<b>点击【同花顺交易区】</b>进入交易台，然后再点击此同步按钮。"
+            msg = "❌ 检测到当前处于未登录访客状态 (ths_gu_)！\n\n请在同花顺网页先登录您的正式账号，并【点击同花顺交易区】进入交易台，然后再点击此同步按钮。"
             if request.method == 'GET':
                 return Response(_render_quick_bind_html(False, msg), mimetype='text/html')
             resp = jsonify({"success": False, "message": msg})
@@ -1180,6 +1181,8 @@ def _render_quick_bind_html(success: bool, message: str, acc_data: dict = None) 
     icon = "✅" if success else "❌"
     color = "#3fb950" if success else "#f85149"
     title = "同花顺 Cookie 同步成功" if success else "Cookie 同步失败"
+    # message 可能包含用户可控数据（Cookie 解析结果、异常信息等），插入 HTML 前必须转义
+    safe_message = _html_escape(message)
     payload_json = json.dumps({"type": "THS_COOKIE_BOUND", "success": success, "message": message, "account": acc_data or {}}, ensure_ascii=False)
     return f"""<!DOCTYPE html>
 <html lang="zh-CN">
@@ -1192,7 +1195,7 @@ body {{ background:#0d1117; color:#f0f6fc; font-family:-apple-system,BlinkMacSys
 .card {{ background:#161b22; border:1px solid {color}; border-radius:12px; padding:24px 28px; max-width:360px; box-shadow:0 12px 32px rgba(0,0,0,0.6); }}
 .icon {{ font-size:40px; margin-bottom:10px; }}
 .title {{ font-size:16px; font-weight:700; color:{color}; margin-bottom:8px; }}
-.msg {{ font-size:13px; color:#c9d1d9; line-height:1.6; margin-bottom:16px; word-break:break-all; }}
+.msg {{ font-size:13px; color:#c9d1d9; line-height:1.6; margin-bottom:16px; word-break:break-all; white-space:pre-line; }}
 .sub {{ font-size:11px; color:#8b949e; }}
 </style>
 </head>
@@ -1200,7 +1203,7 @@ body {{ background:#0d1117; color:#f0f6fc; font-family:-apple-system,BlinkMacSys
 <div class="card">
   <div class="icon">{icon}</div>
   <div class="title">{title}</div>
-  <div class="msg">{message}</div>
+  <div class="msg">{safe_message}</div>
   <div class="sub">{'窗口将在 2 秒后自动关闭...' if success else '请登录同花顺模拟炒股页面后重试'}</div>
 </div>
 <script>

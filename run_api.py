@@ -4,6 +4,7 @@
 """
 
 import logging
+from logging.handlers import TimedRotatingFileHandler
 import os
 import sys
 from pathlib import Path
@@ -18,6 +19,10 @@ if str(SRC) not in sys.path:
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.StreamHandler(),
+        TimedRotatingFileHandler(ROOT / "trading.log", when="midnight", backupCount=14, encoding="utf-8"),
+    ],
 )
 
 from api import create_app  # noqa: E402
@@ -37,7 +42,7 @@ def main():
         print("鉴权状态: [免鉴权模式] ALLOW_INSECURE=1 (仅限开发调试)")
     else:
         print(f"访问令牌: {API_TOKEN}")
-        print(f"直达链接: http://{host}:{port}/?token={API_TOKEN}")
+        print("提示: 令牌已保存至 config/api_token.json，请通过 Authorization: Bearer <token> 头传递，勿在 URL 中传参")
         print("免密调试: set ALLOW_INSECURE=1")
     print("=" * 60)
     app.run(debug=debug, host=host, port=port, use_reloader=False)

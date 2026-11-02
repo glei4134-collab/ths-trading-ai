@@ -374,12 +374,28 @@ def ai_candidates_today():
             })
 
         results.sort(key=lambda x: (x["decision"] == "BUY", x["affordable"], x["ensemble_score"]), reverse=True)
-        return jsonify({
-            "success": True,
-            "data": results,
-            "candidates": results,
-            "total": len(results),
-            "account": {
+
+        # 双模脱敏：未登录时隐藏资金与持仓明细
+        authenticated = getattr(request, 'authenticated', False)
+        if not authenticated:
+            for item in results:
+                item["held_shares"] = 0
+                item["held_ratio_pct"] = 0.0
+                item["suggested_amount"] = 0.0
+                item["suggested_shares"] = 0
+                item["affordable"] = False
+            account_block = {
+                "account_id": account_id,
+                "name": acc_name,
+                "style": style,
+                "style_name": style_name,
+                "total_assets": "***",
+                "available_cash": "***",
+                "max_single_pct": round(max_single_pct * 100, 1),
+                "stop_loss_pct": round(stop_loss_pct * 100, 1),
+            }
+        else:
+            account_block = {
                 "account_id": account_id,
                 "name": acc_name,
                 "style": style,
@@ -389,6 +405,13 @@ def ai_candidates_today():
                 "max_single_pct": round(max_single_pct * 100, 1),
                 "stop_loss_pct": round(stop_loss_pct * 100, 1),
             }
+
+        return jsonify({
+            "success": True,
+            "data": results,
+            "candidates": results,
+            "total": len(results),
+            "account": account_block,
         })
     except Exception as e:
         logger.exception(f"获取今日优选候选池异常: {e}")
@@ -490,6 +513,20 @@ def ai_timing_overview():
 
         dip_pullback_count = sum(1 for c in unbought_list if float(c.get("pullback_pct", 0.0)) >= 1.5)
         dip_actionable_count = sum(1 for c in unbought_list if c.get("status") in ("TIMING_DIP_BUY", "HELD"))
+
+        # 双模脱敏：未登录时隐藏持仓的数量/成本/盈亏等敏感字段
+        authenticated = getattr(request, 'authenticated', False)
+        if not authenticated:
+            _POS_FINANCIAL_FIELDS = (
+                "amount", "available", "cost_price", "market_value",
+                "profit", "profit_rate", "profit_pct", "pnl", "pnl_pct",
+                "floating_profit", "floating_pnl", "floating_pnl_pct",
+                "cost", "cost_value", "total_cost", "yield", "yield_pct",
+            )
+            for ev in retention_evals:
+                for fld in _POS_FINANCIAL_FIELDS:
+                    if fld in ev:
+                        ev[fld] = "***" if fld in ("cost_price", "market_value", "cost", "cost_value", "total_cost") else 0
 
         data_utilization_weights = {
             "technical_factors": 0.65,      # 技术多因子 (趋势/均线/MACD/KDJ/成交量) 65%
@@ -1101,7 +1138,7 @@ def data_backup():
 @system_bp.route('/api/data/restore', methods=['POST'])
 def data_restore():
     """从上传的备份恢复数据库"""
-    import io, zipfile, shutil
+    import io, zipfile, shutil, os
     try:
         if 'file' not in request.files:
             return jsonify({"success": False, "message": "请上传备份文件(.zip)"}), 400
@@ -1114,6 +1151,7 @@ def data_restore():
                 return jsonify({"success": False, "message": "ZIP中未找到trading.db"}), 400
 
             data_dir = Path(__file__).parent / "data"
+            data_dir.mkdir(parents=True, exist_ok=True)
             db_path = data_dir / "trading.db"
             backup_path = data_dir / "trading_backup_before_restore.db"
 
@@ -1121,7 +1159,32 @@ def data_restore():
             if db_path.exists():
                 shutil.copy2(db_path, backup_path)
 
-            # 解压新的数据库
+            # 沙箱校验：禁止 Zip Slip 路径穿越，仅允许 .json / .db 文件
+            project_root = os.path.abspath(str(Path(__file__).parent))
+            data_dir_abs = os.path.abspath(str(data_dir))
+            allowed_exts = ('.json', '.db')
+            for member in zf.infolist():
+                # 目录条目放行（不写入文件）
+                if member.is_dir():
+                    continue
+                # 判定该条目应落入的目标目录
+                if member.filename == "trading.db":
+                    target_dir = data_dir_abs
+                elif member.filename.startswith("config/"):
+                    target_dir = project_root
+                else:
+                    return jsonify({"success": False,
+                                    "message": f"非法条目: {member.filename}（仅允许 trading.db 与 config/ 下的文件）"}), 400
+
+                dest_path = os.path.abspath(os.path.join(target_dir, member.filename))
+                if not (dest_path == target_dir or dest_path.startswith(target_dir + os.sep)):
+                    return jsonify({"success": False,
+                                    "message": f"非法路径: {member.filename}"}), 400
+                if not member.filename.lower().endswith(allowed_exts):
+                    return jsonify({"success": False,
+                                    "message": "仅允许 .json 和 .db 文件"}), 400
+
+            # 解压新的数据库（已通过沙箱校验）
             zf.extract("trading.db", str(data_dir))
 
             # 恢复配置文件

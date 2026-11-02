@@ -5,6 +5,7 @@
 """
 
 import time
+import hashlib
 import logging
 from typing import Dict, Any, Optional, List
 from datetime import datetime
@@ -115,7 +116,7 @@ def get_realtime_quotes_batch(symbols: List[str]) -> Dict[str, Dict]:
     批量获取实时行情（带缓存）
     底层: 腾讯API（一次HTTP请求，批量返回）
     """
-    cache_key = "realtime:batch"
+    cache_key = f"realtime:batch:{hashlib.md5(','.join(sorted(symbols)).encode()).hexdigest()}"
     cached = cache.get(cache_key)
     if cached is not None:
         result = {}

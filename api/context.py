@@ -61,7 +61,9 @@ trading_state = {
 import secrets as _secrets
 
 _token_file = Path(__file__).resolve().parent.parent / "config" / "api_token.json"
-_ALLOW_INSECURE = os.environ.get("ALLOW_INSECURE", "").lower() in ("1", "true", "yes")
+_host = os.environ.get("HOST", "127.0.0.1")
+_is_local = _host in ("127.0.0.1", "localhost", "::1")
+_ALLOW_INSECURE = _is_local and os.environ.get("ALLOW_INSECURE", "").lower() in ("1", "true", "yes")
 
 
 def _load_or_create_api_token() -> str:
@@ -100,13 +102,17 @@ _PUBLIC_PATHS = {
     '/api/ai/scheduler/status',
     '/api/ai/scheduler/ledger/today',
     '/api/ai/scheduler/windows',
-    '/api/ai/candidates/today',
-    '/api/ai/timing/overview',
     '/api/stream/cockpit',
     '/api/competition/rules',
     '/api/competition/status',
     '/api/system/health/silent',
     '/api/system/performance',
+}
+
+# 双模脱敏端点：未登录时返回脱敏数据（资金***、持仓仅代码/名称），登录后返回完整数据
+_MASKED_PATHS = {
+    '/api/ai/candidates/today',
+    '/api/ai/timing/overview',
 }
 
 _PUBLIC_PREFIXES = (
@@ -117,6 +123,22 @@ _QUICK_BIND_PATHS = {
     '/api/accounts/quick-bind',
     '/api/Accounts/quick-bind',
 }
+
+
+def _is_request_authenticated() -> bool:
+    """检查当前请求是否携带有效 Token（仅 Authorization 头，不再接受 URL ?token=）。"""
+    if not API_TOKEN:
+        return True  # 鉴权未启用，视为已认证
+    token = request.headers.get("Authorization", "").replace("Bearer ", "")
+    if not token:
+        return False
+    from device_manager import device_manager as dm
+    if dm:
+        payload = dm.verify_token(token)
+        if payload:
+            request.device = payload
+            return True
+    return token == API_TOKEN
 
 
 def require_auth():
@@ -143,9 +165,15 @@ def require_auth():
     if path in _PUBLIC_PATHS:
         return None
 
+    # 双模脱敏端点：不拦截请求，但标记认证状态，由 handler 决定返回完整/脱敏数据
+    if path in _MASKED_PATHS:
+        request.authenticated = _is_request_authenticated()
+        return None
+
+    # 仅接受 Authorization 头传递 Token（废除 URL ?token= 传参，防止被日志/历史捕获）
     token = request.headers.get("Authorization", "").replace("Bearer ", "")
     if not token:
-        token = request.args.get("token", "")
+        return jsonify({"success": False, "message": "未授权，请先登录"}), 401
 
     from device_manager import device_manager as dm
     if dm and token:

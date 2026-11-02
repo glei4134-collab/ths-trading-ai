@@ -116,7 +116,8 @@ class DBStore:
                 profit REAL DEFAULT 0,
                 balance REAL,
                 mode TEXT DEFAULT 'simulation',
-                saved_at TEXT
+                saved_at TEXT,
+                order_id TEXT
             )
         """)
 
@@ -163,6 +164,7 @@ class DBStore:
 
         c.execute("CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_trades_time ON trades(time)")
+        # idx_trades_order_id 在 _ensure_account_id_columns 中创建（需先 ALTER TABLE 添加 order_id 列）
         c.execute("CREATE INDEX IF NOT EXISTS idx_signals_strategy ON signals(strategy_name)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_signals_time ON signals(timestamp)")
 
@@ -258,6 +260,13 @@ class DBStore:
         c.execute("CREATE INDEX IF NOT EXISTS idx_trades_account ON trades(account_id)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_signals_account ON signals(account_id)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_snapshots_account ON account_snapshots(account_id)")
+        # T3/T7: trades 表新增 order_id 列（无损迁移，忽略已存在错误）
+        try:
+            c.execute("SELECT order_id FROM trades LIMIT 1")
+        except sqlite3.OperationalError:
+            c.execute("ALTER TABLE trades ADD COLUMN order_id TEXT")
+            logger.info("为 trades 表添加 order_id 列")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_trades_order_id ON trades(order_id)")
         self.conn.commit()
 
     def _init_devices_table(self):
@@ -687,13 +696,14 @@ class DBStore:
         with self._lock:
             c = self.conn.cursor()
             c.execute("""
-                INSERT INTO trades (account_id, time, symbol, name, action, amount, price, total, profit, balance, mode, saved_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO trades (account_id, time, symbol, name, action, amount, price, total, profit, balance, mode, saved_at, order_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (account_id, trade.get("time", ""), trade.get("symbol", ""), trade.get("name", ""),
                   trade.get("action", ""), trade.get("amount", 0), trade.get("price", 0),
                   trade.get("total", 0), trade.get("profit", 0), trade.get("balance", 0),
                   trade.get("mode", "simulation"),
-                  datetime.now(ZoneInfo('Asia/Shanghai')).strftime("%Y-%m-%d %H:%M:%S")))
+                  datetime.now(ZoneInfo('Asia/Shanghai')).strftime("%Y-%m-%d %H:%M:%S"),
+                  trade.get("order_id", "")))
             self.conn.commit()
             try:
                 from notification import notification_manager
@@ -943,8 +953,7 @@ class DBStore:
         if not self._perf_log_buffer:
             return
         batch = list(self._perf_log_buffer)
-        self._perf_log_buffer.clear()
-        self._last_perf_flush = time.time()
+        # 先不清空 buffer，executemany/commit 失败时保留数据下个周期重试
         try:
             self.conn.executemany("""
                 INSERT INTO api_performance_logs 
@@ -952,6 +961,9 @@ class DBStore:
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """, batch)
             self.conn.commit()
+            # 仅在 commit 成功后才清空 buffer
+            self._perf_log_buffer.clear()
+            self._last_perf_flush = time.time()
             self._perf_flush_counter += len(batch)
             # 累计达到 500 条时顺带执行一次轻量级 PRAGMA wal_checkpoint(PASSIVE) 防 WAL 膨胀
             if self._perf_flush_counter >= 500:
@@ -963,6 +975,12 @@ class DBStore:
                     logger.debug(f"轻量级 PASSIVE 检查点忽略异常: {ck_e}")
         except Exception as e:
             logger.error(f"批量刷盘 API 性能指标失败: {e}")
+            # 失败时不清空 buffer，数据保留待下个周期重试；但若 buffer 过大则丢弃最旧的防止无限增长
+            MAX_PERF_BUFFER = 1000
+            if len(self._perf_log_buffer) > MAX_PERF_BUFFER:
+                dropped = len(self._perf_log_buffer) - MAX_PERF_BUFFER
+                del self._perf_log_buffer[:dropped]
+                logger.warning(f"性能日志 buffer 超过 {MAX_PERF_BUFFER} 条，丢弃最旧 {dropped} 条防 OOM")
 
     @retry_on_db_locked()
     def flush_perf_logs(self) -> int:
@@ -982,6 +1000,12 @@ class DBStore:
                      status_code, 1 if success else 0, str(error_message)[:200])
         with self._lock:
             self._perf_log_buffer.append(log_tuple)
+            # 防御性上限：若 DB 长期不可用，避免 buffer 无限增长 OOM（丢弃最旧条目）
+            _MAX_PERF_BUFFER = 1000
+            if len(self._perf_log_buffer) > _MAX_PERF_BUFFER:
+                _dropped = len(self._perf_log_buffer) - _MAX_PERF_BUFFER
+                del self._perf_log_buffer[:_dropped]
+                logger.warning(f"性能日志 buffer 超过 {_MAX_PERF_BUFFER} 条，丢弃最旧 {_dropped} 条防 OOM")
             # 仅当 buffer >= 25 条 或 距离上次刷盘超过 30 秒 时才触发批量落盘
             if len(self._perf_log_buffer) >= 25 or (time.time() - self._last_perf_flush) >= 30.0:
                 self._flush_perf_logs_locked()

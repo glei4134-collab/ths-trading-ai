@@ -7,6 +7,7 @@ import sys
 import os
 import asyncio
 import logging
+from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 
 # 添加src目录到Python路径
@@ -28,7 +29,7 @@ def setup_logging():
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         handlers=[
             logging.StreamHandler(),
-            logging.FileHandler('trading.log', encoding='utf-8')
+            TimedRotatingFileHandler('trading.log', when='midnight', backupCount=14, encoding='utf-8')
         ]
     )
 

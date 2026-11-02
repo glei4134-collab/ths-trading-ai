@@ -8,6 +8,7 @@ import os
 import time
 import signal
 import logging
+from logging.handlers import TimedRotatingFileHandler
 import threading
 import webbrowser
 import json
@@ -24,7 +25,7 @@ logging.basicConfig(
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler(PROJECT_DIR / "trading.log", encoding="utf-8"),
+        TimedRotatingFileHandler(PROJECT_DIR / "trading.log", when="midnight", backupCount=14, encoding="utf-8"),
     ],
 )
 logger = logging.getLogger("desktop")

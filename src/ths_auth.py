@@ -163,7 +163,7 @@ class CaptchaSolver:
                 logger.warning(f"未能解析滑块图片列表: {text[:100]}")
                 return None, None, None
 
-            imgs = eval(''.join(imgs_match))
+            imgs = json.loads(''.join(imgs_match).replace("'", '"'))
             m_inity = re.search(r'inity":(\d+)', text)
             inity = int(m_inity.group(1)) if m_inity else 0
             from urllib.parse import parse_qs

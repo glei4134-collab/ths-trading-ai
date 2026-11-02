@@ -25,7 +25,10 @@ config/ai_config.local.json
 config/ai_config.json
 config/cookie_key.json
 config/api_token.json
+config/desktop_config.json
 legacy_api_monolith.py
 
 *.bak
 *.bak*
+*.log*
+scratch/
