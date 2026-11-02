@@ -368,7 +368,7 @@ def ai_candidates_today():
                 "timing_action": dip_stat.get("suggested_action", "OBSERVE"),
                 "pullback_pct": dip_stat.get("pullback_pct", 0.0),
                 "obi": round(float(q.get("obi", 0.0) or 0.0), 4),
-                "obi_pct": f"{round(float(q.get("obi", 0.0) or 0.0) * 100, 1):+.1f}%",
+                "obi_pct": f"{round(float(q.get('obi', 0.0) or 0.0) * 100, 1):+.1f}%",
                 "utilization_weight": 0.25,
                 "matched_strategies": ["强势回调", "放量突破"] if votes >= 2 else ["缩量企稳"]
             })
