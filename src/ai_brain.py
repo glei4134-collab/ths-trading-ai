@@ -113,9 +113,9 @@ class AIBrain:
         # 动态阈值: 记录最近 200 个决策分数，据此计算自适应阈值
         self._score_history: List[float] = []
         self._score_history_max = 200
-        # ★ 用户策略偏移：每个用户首次生成随机种子，后续固定
-        self._user_seed = self._load_or_create_seed()
-        self._strategy_offsets = self._generate_offsets()
+        # ★ 废除随机种子偏移，保证交易决策100%确定性与可复现性 (Defect 2)
+        self._user_seed = 0
+        self._strategy_offsets = {}
 
     def _load_or_create_seed(self) -> int:
         """加载或创建用户随机种子"""
@@ -212,25 +212,14 @@ class AIBrain:
             strategy = registry.get(name)
             if strategy:
                 try:
-                    # 注入优化后的参数
-                    opt_params = strategy_optimizer.load_optimized_params(name)
-                    original_params = {}
-                    if opt_params:
-                        for k, v in opt_params.items():
-                            if k in strategy.params:
-                                original_params[k] = strategy.params[k].get("default")
-                                strategy.params[k]["default"] = v
+                    # 注入优化后的参数 (Defect 3: 线程安全方法传参，废除全局 params 修改)
+                    opt_params = strategy_optimizer.load_optimized_params(name) or {}
                     try:
+                        result = strategy.analyze(stock_data, indicators, market_data=market_data, history=history, params=opt_params)
+                    except TypeError:
                         result = strategy.analyze(stock_data, indicators, market_data=market_data, history=history)
-                    finally:
-                        # 恢复原始参数
-                        for k, v in original_params.items():
-                            strategy.params[k]["default"] = v
 
-                    # ★ 加入用户策略偏移（让不同用户有差异化信号）
-                    offset = self._strategy_offsets.get(name, 0)
-                    result.score = max(0, min(1, result.score + offset))
-
+                    # 废除随机加噪，信号保持确定性与可解释性 (Defect 2)
                     sub_signals.append(result)
                     param_note = " (优化参数)" if opt_params else ""
                     reasons.append(f"[{name}] {result.signal.value} 分数:{result.score:.3f}{param_note}")
@@ -309,19 +298,14 @@ class AIBrain:
         max_single_pos = account_info.get("max_single_position", style_cfg["max_single_position"]) if account_info else 0.30
         min_conf_req = account_info.get("min_confidence", style_cfg["min_confidence"]) if account_info else 0.50
 
-        # 规则0: 主力资金背离一票否决校验 (舆情分 >= 75 但主力大单净流出超过流通市值 0.8% 防诱多)
-        sentiment_score = news_sentiment.get("score", 50) if news_sentiment else 50
-        net_outflow_ratio = float(stock_data.get("main_net_outflow_ratio", 0) or stock_data.get("large_order_net_outflow_pct", 0) or 0)
-        if net_outflow_ratio <= 0 and stock_data.get("main_net_outflow") and stock_data.get("float_market_cap"):
-            try:
-                net_outflow_ratio = float(stock_data["main_net_outflow"]) / float(stock_data["float_market_cap"])
-            except Exception:
-                pass
-
-        if sentiment_score >= 75 and net_outflow_ratio >= 0.008:
+        # 规则0: 主力资金背离一票否决校验 (Defect 10: 抽离复用公共函数 check_capital_divergence)
+        from strategies.base import check_capital_divergence
+        sentiment_score = float(news_sentiment.get("score", 50) if news_sentiment else 50)
+        is_divergent, net_outflow_ratio, div_reason = check_capital_divergence(stock_data, sentiment_score)
+        if is_divergent:
             action, signal = "hold", "HOLD"
             status = "REJECTED_CAPITAL_DIVERGENCE"
-            reasons.append(f"风控一票否决: 标的{symbol}舆情得分高涨({sentiment_score})，但主力大单净流出达流通市值{net_outflow_ratio*100:.2f}% (>=0.80%)，判定为机构诱多出货，禁止买入")
+            reasons.append(f"风控一票否决: 标的{symbol}{div_reason}")
             position_size = 0
 
         # 战术矩阵前置预检: 账户 2 盘中追高 >7% 或 账户 3 早盘冲高 >3% 均属战术纪律一票否决
@@ -403,9 +387,6 @@ class AIBrain:
             tp_info = risk_manager.calculate_take_profit(price, volatility)
             stop_loss = sl_info["stop_loss"]
             target_price = tp_info["take_profit"]
-            tp_info = risk_manager.calculate_take_profit(price, volatility)
-            stop_loss = sl_info["stop_loss"]
-            target_price = tp_info["take_profit"]
 
         elif action == "sell":
             if account_info:
@@ -441,11 +422,14 @@ class AIBrain:
 
         used_strategies = [s.strategy_name for s in sub_signals]
 
+        # 置信度累计上限严格截断保护 (Defect 12)
+        final_confidence = max(0.05, min(0.95, round(avg_confidence, 4)))
+
         decision = BrainDecision(
             symbol=symbol,
             action=action,
             signal=signal,
-            confidence=avg_confidence,
+            confidence=final_confidence,
             strategies_used=used_strategies,
             reasons=reasons,
             target_price=round(target_price, 2) if target_price else None,

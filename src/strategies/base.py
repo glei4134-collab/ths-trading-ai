@@ -4,7 +4,7 @@
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 from enum import Enum
 import json
 
@@ -45,6 +45,25 @@ class StrategyResult:
         }
 
 
+def check_capital_divergence(stock_data: Dict, sentiment_score: float = 50.0) -> Tuple[bool, float, str]:
+    """
+    通用主力资金背离校验 (Defect 10 逻辑去重)：
+    当舆情情绪高涨 (>=75) 但主力大单净流出超过流通市值 0.8% 时，判定为高位诱多出货，触发一票否决。
+    返回: (is_divergence, net_outflow_ratio, reject_reason)
+    """
+    net_outflow_ratio = float(stock_data.get("main_net_outflow_ratio", 0) or stock_data.get("large_order_net_outflow_pct", 0) or 0)
+    if net_outflow_ratio <= 0 and stock_data.get("main_net_outflow") and stock_data.get("float_market_cap"):
+        try:
+            net_outflow_ratio = float(stock_data["main_net_outflow"]) / float(stock_data["float_market_cap"])
+        except (KeyError, ValueError, TypeError, ZeroDivisionError):
+            pass
+
+    if sentiment_score >= 75 and net_outflow_ratio >= 0.008:
+        reason = f"主力资金背离一票否决: 舆情分高达{sentiment_score:.0f}分，但主力大单净流出占流通市值{net_outflow_ratio*100:.2f}% (>=0.80%)，判定为高位诱多出货！"
+        return True, net_outflow_ratio, reason
+    return False, net_outflow_ratio, ""
+
+
 class BaseStrategy:
     """
     策略基类
@@ -56,6 +75,19 @@ class BaseStrategy:
     category: str = "other"  # trend/momentum/reversal/volatility/volume/pattern/composite
     risk_level: str = "medium"  # low/medium/high
     params: Dict = field(default_factory=dict)  # 可调参数 {param_name: {desc, default, min, max}}
+
+    def get_param(self, name: str, params: Optional[Dict] = None, default: Any = None) -> Any:
+        """获取参数值：优先入参 params，其次 self.params[name]['default']，最后回退 default (Defect 3: 线程安全)"""
+        if params and isinstance(params, dict) and name in params:
+            return params[name]
+        if name in self.params and isinstance(self.params[name], dict):
+            return self.params[name].get("default", default)
+        return default
+
+    def _normalize_score(self, raw_score: float, min_val: float = -1.0, max_val: float = 1.0) -> float:
+        """统一评分归一化并严格截断在 [-1.0, 1.0] 之间 (Defect 6)"""
+        clamped = max(-1.0, min(1.0, raw_score))
+        return round(clamped, 4)
 
     def analyze(
         self,
