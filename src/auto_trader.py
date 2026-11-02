@@ -428,7 +428,7 @@ class AutoTrader:
         }
 
     def create_order(self, symbol: str, action: str, amount: int, price: float,
-                    order_type: OrderType = OrderType.LIMIT) -> TradeOrder:
+                    order_type: OrderType = OrderType.LIMIT, reason: str = "", notes: str = "", **kwargs) -> TradeOrder:
         """创建订单"""
         import uuid
 
@@ -702,6 +702,38 @@ class AutoTrader:
             "message": f"{'买入' if order.action == 'buy' else '卖出'}成功",
             "data": trade_record
         }
+
+    def check_stop_loss(self, stock_prices: Optional[Dict[str, float]] = None) -> List[Dict]:
+        """
+        兼容包装方法：自动补全实时行情并调用 check_stop_loss_take_profit
+        修复后台调度器静默调用的 AttributeError
+        """
+        if stock_prices is None:
+            stock_prices = self._fetch_position_prices()
+        if not stock_prices and self.positions:
+            try:
+                from fast_data import fetch_realtime_single
+                for s in self.positions:
+                    q = fetch_realtime_single(s) or {}
+                    p = float(q.get("price") or 0.0)
+                    if p > 0:
+                        stock_prices[s] = p
+            except Exception as e:
+                logger.debug(f"补全持仓价格失败: {e}")
+
+        # 同步更新移动止损跟踪位
+        for s, p in (stock_prices or {}).items():
+            self.update_trailing_stop(s, p)
+
+        signals = self.check_stop_loss_take_profit(stock_prices or {})
+        if signals:
+            logger.info(f"🛡️ check_stop_loss 触发 {len(signals)} 个止损/止盈信号")
+            for sig in signals:
+                try:
+                    self._execute_stop_signal(sig)
+                except Exception as ex:
+                    logger.error(f"执行止损止盈信号异常: {ex}")
+        return signals
 
     def check_stop_loss_take_profit(
         self,

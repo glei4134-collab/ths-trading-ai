@@ -70,11 +70,14 @@ class DataStore:
         self._db.add_trade(trade, self.account_id)
 
     def update_position(self, symbol: str, position: Dict):
-        """更新持仓"""
-        if position["amount"] <= 0:
+        """更新持仓（安全合并防 KeyError 并保留原有字段）"""
+        if position.get("amount", 1) <= 0:
             self.positions.pop(symbol, None)
         else:
-            self.positions[symbol] = position
+            if symbol in self.positions and isinstance(self.positions[symbol], dict):
+                self.positions[symbol].update(position)
+            else:
+                self.positions[symbol] = position
         self.save_positions()
 
     def update_balance(self, balance: float):

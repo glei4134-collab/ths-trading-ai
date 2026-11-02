@@ -205,7 +205,7 @@ class PositionRetentionDecider:
         """
         symbol = position.get("symbol", position.get("code", ""))
         name = position.get("name", symbol)
-        cost_price = float(position.get("cost_price", 0.0) or 0.0)
+        cost_price = float(position.get("cost_price") or position.get("avg_price", 0.0) or 0.0)
         current_price = float(quote.get("price", 0.0) or cost_price)
         change_pct = float(quote.get("change_pct", 0.0) or 0.0)
         

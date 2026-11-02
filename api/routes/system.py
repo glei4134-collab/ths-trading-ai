@@ -271,19 +271,7 @@ def ai_candidates_today():
             # 动态止损价 (结合账户风格)
             stop_loss_price = round(price * (1.0 - stop_loss_pct), 2)
 
-            # 登记并更新未买入时序低吸指标与权重
-            try:
-                from intraday_timing_engine import intraday_timing_engine
-                dip_buyer = intraday_timing_engine["dip_buyer"]
-                if held_shares == 0:
-                    dip_buyer.register_unbought_candidate(code, item["name"], float(base_score), reason=reason, target_price=price, industry=item["industry"])
-                    dip_stat = dip_buyer.update_quote(code, price, change_pct)
-                else:
-                    dip_stat = {"dip_score": 50.0, "signal": "HELD", "suggested_action": "HOLD_POSITION", "pullback_pct": 0.0}
-            except Exception:
-                dip_stat = {"dip_score": 50.0, "signal": "WATCHING", "suggested_action": "OBSERVE", "pullback_pct": 0.0}
-
-            # 结合该账户的持仓及可用现金计算执行指标
+            # 结合该账户的持仓及可用现金计算执行指标（前置计算，避免未定义引用时序Bug）
             pos_info = held_positions.get(code, {})
             held_shares = int(pos_info.get("amount", 0) or 0)
             held_mv = float(pos_info.get("market_value", 0) or (held_shares * price))
@@ -332,6 +320,19 @@ def ai_candidates_today():
                             suggested_shares = 0
                             suggested_amount = 0.0
                             reason = "可用现金或额度不足买入1手"
+
+            # 登记并更新未买入时序低吸指标与权重（依赖已计算出的 held_shares 与 reason）
+            try:
+                from intraday_timing_engine import intraday_timing_engine
+                dip_buyer = intraday_timing_engine["dip_buyer"]
+                if held_shares == 0:
+                    dip_buyer.register_unbought_candidate(code, item["name"], float(base_score), reason=reason, target_price=price, industry=item["industry"])
+                    dip_stat = dip_buyer.update_quote(code, price, change_pct)
+                else:
+                    dip_stat = {"dip_score": 50.0, "signal": "HELD", "suggested_action": "HOLD_POSITION", "pullback_pct": 0.0}
+            except Exception as e:
+                logger.warning(f"时序引擎注册/更新低吸候选失败: {e}")
+                dip_stat = {"dip_score": 50.0, "signal": "WATCHING", "suggested_action": "OBSERVE", "pullback_pct": 0.0}
 
             results.append({
                 "code": code,
@@ -402,24 +403,55 @@ def ai_timing_overview():
         # 1. 获取未买入标的时序跟踪
         unbought_list = intraday_timing_engine["dip_buyer"].get_summary_list()
 
-        # 2. 获取指定账户或当前活动账户持仓并全要素评估去留
+        # 2. 获取全量账户字典与映射
+        all_accounts = db_store.list_accounts() or []
+        acc_name_map = {int(a.get("id")): a.get("name", f"账户#{a.get('id')}") for a in all_accounts if a.get("id") is not None}
+
+        # 3. 判断是否指定 account_id（指定则精准穿透该账户，未指定则聚合全账户持仓评估）
         req_acc_id = request.args.get("account_id", type=int)
         if req_acc_id is not None:
-            active_id = req_acc_id
+            matched = [a for a in all_accounts if int(a.get("id")) == req_acc_id]
+            if matched:
+                target_accounts = matched
+            else:
+                target_accounts = [{"id": req_acc_id, "name": acc_name_map.get(req_acc_id, f"账户#{req_acc_id}")}]
         else:
-            active_id = db_store.get_active_account_id() or 1
+            if all_accounts:
+                target_accounts = all_accounts
+            else:
+                active_id = db_store.get_active_account_id() or 1
+                target_accounts = [{"id": active_id, "name": "默认主账户"}]
 
-        held_positions = db_store.get_positions(active_id) or {}
+        # 4. 遍历目标账户持仓并全要素评估去留（注入 account_id 与 account_name）
         retention_decider = intraday_timing_engine["retention_decider"]
         retention_evals = []
-        for sym, pos in held_positions.items():
-            q = fetch_realtime_single(sym) or {}
-            eval_res = retention_decider.evaluate_retention(pos, q)
-            retention_evals.append(eval_res)
+        for acc in target_accounts:
+            acc_id = int(acc.get("id", 1))
+            acc_name = acc.get("name") or acc_name_map.get(acc_id, f"账户#{acc_id}")
+            held_positions = db_store.get_positions(acc_id) or {}
+            for sym, pos in held_positions.items():
+                amount = int(pos.get("amount", 0) or 0)
+                if amount > 0:
+                    q = fetch_realtime_single(sym) or {}
+                    eval_res = retention_decider.evaluate_retention(pos, q)
+                    eval_res["account_id"] = acc_id
+                    eval_res["account_name"] = acc_name
+                    eval_res["amount"] = amount
+                    eval_res["available"] = int(pos.get("available", 0) or 0)
+                    eval_res["cost_price"] = float(pos.get("cost_price", 0.0) or 0.0)
+                    eval_res["market_value"] = float(pos.get("market_value", 0.0) or (amount * float(q.get("price", 0.0) or 0.0)))
+                    retention_evals.append(eval_res)
 
-        # 3. 未卖出超时调控清单
+        # 5. 未卖出超时调控清单（指定 account_id 时过滤该账户，未传时聚合全量未卖出并注入 account_name）
         unsold_controller = intraday_timing_engine["unsold_controller"]
-        unsold_list = unsold_controller.get_unsold_summary_list(account_id=active_id)
+        unsold_raw_list = unsold_controller.get_unsold_summary_list(account_id=req_acc_id)
+        unsold_list = []
+        for item in unsold_raw_list:
+            item_copy = dict(item)
+            item_acc_id = item_copy.get("account_id")
+            if item_acc_id is not None:
+                item_copy["account_name"] = acc_name_map.get(int(item_acc_id), f"账户#{item_acc_id}")
+            unsold_list.append(item_copy)
 
         return jsonify({
             "success": True,
@@ -427,7 +459,9 @@ def ai_timing_overview():
                 "unbought_candidates": unbought_list,
                 "retention_evaluations": retention_evals,
                 "unsold_controls": unsold_list,
-                "weights": intraday_timing_engine["weights"]
+                "weights": intraday_timing_engine["weights"],
+                "account_scope": "single" if req_acc_id is not None else "all",
+                "target_account_id": req_acc_id
             }
         })
     except Exception as e:

@@ -72,6 +72,7 @@ class AIScheduler:
         self._daily_trades = 0
         self._last_trade_date = ""
         self._last_analysis_time = ""
+        self._analysis_cooldown_until = 0.0  # 分析冷却截止时间戳（防止股票池拉取失败时高频死循环）
         self._last_analysis_result = ""
         self._trade_log: List[Dict] = []
 
@@ -87,8 +88,12 @@ class AIScheduler:
         self._pre_market_done = False             # 09:15 盘前分析/情绪扫描
         self._call_auction_done = False           # 09:25 集合竞价决断
         self._morning_open_done = False           # 09:30 早盘开盘突击
+        self._intraday_morning_started = False    # 09:35 早盘连续交易启动
+        self._intraday_morning_done = False       # 11:30 早盘连续交易收尾
         self._lunch_done = False                  # 11:30 午间休市复盘
         self._afternoon_open_done = False         # 13:00 午盘开盘处理
+        self._intraday_afternoon_started = False  # 13:00 午盘连续交易启动
+        self._intraday_afternoon_done = False     # 14:50 午盘连续交易收尾
         self._closing_rebalance_done = False      # 14:50 尾盘调仓锁定
         self._after_hours_done = False            # 15:00 收盘后清算总结
         self._night_review_done = False           # 20:00 夜间复盘与网格优化
@@ -338,8 +343,12 @@ class AIScheduler:
                     self._pre_market_done = False
                     self._call_auction_done = False
                     self._morning_open_done = False
+                    self._intraday_morning_started = False
+                    self._intraday_morning_done = False
                     self._lunch_done = False
                     self._afternoon_open_done = False
+                    self._intraday_afternoon_started = False
+                    self._intraday_afternoon_done = False
                     self._closing_rebalance_done = False
                     self._after_hours_done = False
                     self._night_review_done = False
@@ -394,10 +403,22 @@ class AIScheduler:
 
                 elif win_id in ["W4_INTRADAY_MORNING", "W6_INTRADAY_AFTERNOON"]:
                     # 盘中连续交易时段 (09:35-11:30, 13:00-14:50)
-                    if win_id == "W6_INTRADAY_AFTERNOON" and not self._afternoon_open_done:
-                        self._afternoon_open_done = True
-                        self._handle_pending_orders()
-                        self._run_analysis()
+                    if win_id == "W4_INTRADAY_MORNING":
+                        if not self._intraday_morning_started:
+                            self._intraday_morning_started = True
+                            self._intraday_morning_t0 = _time.time()
+                            scheduler_ledger.record_start("intraday_morning", now=self.now())
+                            logger.info("🟢 早盘连续交易时序启动 (09:35-11:30)，已标记账本 RUNNING")
+                    elif win_id == "W6_INTRADAY_AFTERNOON":
+                        if not self._intraday_afternoon_started:
+                            self._intraday_afternoon_started = True
+                            self._intraday_afternoon_t0 = _time.time()
+                            scheduler_ledger.record_start("intraday_afternoon", now=self.now())
+                            logger.info("🟢 午盘连续交易时序启动 (13:00-14:50)，已标记账本 RUNNING")
+                        if not self._afternoon_open_done:
+                            self._afternoon_open_done = True
+                            self._handle_pending_orders()
+                            self._run_analysis()
 
                     # 检查 THS 连接
                     self._check_ths_connection()
@@ -420,28 +441,43 @@ class AIScheduler:
                         except Exception as e:
                             logger.debug(f"高频时序巡检触发异常: {e}")
 
-                    # 周期性 AI/规则 策略分析
-                    if self._last_analysis_time:
-                        try:
-                            last_dt = datetime.fromisoformat(self._last_analysis_time)
-                            elapsed_sec = (curr_wall - last_dt).total_seconds()
-                        except Exception as e:
-                            logger.debug(f"解析上次分析时间失败: {e}")
+                    # 周期性 AI/规则 策略分析 (含失败冷却保护)
+                    if _time.time() >= getattr(self, '_analysis_cooldown_until', 0.0):
+                        if self._last_analysis_time:
+                            try:
+                                last_dt = datetime.fromisoformat(self._last_analysis_time)
+                                elapsed_sec = (curr_wall - last_dt).total_seconds()
+                            except Exception as e:
+                                logger.debug(f"解析上次分析时间失败: {e}")
+                                elapsed_sec = 9999
+                        else:
                             elapsed_sec = 9999
-                    else:
-                        elapsed_sec = 9999
 
-                    if elapsed_sec >= self.interval_minutes * 60:
-                        self._run_analysis()
+                        if elapsed_sec >= self.interval_minutes * 60:
+                            self._run_analysis()
 
                 elif win_id == "W5_MIDDAY_RECESS":
                     # 11:30 - 13:00: 午间休市复盘与挂单清理
+                    if not self._intraday_morning_done:
+                        self._intraday_morning_done = True
+                        dur_ms = int((_time.time() - getattr(self, "_intraday_morning_t0", _time.time())) * 1000)
+                        summary = "早盘连续低吸与持仓巡检完成，已按计划切入午间休市复盘"
+                        scheduler_ledger.record_finish("intraday_morning", StepStatus.SUCCESS, dur_ms, summary, now=self.now())
+                        logger.info("✅ 早盘连续交易时序平稳收尾，已标记账本 SUCCESS")
+
                     if not self._lunch_done:
                         self._run_lunch_analysis()
                     self._check_ths_connection()
 
                 elif win_id == "W7_CLOSING_REBALANCE":
                     # 14:50 - 15:00: 尾盘防隔夜回撤与调仓
+                    if not self._intraday_afternoon_done:
+                        self._intraday_afternoon_done = True
+                        dur_ms = int((_time.time() - getattr(self, "_intraday_afternoon_t0", _time.time())) * 1000)
+                        summary = "午后连续交易与超时调控完成，已按计划切入尾盘防隔夜调仓锁定"
+                        scheduler_ledger.record_finish("intraday_afternoon", StepStatus.SUCCESS, dur_ms, summary, now=self.now())
+                        logger.info("✅ 午盘连续交易时序平稳收尾，已标记账本 SUCCESS")
+
                     if not self._closing_rebalance_done:
                         self._run_closing_rebalance()
 
@@ -466,6 +502,8 @@ class AIScheduler:
         """执行一轮自主分析（规则引擎为主，AI为辅）"""
         logger.info("📊 调度器: 开始自主分析...")
         self._analysis_count += 1
+        curr_now = self.now()
+        stocks = None
 
         try:
             # 0. 先处理未成交委托
@@ -475,7 +513,15 @@ class AIScheduler:
             from competition import competition_manager
             stocks = competition_manager.get_stock_pool(sort_by="change_pct", limit=100)
             if not stocks:
-                logger.warning("无法获取股票池，跳过")
+                logger.warning("无法获取股票池，进入60秒冷却后重试")
+                # 设置 60s 冷却，彻底终结每 3 秒死循环狂刷告警的问题
+                cooldown_sec = 60
+                interval_sec = self.interval_minutes * 60
+                if interval_sec > cooldown_sec:
+                    self._last_analysis_time = (curr_now - timedelta(seconds=(interval_sec - cooldown_sec))).isoformat()
+                else:
+                    self._last_analysis_time = curr_now.isoformat()
+                self._analysis_cooldown_until = _time.time() + float(cooldown_sec)
                 return
 
             # 1.5 ★ 每日情绪跟踪：记录持仓股票的情绪变化
@@ -499,6 +545,13 @@ class AIScheduler:
 
         except Exception as e:
             logger.error(f"AI自主分析异常: {e}")
+        finally:
+            # 每次执行完（无论成功或早期跳出）必须更新 self._last_analysis_time
+            if not stocks:
+                if not self._last_analysis_time:
+                    self._last_analysis_time = curr_now.isoformat()
+            else:
+                self._last_analysis_time = self.now().isoformat()
 
     # ========== THS连接检测 ==========
 
@@ -580,6 +633,24 @@ class AIScheduler:
                         self._run_closing_rebalance(is_catchup=True)
                     elif step.step_id == "after_hours_settle":
                         self._run_after_hours_summary(is_catchup=True)
+                    elif step.step_id == "intraday_morning":
+                        self._intraday_morning_done = True
+                        scheduler_ledger.record_finish(
+                            "intraday_morning",
+                            StepStatus.SUCCESS,
+                            0,
+                            "早盘连续交易时段已平稳完成",
+                            now=self.now()
+                        )
+                    elif step.step_id == "intraday_afternoon":
+                        self._intraday_afternoon_done = True
+                        scheduler_ledger.record_finish(
+                            "intraday_afternoon",
+                            StepStatus.SUCCESS,
+                            0,
+                            "午盘连续交易时段已平稳完成",
+                            now=self.now()
+                        )
                     elif step.step_id == "night_review":
                         self._run_night_review(is_catchup=True)
                 except Exception as e:
@@ -727,6 +798,44 @@ class AIScheduler:
             scheduler_ledger.record_finish(step_id, StepStatus.FAILED, duration_ms, error_detail=str(e), now=self.now())
             return {"success": False, "step_id": step_id, "error": str(e)}
 
+    def _init_dip_buyer_watchlist(self, candidate_pool: Optional[List[Dict]] = None):
+        """开盘时将候选冲击池前 10 只标的主动灌入 dip_buyer.register_unbought_candidate()，摆脱仅靠前端 HTTP 访问被动激活的弊端"""
+        try:
+            from intraday_timing_engine import intraday_timing_engine
+            dip_buyer = intraday_timing_engine.get("dip_buyer")
+            if not dip_buyer:
+                return
+
+            pool = candidate_pool
+            if not pool:
+                from competition import competition_manager
+                pool = competition_manager.get_stock_pool(limit=40, sort_by="change_pct") or []
+            if not pool:
+                from stock_screener import stock_screener
+                pool = stock_screener.get_candidate_pool() or []
+
+            registered_cnt = 0
+            for s in pool[:10]:
+                sym = s.get("code") or s.get("symbol", "")
+                name = s.get("name", sym)
+                open_p = float(s.get("price") or s.get("open") or 0.0)
+                score = float(s.get("score") or s.get("total_score") or 75.0)
+                ind = s.get("industry", "")
+                if sym:
+                    dip_buyer.register_unbought_candidate(
+                        symbol=sym,
+                        name=name,
+                        score=score,
+                        reason="开盘冲击池主动预热低吸关注",
+                        target_price=open_p,
+                        industry=ind
+                    )
+                    registered_cnt += 1
+            if registered_cnt > 0:
+                logger.info(f"🎯 [时序低吸] 开盘主动预热冲击池前 {registered_cnt} 只候选标的至 dip_buyer.watchlist")
+        except Exception as e:
+            logger.debug(f"主动初始化 dip_buyer.watchlist 异常: {e}")
+
     # ========== W2: 集合竞价决断 (09:25-09:30) ==========
 
     def _run_call_auction_decision(self, is_catchup: bool = False, dry_run: bool = False) -> Dict:
@@ -741,8 +850,9 @@ class AIScheduler:
             from auto_trader import auto_trader
             from data_cache import get_kline
 
-            # 1. 扫描池
+            # 1. 扫描池与时序低吸冲击池主动灌入
             pool = competition_manager.get_stock_pool(limit=40, sort_by="change_pct")
+            self._init_dip_buyer_watchlist(pool[:10])
             team_strat = registry.get("team_ensemble")
 
             qualified_targets = []
@@ -906,6 +1016,7 @@ class AIScheduler:
         t0 = _time.time()
         try:
             self._handle_pending_orders()
+            self._init_dip_buyer_watchlist()
             try:
                 from auto_trader import auto_trader
                 auto_trader.sync_from_ths()
@@ -1998,15 +2109,13 @@ A股交易时段: 上午9:30-11:30, 下午13:00-15:00
         return self._decide_with_rules(stocks)
 
     def _decide_with_rules(self, stocks: List[Dict]) -> List[Dict]:
-        """规则引擎决策：批量选股 + 动态分散"""
+        """规则引擎决策：批量选股 + 动态分散 (全要素多账户隔离与目标槽位核算)"""
         from ai_brain import ai_brain
         from data_cache import get_realtime_quote, compute_indicators
-        from auto_trader import auto_trader
+        from db_store import db_store
+        from account_manager import account_manager
 
-        # 1. 获取当前持仓数量
-        current_positions = len(auto_trader.positions)
-
-        # 2. 根据比赛阶段确定目标持仓数
+        # 1. 根据比赛阶段确定单账户目标持仓数
         try:
             from risk_manager import risk_manager
             days = risk_manager.get_competition_days_elapsed()
@@ -2017,18 +2126,66 @@ A股交易时段: 上午9:30-11:30, 下午13:00-15:00
             logger.debug(f"获取比赛阶段配置失败，使用默认目标持仓数: {e}")
             target_positions = 5
 
-        # 3. 计算需要新建仓的数量
-        slots_to_fill = target_positions - current_positions
+        # 2. 遍历 db_store.list_accounts() 各账户分别核算持仓与目标槽位，彻底移除全局单例写死
+        accounts = db_store.list_accounts() or []
+        account_slot_info = []
+
+        if accounts:
+            for acc in accounts:
+                acc_id = acc.get("id")
+                if acc_id is None:
+                    continue
+                acc_name = acc.get("name", f"账户#{acc_id}")
+                pos_dict = db_store.get_positions(acc_id) or {}
+                held_symbols = {sym for sym, p in pos_dict.items() if int(p.get("amount", 0) or 0) > 0}
+                hold_cnt = len(held_symbols)
+                slots = max(0, target_positions - hold_cnt)
+                avail_cash = float(acc.get("ky_fund") or acc.get("balance") or 0.0)
+                tot_assets = float(acc.get("total_assets") or acc.get("balance") or 200000.0)
+                account_slot_info.append({
+                    "id": acc_id,
+                    "name": acc_name,
+                    "held_symbols": held_symbols,
+                    "hold_cnt": hold_cnt,
+                    "slots": slots,
+                    "avail_cash": avail_cash,
+                    "total_assets": tot_assets
+                })
+
+            # 各账户中的最大建仓需求槽位数
+            slots_to_fill = max((a["slots"] for a in account_slot_info), default=0)
+            logger.info(
+                f"📊 多账户持仓槽位核算: 监控 {len(account_slot_info)} 个团队账户, "
+                f"槽位详情: {[(a['name'], str(a['hold_cnt']) + '/' + str(target_positions) + '只', '待补' + str(a['slots']) + '只') for a in account_slot_info]}, "
+                f"本轮最大选股槽位={slots_to_fill}"
+            )
+        else:
+            # 备用兜底（无 DB 账户时）
+            from auto_trader import auto_trader
+            current_positions = len(auto_trader.positions)
+            slots_to_fill = max(0, target_positions - current_positions)
+            logger.info(f"单账户备用模式: 已持有{current_positions}只，目标{target_positions}只，需补{slots_to_fill}只")
+
         if slots_to_fill <= 0:
-            logger.info(f"已持有{current_positions}只，目标{target_positions}只，无需建仓")
+            logger.info(f"所有多账户持仓均已满足目标持仓数({target_positions}只)，无需新建仓")
             return []
 
-        # 4. 分析所有股票并评分
+        # 3. 分析股票池候选标的并评分
         candidates = []
         for stock in stocks[:50]:  # 分析前50只
             symbol = stock.get("code", "")
-            if not symbol or symbol in auto_trader.positions:
-                continue  # 跳过已持有的
+            if not symbol:
+                continue
+
+            # 若所有拥有空槽位的账户均已持有该股票，则跳过
+            if account_slot_info:
+                needing_accs = [a for a in account_slot_info if a["slots"] > 0 and symbol not in a["held_symbols"]]
+                if not needing_accs:
+                    continue
+            else:
+                from auto_trader import auto_trader
+                if symbol in auto_trader.positions:
+                    continue
 
             # 冷却检查
             now_ts = _time.time()
@@ -2063,20 +2220,35 @@ A股交易时段: 上午9:30-11:30, 下午13:00-15:00
             except Exception as e:
                 logger.warning(f"分析 {symbol} 失败: {e}")
 
-        # 5. 按综合得分降序排序，遴选前 slots_to_fill 只优质标的
+        # 4. 按综合得分降序排序，遴选前 slots_to_fill 只优质标的
         candidates.sort(key=lambda x: x["score"], reverse=True)
         selected = candidates[:slots_to_fill]
 
         # ★ 比赛规则合规持仓底线补齐机制 (Min-Holdings Compliance Fallback)
         # 比赛规则要求持仓至少 3 只 (min_holdings: 3)，单票上限 35%
-        # 如果当前持仓数+入选数 < 3，且可用资金充裕，从优选池中补齐高流动性基底标的
         min_required = 3
-        current_and_selected = len(auto_trader.positions) + len(selected)
-        if current_and_selected < min_required and auto_trader.balance > 20000:
-            deficit = min_required - current_and_selected
-            logger.info(f"🛡️ 触发比赛合规底线兜底: 当前+已选 {current_and_selected} 只，缺少 {deficit} 只满足 >=3 只红线，从优质活跃池补齐...")
-            total_assets = auto_trader.balance + sum(p.market_value for p in auto_trader.positions.values())
-            chosen_syms = set(auto_trader.positions.keys()) | {item["symbol"] for item in selected}
+        deficit = 0
+        if account_slot_info:
+            for a in account_slot_info:
+                curr_and_sel = a["hold_cnt"] + len([s for s in selected if s["symbol"] not in a["held_symbols"]])
+                if curr_and_sel < min_required and a["avail_cash"] > 10000:
+                    deficit = max(deficit, min_required - curr_and_sel)
+        else:
+            from auto_trader import auto_trader
+            curr_and_sel = len(auto_trader.positions) + len(selected)
+            if curr_and_sel < min_required and auto_trader.balance > 20000:
+                deficit = min_required - curr_and_sel
+
+        if deficit > 0:
+            logger.info(f"🛡️ 触发比赛合规底线兜底: 存在多账户持仓不足 {min_required} 只红线，缺少 {deficit} 只，从优质活跃池补齐...")
+            chosen_syms = {item["symbol"] for item in selected}
+            if account_slot_info:
+                for a in account_slot_info:
+                    chosen_syms.update(a["held_symbols"])
+            else:
+                from auto_trader import auto_trader
+                chosen_syms.update(auto_trader.positions.keys())
+
             for s in stocks:
                 sym = s.get("code", "")
                 px = float(s.get("price", 0))
@@ -2085,26 +2257,20 @@ A股交易时段: 上午9:30-11:30, 下午13:00-15:00
                     continue
                 if abs(chg) >= 9.5:
                     continue
-                if px * 100 > total_assets * 0.25:
-                    continue
-                target_value = total_assets * 0.20
-                shares = int((target_value / px) // 100 * 100)
-                if shares < 100 or shares * px > auto_trader.balance * 0.90:
-                    continue
                 selected.append({
                     "symbol": sym,
-                    "position_size": shares,
+                    "position_size": 100,
                     "confidence": 0.60,
                     "signal": "BUY",
                     "score": 0.60,
                 })
                 chosen_syms.add(sym)
                 deficit -= 1
-                logger.info(f"🛡️ 选定合规兜底标的: {s.get('name', sym)}({sym}) 计划买入 {shares}股 @ ¥{px:.2f} (仓位约 {(shares*px/total_assets)*100:.1f}%)")
+                logger.info(f"🛡️ 选定合规兜底标的: {s.get('name', sym)}({sym}) 计划补齐建仓 @ ¥{px:.2f}")
                 if deficit <= 0:
                     break
 
-        # 6. 生成交易指令
+        # 5. 生成交易指令
         trades = []
         for item in selected:
             trades.append({
@@ -2442,7 +2608,7 @@ A股交易时段: 上午9:30-11:30, 下午13:00-15:00
     def _run_high_frequency_intraday_tick(self):
         """
         高频率盘中微观时序巡检（30秒级）
-        1. 针对现有持仓股票执行动态去留决策（去/留/减/换）
+        1. 针对现有持仓股票执行动态去留决策（去/留/减/换，全面穿透 account_manager.place_order 真实通道）
         2. 针对未买入股票跟踪时序起伏，若触发低吸黄金点且有额度则执行低买
         3. 针对未卖出股票根据预期时钟执行动态调控（涨停顺延/跳水压价市价急卖）
         """
@@ -2453,38 +2619,74 @@ A股交易时段: 上午9:30-11:30, 下午13:00-15:00
             from intraday_timing_engine import intraday_timing_engine
             from db_store import db_store
             from fast_data import fetch_realtime_single
-            from auto_trader import auto_trader
+            from account_manager import account_manager
 
-            # 1. 动态评估当前持仓去留
-            active_id = db_store.get_active_account_id() or 1
-            held_positions = db_store.get_positions(active_id) or {}
             retention_decider = intraday_timing_engine["retention_decider"]
+            accounts = db_store.list_accounts() or []
+            if not accounts:
+                active_id = db_store.get_active_account_id() or 1
+                accounts = [{"id": active_id, "name": "默认主账户"}]
 
-            for sym, pos in held_positions.items():
-                amt = int(pos.get("amount", 0) or 0)
-                if amt <= 0:
+            # 1. 动态评估多账户持仓去留（全面穿透 account_manager.place_order 真实交易通道）
+            for acc in accounts:
+                acc_id = acc.get("id")
+                if acc_id is None:
                     continue
-                q = fetch_realtime_single(sym) or {}
-                eval_res = retention_decider.evaluate_retention(pos, q)
-                act = eval_res.get("action", "")
+                acc_name = acc.get("name", f"账户#{acc_id}")
+                held_positions = db_store.get_positions(acc_id) or {}
 
-                if act in ["EMERGENCY_STOP_LOSS", "SELL_WEAK_EXIT"]:
-                    logger.warning(f"🚨 [持仓去留] 触发卖出去仓: {sym} 动作={act} 原因={eval_res.get('reason')}")
-                    try:
-                        auto_trader.create_order(sym, "SELL", amt, float(q.get("price", 0.0) or 0.0), reason=f"持仓去留-{act}")
-                    except Exception as ex:
-                        logger.error(f"持仓去仓报单异常: {ex}")
-                elif act == "TRIM_PROTECT_PROFIT":
-                    trim_amt = (amt // 200) * 100
-                    if trim_amt >= 100:
-                        logger.info(f"✂️ [持仓去留] 触发冲高减半止盈: {sym} 股数={trim_amt} 原因={eval_res.get('reason')}")
+                for sym, pos in held_positions.items():
+                    amt = int(pos.get("amount", 0) or 0)
+                    if amt <= 0:
+                        continue
+                    q = fetch_realtime_single(sym) or {}
+                    cur_p = float(q.get("price", 0.0) or 0.0)
+                    if cur_p <= 0:
+                        continue
+                    eval_res = retention_decider.evaluate_retention(pos, q)
+                    act = eval_res.get("action", "")
+                    reason_desc = eval_res.get("reason", "")
+
+                    if act in ["EMERGENCY_STOP_LOSS", "SELL_WEAK_EXIT"]:
+                        logger.warning(f"🚨 [{acc_name} 持仓去留] 触发卖出去仓: {sym} 动作={act} 原因={reason_desc}")
                         try:
-                            auto_trader.create_order(sym, "SELL", trim_amt, float(q.get("price", 0.0) or 0.0), reason="持仓冲高回落减半")
+                            order_res = account_manager.place_order(
+                                account_id=acc_id,
+                                symbol=sym,
+                                action="sell",
+                                price=cur_p,
+                                amount=amt,
+                                name=pos.get("name", sym),
+                                notes=f"持仓去留-{act}: {reason_desc}"
+                            )
+                            logger.info(f"✅ [{acc_name}] 真实通道去留止损委托结果: {order_res.get('message')}")
                         except Exception as ex:
-                            logger.error(f"冲高减仓报单异常: {ex}")
+                            logger.error(f"[{acc_name}] 持仓去仓报单异常: {ex}")
+
+                    elif act == "TRIM_PROTECT_PROFIT":
+                        trim_amt = (amt // 200) * 100
+                        if trim_amt >= 100:
+                            logger.info(f"✂️ [{acc_name} 持仓去留] 触发冲高减半止盈: {sym} 股数={trim_amt} 原因={reason_desc}")
+                            try:
+                                order_res = account_manager.place_order(
+                                    account_id=acc_id,
+                                    symbol=sym,
+                                    action="sell",
+                                    price=cur_p,
+                                    amount=trim_amt,
+                                    name=pos.get("name", sym),
+                                    notes=f"冲高减半止盈: {reason_desc}"
+                                )
+                                logger.info(f"✅ [{acc_name}] 冲高减半止盈委托结果: {order_res.get('message')}")
+                            except Exception as ex:
+                                logger.error(f"[{acc_name}] 冲高减仓报单异常: {ex}")
 
             # 2. 未买入重点关注股票时序回踩低吸
+            active_id = db_store.get_active_account_id() or 1
+            held_positions_active = db_store.get_positions(active_id) or {}
             dip_buyer = intraday_timing_engine["dip_buyer"]
+            if not dip_buyer.watchlist:
+                self._init_dip_buyer_watchlist()
             for sym, item in list(dip_buyer.watchlist.items())[:10]:
                 q = fetch_realtime_single(sym) or {}
                 if q and q.get("price"):
@@ -2496,24 +2698,32 @@ A股交易时段: 上午9:30-11:30, 下午13:00-15:00
                 summary = db_store.get_account_summary(active_id) or {}
                 avail_cash = float(summary.get("ky_fund", summary.get("balance", 0.0)) or 0.0)
                 tot_assets = float(summary.get("total_assets", 200000.0) or 200000.0)
-                cur_pos_cnt = len(held_positions)
+                cur_pos_cnt = len(held_positions_active)
 
                 if cur_pos_cnt < 5 and avail_cash >= 3000.0:
                     best_dip = actionable_dips[0]
                     dip_sym = best_dip["symbol"]
                     dip_price = float(best_dip.get("last_price") or 0.0)
-                    if dip_price > 0 and dip_sym not in held_positions:
+                    if dip_price > 0 and dip_sym not in held_positions_active:
                         cost_1lot = dip_price * 100.0
                         shares = int(min(avail_cash * 0.5, tot_assets * 0.25) // cost_1lot) * 100
                         if shares >= 100:
                             logger.info(f"🎯 [时序低吸] 捕捉回踩低吸点买入: {dip_sym} 股数={shares} 现价={dip_price} 回踩={best_dip.get('pullback_pct')}%")
                             try:
-                                auto_trader.create_order(dip_sym, "BUY", shares, dip_price, reason="时序低吸买入")
-                                dip_buyer.watchlist[dip_sym]["status"] = "BOUGHT"
+                                buy_res = account_manager.place_order(
+                                    account_id=active_id,
+                                    symbol=dip_sym,
+                                    action="buy",
+                                    price=dip_price,
+                                    amount=shares,
+                                    notes="时序低吸买入"
+                                )
+                                if buy_res.get("success"):
+                                    dip_buyer.watchlist[dip_sym]["status"] = "BOUGHT"
                             except Exception as ex:
                                 logger.error(f"时序低吸报单异常: {ex}")
 
-            # 3. 未卖出预期时间合理调控（全要素支持 (account_id, symbol) 复合键）
+            # 3. 未卖出预期时间合理调控（全要素支持 (account_id, symbol) 复合键，穿透 place_order 真实通道）
             unsold_ctrl = intraday_timing_engine["unsold_controller"]
             now_str = datetime.now().strftime("%H:%M:%S")
             for key, item in list(unsold_ctrl.pending_sells.items()):
@@ -2537,17 +2747,24 @@ A股交易时段: 上午9:30-11:30, 下午13:00-15:00
                 stat = unsold_ctrl.evaluate_unsold_status(sym, cur_p, chg_p, now_time_str=now_str, account_id=acc_id)
                 action = stat.get("tuning_action")
                 if action == "REPRICE_URGENT_SELL":
-                    logger.warning(f"⚡ [超时调控] 账户#{acc_id} 卖单超时下探，紧急降价追单卖出: {sym} 原因={stat.get('tuning_reason')}")
+                    tuning_reason = stat.get('tuning_reason', '超时紧急调价强平')
+                    logger.warning(f"⚡ [超时调控] 账户#{acc_id} 卖单超时下探，紧急降价追单卖出: {sym} 原因={tuning_reason}")
                     try:
                         acc_positions = db_store.get_positions(acc_id) or {}
                         pos = acc_positions.get(sym, {})
                         amt = int(pos.get("amount", 0) or 0)
                         if amt > 0:
-                            trader = account_manager.get_trader(acc_id)
-                            if trader and getattr(trader, 'connected', False):
-                                trader.buy_or_sell(sym, "SELL", amt, cur_p * 0.995, reason="超时紧急调价强平")
-                            else:
-                                auto_trader.create_order(sym, "SELL", amt, cur_p * 0.995, reason="超时紧急调价强平")
+                            sell_p = round(cur_p * 0.995, 2)
+                            order_res = account_manager.place_order(
+                                account_id=acc_id,
+                                symbol=sym,
+                                action="sell",
+                                price=sell_p,
+                                amount=amt,
+                                name=pos.get("name", sym),
+                                notes=f"超时紧急调价强平: {tuning_reason}"
+                            )
+                            logger.info(f"✅ [账户#{acc_id}] 超时降价强平委托结果: {order_res.get('message')}")
                     except Exception as ex:
                         logger.error(f"超时调控市价卖出异常: {ex}")
                 elif action == "CANCEL_AND_RIDE":

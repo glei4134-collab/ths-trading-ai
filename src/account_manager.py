@@ -683,7 +683,7 @@ class AccountManager:
     def place_order(self, account_id: int, symbol: str, action: str,
                     price: float, amount: int, name: str = "",
                     dry_run: bool = False, persist: bool = True,
-                    skip_optimizer: bool = False) -> Dict:
+                    skip_optimizer: bool = False, notes: str = "", reason: str = "", **kwargs) -> Dict:
         """
         账户下单唯一入口：先过 order_guard，成功后才写 trades。
         失败委托绝不落成交账。

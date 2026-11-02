@@ -5,6 +5,7 @@ A股交易时段（工作日 09:15-11:30, 13:00-15:05）严禁任何停机重启
 版本发布与更新自动识别敏感交易时段并拦截，推迟至 15:05 盘后平滑更替。
 """
 
+import os
 import sys
 import time
 import argparse
