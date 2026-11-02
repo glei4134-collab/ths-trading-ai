@@ -1504,24 +1504,18 @@ class AIScheduler:
                 cancel_reason = ""
 
                 if action == "sell":
-                    # --- 卖单：严格按该账户持仓成本与盈亏算值 ---
+                    # --- 卖单：严格按对应账户持仓成本与盈亏算值（严禁使用全局单例 auto_trader.positions）---
                     is_loss_position = False
                     try:
-                        if acc_id is not None:
-                            pos_dict = db_store.get_positions(acc_id) or {}
-                            if symbol in pos_dict:
-                                cost_price = float(pos_dict[symbol].get("cost_price", 0.0) or 0.0)
-                                if cost_price > 0 and current_price < cost_price:
-                                    is_loss_position = True
-                        else:
-                            from auto_trader import auto_trader
-                            if symbol in auto_trader.positions:
-                                pos = auto_trader.positions[symbol]
-                                avg = pos.avg_price
-                                if avg > 0 and current_price < avg:
-                                    is_loss_position = True
+                        target_acc_id = acc_id if acc_id is not None else (db_store.get_active_account_id() or 1)
+                        pos_dict = db_store.get_positions(target_acc_id) or {}
+                        if symbol in pos_dict:
+                            p_info = pos_dict[symbol]
+                            cost_price = float(p_info.get("avg_price", 0.0) or p_info.get("cost_price", 0.0) or 0.0)
+                            if cost_price > 0 and current_price < cost_price:
+                                is_loss_position = True
                     except Exception as e:
-                        logger.debug(f"获取 {symbol} 账户持仓盈亏状态失败: {e}")
+                        logger.debug(f"获取 [{acc_name}] {symbol} 专属持仓盈亏状态失败: {e}")
 
                     if is_loss_position and elapsed_min >= 3:
                         # 亏损持仓的卖单：3分钟没成交就撤（止损要快）
@@ -1556,7 +1550,7 @@ class AIScheduler:
                             if trader:
                                 res = trader.cancel_order(order.get("order_id", ""), order.get("date", ""))
                                 cancel_success = res.get("success", False)
-                        if not cancel_success:
+                        else:
                             conn, _ = get_active_connector()
                             if conn and hasattr(conn, "cancel_order"):
                                 res = conn.cancel_order(order.get("order_id", ""), order.get("date", ""))
@@ -2519,26 +2513,45 @@ A股交易时段: 上午9:30-11:30, 下午13:00-15:00
                             except Exception as ex:
                                 logger.error(f"时序低吸报单异常: {ex}")
 
-            # 3. 未卖出预期时间合理调控
+            # 3. 未卖出预期时间合理调控（全要素支持 (account_id, symbol) 复合键）
             unsold_ctrl = intraday_timing_engine["unsold_controller"]
             now_str = datetime.now().strftime("%H:%M:%S")
-            for sym, item in list(unsold_ctrl.pending_sells.items()):
+            for key, item in list(unsold_ctrl.pending_sells.items()):
+                if isinstance(key, tuple) and len(key) == 2:
+                    acc_id, sym = key
+                elif isinstance(key, str) and ":" in key:
+                    parts = key.split(":", 1)
+                    try:
+                        acc_id = int(parts[0])
+                        sym = parts[1]
+                    except Exception:
+                        acc_id = active_id
+                        sym = key
+                else:
+                    acc_id = item.get("account_id") or active_id
+                    sym = key if isinstance(key, str) else item.get("symbol", "")
+
                 q = fetch_realtime_single(sym) or {}
                 cur_p = float(q.get("price") or item.get("target_price") or 0.0)
                 chg_p = float(q.get("change_pct") or 0.0)
-                stat = unsold_ctrl.evaluate_unsold_status(sym, cur_p, chg_p, now_time_str=now_str)
+                stat = unsold_ctrl.evaluate_unsold_status(sym, cur_p, chg_p, now_time_str=now_str, account_id=acc_id)
                 action = stat.get("tuning_action")
                 if action == "REPRICE_URGENT_SELL":
-                    logger.warning(f"⚡ [超时调控] 卖单超时下探，紧急降价追单卖出: {sym} 原因={stat.get('tuning_reason')}")
+                    logger.warning(f"⚡ [超时调控] 账户#{acc_id} 卖单超时下探，紧急降价追单卖出: {sym} 原因={stat.get('tuning_reason')}")
                     try:
-                        pos = held_positions.get(sym, {})
+                        acc_positions = db_store.get_positions(acc_id) or {}
+                        pos = acc_positions.get(sym, {})
                         amt = int(pos.get("amount", 0) or 0)
                         if amt > 0:
-                            auto_trader.create_order(sym, "SELL", amt, cur_p * 0.995, reason="超时紧急调价强平")
+                            trader = account_manager.get_trader(acc_id)
+                            if trader and getattr(trader, 'connected', False):
+                                trader.buy_or_sell(sym, "SELL", amt, cur_p * 0.995, reason="超时紧急调价强平")
+                            else:
+                                auto_trader.create_order(sym, "SELL", amt, cur_p * 0.995, reason="超时紧急调价强平")
                     except Exception as ex:
                         logger.error(f"超时调控市价卖出异常: {ex}")
                 elif action == "CANCEL_AND_RIDE":
-                    logger.info(f"🚀 [超时调控] 标的强势涨停，顺延持仓享受溢价: {sym}")
+                    logger.info(f"🚀 [超时调控] 账户#{acc_id} 标的强势涨停，顺延持仓享受溢价: {sym}")
 
         except Exception as e:
             logger.debug(f"高频时序巡检逻辑执行异常: {e}")

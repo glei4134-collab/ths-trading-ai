@@ -302,20 +302,23 @@ class PositionRetentionDecider:
 
 
 class UnsoldPositionController:
-    """未卖出预期时间合理调控模块 (Unsold Position Controller)"""
+    """未卖出预期时间合理调控模块 (Unsold Position Controller) - 支持多账户 (account_id, symbol) 复合键严格隔离"""
 
     def __init__(self):
-        # 跟踪预期卖出指令：symbol -> {expected_sell_time, target_price, reason, order_id, register_time}
-        self.pending_sells: Dict[str, Dict[str, Any]] = {}
+        # 跟踪预期卖出指令：(account_id, symbol) -> {expected_sell_time, target_price, reason, order_id, register_time}
+        self.pending_sells: Dict[Tuple[int, str], Dict[str, Any]] = {}
 
     def register_expected_sell(self, symbol: str, name: str, expected_sell_time_str: str, 
-                               target_price: float, reason: str = "时序计划卖出", order_id: str = "", account_id: int = 0):
-        """登记一笔有预期时间的卖出计划（支持 account_id 复合隔离）"""
-        key = f"{account_id}:{symbol}" if account_id else symbol
-        self.pending_sells[key] = {
-            "key": key,
-            "account_id": account_id,
-            "symbol": symbol,
+                               target_price: float, reason: str = "时序计划卖出", order_id: str = "", account_id: int = 1):
+        """登记一笔有预期时间的卖出计划（采用 (account_id, symbol) 复合键严格隔离）"""
+        acc_id = int(account_id) if account_id is not None else 1
+        sym = str(symbol).strip()
+        comp_key = (acc_id, sym)
+        self.pending_sells[comp_key] = {
+            "key": f"{acc_id}:{sym}",
+            "composite_key": comp_key,
+            "account_id": acc_id,
+            "symbol": sym,
             "name": name,
             "expected_sell_time": expected_sell_time_str,
             "target_price": target_price,
@@ -326,8 +329,31 @@ class UnsoldPositionController:
             "tuning_action": "NONE"
         }
 
+    def cancel_expected_sell(self, symbol: str, account_id: Optional[int] = None) -> bool:
+        """撤销预期卖出计划（支持指定 account_id 或全量匹配标的撤销）"""
+        sym = str(symbol).strip()
+        removed = False
+        if account_id is not None:
+            key = (int(account_id), sym)
+            if key in self.pending_sells:
+                del self.pending_sells[key]
+                removed = True
+            str_key = f"{account_id}:{sym}"
+            if str_key in self.pending_sells:
+                del self.pending_sells[str_key]
+                removed = True
+        else:
+            keys_to_del = [
+                k for k in list(self.pending_sells.keys())
+                if (isinstance(k, tuple) and len(k) == 2 and k[1] == sym) or k == sym or (isinstance(k, str) and k.endswith(f":{sym}"))
+            ]
+            for k in keys_to_del:
+                del self.pending_sells[k]
+                removed = True
+        return removed
+
     def evaluate_unsold_status(self, symbol: str, current_price: float, change_pct: float,
-                               now_time_str: Optional[str] = None, account_id: int = 0) -> Dict[str, Any]:
+                               now_time_str: Optional[str] = None, account_id: Optional[int] = None) -> Dict[str, Any]:
         """
         对已超预期时间却未卖出的标的进行智能调控
         调控逻辑：
@@ -335,11 +361,25 @@ class UnsoldPositionController:
         2. 若已经超时且价格开始滞涨/跳水 -> 调控：立刻降价至即时买一或市价急卖，坚决止盈/避险；
         3. 若尚未到达预期时间 -> 调控：维持挂单等待时机。
         """
-        key = f"{account_id}:{symbol}" if account_id and f"{account_id}:{symbol}" in self.pending_sells else symbol
-        if key not in self.pending_sells:
+        sym = str(symbol).strip()
+        target_item = None
+        if account_id is not None:
+            key = (int(account_id), sym)
+            target_item = self.pending_sells.get(key)
+            if not target_item:
+                target_item = self.pending_sells.get(f"{account_id}:{sym}") or self.pending_sells.get(sym)
+        else:
+            # 若未传入 account_id，遍历寻找对应 symbol 的首个匹配记录
+            for k, val in self.pending_sells.items():
+                if (isinstance(k, tuple) and len(k) == 2 and k[1] == sym) or (isinstance(k, str) and (k == sym or k.endswith(f":{sym}"))):
+                    target_item = val
+                    break
+
+        if not target_item:
             return {}
 
-        item = self.pending_sells[key]
+        item = target_item
+        acc_id = item.get("account_id", account_id or 1)
         if not now_time_str:
             now_time_str = datetime.now().strftime("%H:%M:%S")
 
@@ -354,27 +394,28 @@ class UnsoldPositionController:
             if change_pct >= 9.8:
                 # 市场超预期强劲，调控为顺延持有
                 tuning_action = "CANCEL_AND_RIDE"
-                tuning_reason = f"已过预定卖出时间 {item['expected_sell_time']}，但股价封死涨停，调控为取消卖出继续享受涨幅"
+                tuning_reason = f"[账户#{acc_id}] 已过预定卖出时间 {item['expected_sell_time']}，但股价封死涨停，调控为取消卖出继续享受涨幅"
             elif current_price < item["target_price"] * 0.985:
                 # 价格已跌破目标价 1.5%，属于挂单过高未成交，必须紧急调价
                 tuning_action = "REPRICE_URGENT_SELL"
-                tuning_reason = f"已超时且价格跌破挂单价 ({current_price:.2f} < {item['target_price']:.2f})，调控为按买一市价紧急卖出防滑坡"
+                tuning_reason = f"[账户#{acc_id}] 已超时且价格跌破挂单价 ({current_price:.2f} < {item['target_price']:.2f})，调控为按买一市价紧急卖出防滑坡"
             else:
                 # 正常超时，调整为分批现价卖出
                 tuning_action = "MARKET_SELL_NOW"
-                tuning_reason = f"已超过预定卖出窗口 {item['expected_sell_time']}，执行纪律性市价调仓"
+                tuning_reason = f"[账户#{acc_id}] 已超过预定卖出窗口 {item['expected_sell_time']}，执行纪律性市价调仓"
         else:
             status = "AWAITING_TIME"
             tuning_action = "WAIT_SCHEDULED_TIME"
-            tuning_reason = f"等待到达预期卖出时间 {item['expected_sell_time']}"
+            tuning_reason = f"[账户#{acc_id}] 等待到达预期卖出时间 {item['expected_sell_time']}"
 
         item["status"] = status
         item["tuning_action"] = tuning_action
         item["tuning_reason"] = tuning_reason
 
         return {
-            "symbol": symbol,
-            "name": item["name"],
+            "account_id": acc_id,
+            "symbol": sym,
+            "name": item.get("name", sym),
             "expected_sell_time": item["expected_sell_time"],
             "target_price": item["target_price"],
             "current_price": current_price,
@@ -389,8 +430,10 @@ class UnsoldPositionController:
         """获取未卖出超时调控清单（支持按 account_id 过滤）"""
         res = []
         for key, item in self.pending_sells.items():
-            if account_id is not None and item.get("account_id") and item.get("account_id") != account_id:
-                continue
+            if account_id is not None:
+                item_acc = item.get("account_id")
+                if item_acc is not None and int(item_acc) != int(account_id):
+                    continue
             res.append(dict(item))
         return res
 
