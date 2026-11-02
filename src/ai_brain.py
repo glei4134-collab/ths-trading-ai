@@ -847,6 +847,10 @@ from strategies.base import BaseStrategy, StrategyResult, Signal
         """
         if not candidates:
             return candidates
+        for c in candidates:
+            c.setdefault("ortho_score", round(float(c.get("ensemble_score", 50.0) or 50.0), 2))
+            c.setdefault("hrp_weight", round(float(c.get("recommended_weight", 0.0) or 0.0), 2))
+            c.setdefault("bl_weight", round(float(c.get("recommended_weight", 0.0) or 0.0), 2))
         try:
             import numpy as np
             from factors.orthogonalizer import LowodinOrthogonalizer
@@ -920,8 +924,9 @@ from strategies.base import BaseStrategy, StrategyResult, Signal
                 w_pct = round(float(c.get("recommended_weight", max_weight * 100.0)), 2)
                 c["hrp_weight"] = w_pct
                 c["bl_weight"] = w_pct
+            logger.info(f"[正交化与组合优化] 完成 {n} 只候选股 Lowödin 正交化与 {len(buy_indices)} 只 BUY 标的 HRP/BL 权重分配")
         except Exception as e:
-            logger.debug(f"候选股正交化与组合权重优化回退默认: {e}")
+            logger.warning(f"[正交化与组合优化] 候选股正交化或 HRP/BL 矩阵求解异常，已回退默认权重: {e}", exc_info=True)
         return candidates
 
 

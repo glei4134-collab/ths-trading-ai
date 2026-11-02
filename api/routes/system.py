@@ -347,10 +347,20 @@ def ai_candidates_today():
                 from intraday_timing_engine import intraday_timing_engine
                 dip_buyer = intraday_timing_engine["dip_buyer"]
                 if held_shares == 0:
-                    dip_buyer.register_unbought_candidate(code, item["name"], float(base_score), reason=reason, target_price=price, industry=item["industry"])
-                    dip_stat = dip_buyer.update_quote(code, price, change_pct)
+                    dip_buyer.register_unbought_candidate(
+                        code, item["name"], float(base_score),
+                        reason=reason, target_price=price,
+                        industry=item["industry"], initial_price= float(q.get("open") or price)
+                    )
+                    dip_stat = dip_buyer.update_quote(
+                        code, price, change_pct,
+                        high=float(q.get("high", 0.0) or price),
+                        low=float(q.get("low", 0.0) or price),
+                        volume=float(q.get("volume", 0.0) or 0.0),
+                        quote=q,
+                    )
                 else:
-                    dip_stat = {"dip_score": 50.0, "signal": "HELD", "suggested_action": "HOLD_POSITION", "pullback_pct": 0.0}
+                    dip_stat = {"dip_score": 50.0, "signal": "HELD", "suggested_action": "HOLD_POSITION", "pullback_pct": 0.0, "voi": 0.0, "normalized_voi": 0.0}
             except Exception as e:
                 logger.warning(f"时序引擎注册/更新低吸候选失败: {e}")
                 dip_stat = {"dip_score": 50.0, "signal": "WATCHING", "suggested_action": "OBSERVE", "pullback_pct": 0.0}
@@ -388,6 +398,8 @@ def ai_candidates_today():
                 "timing_signal": dip_stat.get("signal", "WATCHING"),
                 "timing_action": dip_stat.get("suggested_action", "OBSERVE"),
                 "pullback_pct": dip_stat.get("pullback_pct", 0.0),
+                "voi": round(float(dip_stat.get("voi", 0.0) or 0.0), 2),
+                "normalized_voi": round(float(dip_stat.get("normalized_voi", 0.0) or 0.0), 4),
                 "obi": round(float(q.get("obi", 0.0) or 0.0), 4),
                 "obi_pct": f"{round(float(q.get('obi', 0.0) or 0.0) * 100, 1):+.1f}%",
                 "utilization_weight": 0.25,
@@ -398,7 +410,7 @@ def ai_candidates_today():
             from ai_brain import ai_brain
             ai_brain.allocate_candidate_weights(results, method="black_litterman", max_weight=max_single_pct)
         except Exception as _opt_err:
-            logger.debug(f"ai_candidates_today 组合优化忽略: {_opt_err}")
+            logger.warning(f"ai_candidates_today 组合优化异常: {_opt_err}", exc_info=True)
 
         results.sort(key=lambda x: (x["decision"] == "BUY", x["affordable"], x["ensemble_score"]), reverse=True)
 

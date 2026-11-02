@@ -947,13 +947,78 @@ def fetch_tencent_intraday(symbol: str) -> list:
 
 # ==================== 快速单只股票实时报价 ====================
 
+def fetch_eastmoney_realtime_single(symbol: str) -> Optional[Dict]:
+    """
+    东方财富单只股票五档实时盘口备用源（当腾讯实时行情不可用时自动无缝接管，确保 VOI/OBI 五档不断流）
+    """
+    if MockMarketDataProvider.is_mock_active():
+        return MockMarketDataProvider.generate_mock_realtime([symbol]).get(symbol)
+    try:
+        secid = symbol_to_eastmoney(symbol)
+        url = "https://push2.eastmoney.com/api/qt/stock/get"
+        params = {
+            "secid": secid,
+            "ut": "fa5fd1943c7b386f172d6893dbfba10b",
+            "fltt": 2,
+            "invt": 2,
+            "fields": "f43,f44,f45,f46,f47,f48,f57,f58,f60,f168,f170,f19,f20,f17,f18,f15,f16,f13,f14,f11,f12,f39,f40,f37,f38,f35,f36,f33,f34,f31,f32",
+        }
+        resp = _session.get(url, params=params, timeout=4)
+        d = (resp.json() or {}).get("data") or {}
+        if not d or not d.get("f43"):
+            return None
+        price = float(d.get("f43") or 0.0)
+        pre_close = float(d.get("f60") or price)
+        b_prices = [float(d.get(f"f{19 - i * 2}") or 0.0) for i in range(5)]
+        b_vols = [int(float(d.get(f"f{20 - i * 2}") or 0)) * 100 for i in range(5)]
+        a_prices = [float(d.get(f"f{39 - i * 2}") or 0.0) for i in range(5)]
+        a_vols = [int(float(d.get(f"f{40 - i * 2}") or 0)) * 100 for i in range(5)]
+        tot_b = sum(b_vols)
+        tot_a = sum(a_vols)
+        obi = round((tot_b - tot_a) / (tot_b + tot_a), 4) if (tot_b + tot_a) > 0 else 0.0
+        return {
+            "code": str(d.get("f57") or symbol),
+            "name": str(d.get("f58") or symbol),
+            "price": price,
+            "open": float(d.get("f46") or price),
+            "high": float(d.get("f44") or price),
+            "low": float(d.get("f45") or price),
+            "pre_close": pre_close,
+            "change": round(price - pre_close, 2),
+            "change_pct": float(d.get("f170") or 0.0),
+            "volume": int(float(d.get("f47") or 0)) * 100,
+            "amount": float(d.get("f48") or 0.0),
+            "turnover": float(d.get("f168") or 0.0),
+            "pe": 0.0,
+            "limit_up": round(pre_close * 1.10, 2),
+            "limit_down": round(pre_close * 0.90, 2),
+            "obi": obi,
+            "total_bid_vol": tot_b,
+            "total_ask_vol": tot_a,
+            "ask1_price": a_prices[0],
+            "ask1_vol": a_vols[0],
+            "bid1_price": b_prices[0],
+            "bid1_vol": b_vols[0],
+            "bid_prices": b_prices,
+            "bid_vols": b_vols,
+            "ask_prices": a_prices,
+            "ask_vols": a_vols,
+        }
+    except Exception as e:
+        logger.debug(f"东方财富单股五档行情备用获取失败 {symbol}: {e}")
+        return None
+
+
 def fetch_realtime_single(symbol: str) -> Optional[Dict]:
     """
-    获取单只股票实时行情（腾讯API，最快）
+    获取单只股票实时行情（优先腾讯五档API，失败时自动无缝切换东方财富五档API）
     速度: ~50-100ms
     """
     result = fetch_tencent_realtime([symbol])
-    return result.get(symbol)
+    q = result.get(symbol)
+    if q and q.get("price"):
+        return q
+    return fetch_eastmoney_realtime_single(symbol)
 
 
 # ==================== 新浪全市场行情（备用） ====================

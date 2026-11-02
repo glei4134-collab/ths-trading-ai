@@ -2751,8 +2751,18 @@ A股交易时段: 上午9:30-11:30, 下午13:00-15:00
         )
         now_mono = _time.monotonic()
         queued = []
+        max_pending_slices = 64
         with self._algo_slice_lock:
+            # 清理超过 300 秒未消费的陈旧切片，并去重同一 (account_id, symbol, action) 的旧未执行切片
+            self._pending_algo_slices = [
+                item for item in self._pending_algo_slices
+                if (now_mono - float(item.get("due_mono", now_mono))) <= 300.0
+                and not (item.get("account_id") == account_id and item.get("symbol") == symbol and item.get("action") == action)
+            ]
             for idx, s in enumerate(slices[1:], start=2):
+                if len(self._pending_algo_slices) >= max_pending_slices:
+                    logger.warning(f"[Almgren-Chriss] 拆单队列已达上限 ({max_pending_slices})，截断后续切片")
+                    break
                 qty = int(s.get("trade_shares", s.get("shares", 0)))
                 entry = {
                     "account_id": account_id,
@@ -2769,6 +2779,10 @@ A股交易时段: 上午9:30-11:30, 下午13:00-15:00
                 self._pending_algo_slices.append(entry)
                 queued.append(entry)
 
+        logger.info(
+            f"[Almgren-Chriss] 账户#{account_id} {action} {symbol} 总量={total_shares}股 "
+            f"已执行首笔={first_qty}股, 队列挂起={len(queued)}笔 (kappa={plan.get('kappa', 0.0):.4f})"
+        )
         return {
             "scheduled": True,
             "kappa": plan.get("kappa"),
