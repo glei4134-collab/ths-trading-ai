@@ -3334,15 +3334,17 @@
                     if (elPosCount) elPosCount.textContent = positions.length + '只';
                     const posEl = document.getElementById('tpPositions');
                     if (positions.length > 0) {
-                        posEl.innerHTML = positions.map(p => {
-                            const pnl = p.profit || 0;
-                            const pnlPct = p.profit_rate || 0;
-                            const cls = pnl >= 0 ? 'color:#ef4444' : 'color:#22c55e';
-                            return `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #21262d;font-size:12px;">
-                                <span>${p.name || p.symbol} <span style="color:#8b949e;">${p.symbol}</span></span>
-                                <span style="${cls}">${pnlPct >= 0 ? '+' : ''}${(pnlPct * 100).toFixed(2)}%</span>
-                            </div>`;
-                        }).join('');
+                        if (posEl) {
+                            posEl.innerHTML = positions.map(p => {
+                                const pnl = p.profit || 0;
+                                const pnlPct = p.profit_rate || 0;
+                                const cls = pnl >= 0 ? 'color:#ef4444' : 'color:#22c55e';
+                                return `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #21262d;font-size:12px;">
+                                    <span>${p.name || p.symbol} <span style="color:#8b949e;">${p.symbol}</span></span>
+                                    <span style="${cls}">${pnlPct >= 0 ? '+' : ''}${(pnlPct * 100).toFixed(2)}%</span>
+                                </div>`;
+                            }).join('');
+                        }
 
                         // 更新 HUD 团队赛风控态势 (单票上限 35%, 最低持仓 3 支)
                         let maxMv = 0;
@@ -3359,7 +3361,9 @@
                             if (maxPct > 35) maxPosEl.title = '警告：单票仓位超35%团队硬红线！';
                         }
                     } else {
-                        posEl.innerHTML = '<div style="text-align:center;color:#8b949e;padding:15px;font-size:12px;">暂无持仓</div>';
+                        if (posEl) {
+                            posEl.innerHTML = '<div style="text-align:center;color:#8b949e;padding:15px;font-size:12px;">暂无持仓</div>';
+                        }
                         const maxPosEl = document.getElementById('hudMaxPosition');
                         if (maxPosEl) {
                             maxPosEl.textContent = '0.0%';
@@ -3384,17 +3388,19 @@
                     const elTradeCount = document.getElementById('tpTradeCount');
                     if (elTradeCount) elTradeCount.textContent = todayTrades.length + '笔';
                     const tradeEl = document.getElementById('tpTrades');
-                    if (todayTrades.length > 0) {
-                        tradeEl.innerHTML = todayTrades.map(t => {
-                            const action = t.action === 'buy' ? '买入' : '卖出';
-                            const color = t.action === 'buy' ? '#ef4444' : '#22c55e';
-                            return `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #21262d;font-size:12px;">
-                                <span><span style="color:${color}">${action}</span> ${t.name || t.symbol} ${t.amount}股</span>
-                                <span style="color:#8b949e;">${t.time ? t.time.slice(11, 16) : ''}</span>
-                            </div>`;
-                        }).join('');
-                    } else {
-                        tradeEl.innerHTML = '<div style="text-align:center;color:#8b949e;padding:15px;font-size:12px;">今日暂无交易</div>';
+                    if (tradeEl) {
+                        if (todayTrades.length > 0) {
+                            tradeEl.innerHTML = todayTrades.map(t => {
+                                const action = t.action === 'buy' ? '买入' : '卖出';
+                                const color = t.action === 'buy' ? '#ef4444' : '#22c55e';
+                                return `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #21262d;font-size:12px;">
+                                    <span><span style="color:${color}">${action}</span> ${t.name || t.symbol} ${t.amount}股</span>
+                                    <span style="color:#8b949e;">${t.time ? t.time.slice(11, 16) : ''}</span>
+                                </div>`;
+                            }).join('');
+                        } else {
+                            tradeEl.innerHTML = '<div style="text-align:center;color:#8b949e;padding:15px;font-size:12px;">今日暂无交易</div>';
+                        }
                     }
                 }
 
