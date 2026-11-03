@@ -40,6 +40,7 @@ class TestMainlineWiringIntegration(unittest.TestCase):
         dip_buyer = intraday_timing_engine["dip_buyer"]
         ring_buf = intraday_timing_engine["ring_buffer"]
 
+        dip_buyer.watchlist.pop("600036", None)
         dip_buyer.register_unbought_candidate(
             symbol="600036",
             name="招商银行",
