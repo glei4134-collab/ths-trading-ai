@@ -2704,8 +2704,8 @@
     <!-- AI Chat Modal -->
     <div class="modal-overlay" id="aiChatModal">
         <div class="modal" style="max-width: 600px;">
-            <div class="modal-header" style="background: linear-gradient(135deg, #1e1b4b 0%, #312e81 100%);">
-                <div class="modal-title" style="color: #c4b5fd;">AI 投资顾问</div>
+            <div class="modal-header" style="background: var(--bg-surface); border-bottom: 1px solid var(--border-default);">
+                <div class="modal-title" style="color: var(--text-primary); font-weight: 700;">AI 投资顾问</div>
                 <button class="modal-close" onclick="closeAIChatModal()">&times;</button>
             </div>
             <div class="modal-body" style="padding: 0;">
@@ -2757,14 +2757,14 @@
 
                 <!-- Tab 1: 同花顺 App 扫码登录 (官方二维码) -->
                 <div id="loginViewQr" style="display: block;">
-                    <div style="font-size: 11px; color: #94a3b8; line-height: 1.5; margin-bottom: 12px; text-align: center;">
+                    <div style="font-size: 11px; color: var(--text-secondary); line-height: 1.5; margin-bottom: 12px; text-align: center;">
                         打开<strong>手机同花顺 App「扫一扫」</strong>扫描下方二维码并在手机端确认登录。<br>已绑定账号原地自动续签，新账号自动按序入库。
                     </div>
                     <div id="cloudQrContainer" style="display: block; padding: 14px; border-radius: 10px; background: var(--bg-inset); border: 1px solid var(--border-default); text-align: center;">
-                        <div style="background: #ffffff; padding: 8px; border-radius: 8px; display: inline-block; box-shadow: 0 4px 16px rgba(0,0,0,0.5);">
+                        <div style="background: var(--bg-surface); padding: 8px; border-radius: 8px; display: inline-block; border: 1px solid var(--border-default); box-shadow: 0 2px 8px rgba(70,50,30,0.06);">
                             <img id="cloudQrImage" src="" alt="同花顺扫码二维码" style="width: 150px; height: 150px; display: block;" />
                         </div>
-                        <div id="cloudQrStatusText" style="margin-top: 10px; font-size: 12px; color: #ff1824; font-weight: 600;">
+                        <div id="cloudQrStatusText" style="margin-top: 10px; font-size: 12px; color: var(--brand-blue); font-weight: 600;">
                             ⏳ 正在获取专属同花顺登录二维码...
                         </div>
                         <div style="margin-top: 10px; display: flex; justify-content: center; gap: 8px;">
@@ -2780,10 +2780,10 @@
                 <div id="loginViewSms" style="display: none;">
                     <div style="display: flex; flex-direction: column; gap: 14px; margin-bottom: 16px;">
                         <div>
-                            <label style="display: block; font-size: 12px; color: #cbd5e1; margin-bottom: 6px; font-weight: 600;">手机号码</label>
+                            <label style="display: block; font-size: 12px; color: var(--text-secondary); margin-bottom: 6px; font-weight: 600;">手机号码</label>
                             <div style="display: flex; gap: 8px;">
                                 <input type="tel" id="smsPhoneInput" maxlength="11" placeholder="输入11位同花顺绑定手机号" 
-                                       style="flex: 1; box-sizing: border-box; background: #0d1424; border: 1px solid rgba(255, 24, 36, 0.3); border-radius: 6px; padding: 10px 12px; color: #f8fafc; font-size: 13px; outline: none; font-family: var(--font-mono);" />
+                                       style="flex: 1; box-sizing: border-box; background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: 6px; padding: 10px 12px; color: var(--text-primary); font-size: 13px; outline: none; font-family: var(--font-mono);" />
                                 <button type="button" id="btnSendSms" onclick="handleSendSmsCode()"
                                         style="width: 110px; background: var(--brand-blue-bg); border: 1px solid var(--brand-blue-border); color: var(--brand-blue); border-radius: 6px; font-size: 12px; font-weight: 700; cursor: pointer; transition: all 0.2s; white-space: nowrap;">
                                     获取验证码
@@ -2791,9 +2791,9 @@
                             </div>
                         </div>
                         <div>
-                            <label style="display: block; font-size: 12px; color: #cbd5e1; margin-bottom: 6px; font-weight: 600;">短信验证码</label>
+                            <label style="display: block; font-size: 12px; color: var(--text-secondary); margin-bottom: 6px; font-weight: 600;">短信验证码</label>
                             <input type="text" id="smsCodeInput" maxlength="6" placeholder="输入6位数字短信验证码" 
-                                   style="width: 100%; box-sizing: border-box; background: #0d1424; border: 1px solid rgba(255, 24, 36, 0.3); border-radius: 6px; padding: 10px 12px; color: #f8fafc; font-size: 14px; outline: none; font-family: var(--font-mono); letter-spacing: 2px;" />
+                                   style="width: 100%; box-sizing: border-box; background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: 6px; padding: 10px 12px; color: var(--text-primary); font-size: 14px; outline: none; font-family: var(--font-mono); letter-spacing: 2px;" />
                         </div>
                     </div>
 
@@ -2807,14 +2807,14 @@
                 <div id="loginViewPwd" style="display: none;">
                     <div style="display: flex; flex-direction: column; gap: 14px; margin-bottom: 16px;">
                         <div>
-                            <label style="display: block; font-size: 12px; color: #cbd5e1; margin-bottom: 6px; font-weight: 600;">同花顺账号 / 手机号</label>
+                            <label style="display: block; font-size: 12px; color: var(--text-secondary); margin-bottom: 6px; font-weight: 600;">同花顺账号 / 手机号</label>
                             <input type="text" id="pwdAccountInput" placeholder="输入同花顺用户名或手机号" 
-                                   style="width: 100%; box-sizing: border-box; background: #0d1424; border: 1px solid rgba(255, 24, 36, 0.3); border-radius: 6px; padding: 10px 12px; color: #f8fafc; font-size: 13px; outline: none;" />
+                                   style="width: 100%; box-sizing: border-box; background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: 6px; padding: 10px 12px; color: var(--text-primary); font-size: 13px; outline: none;" />
                         </div>
                         <div>
-                            <label style="display: block; font-size: 12px; color: #cbd5e1; margin-bottom: 6px; font-weight: 600;">账户密码</label>
+                            <label style="display: block; font-size: 12px; color: var(--text-secondary); margin-bottom: 6px; font-weight: 600;">账户密码</label>
                             <input type="password" id="pwdPasswordInput" placeholder="输入同花顺账户密码" 
-                                   style="width: 100%; box-sizing: border-box; background: #0d1424; border: 1px solid rgba(255, 24, 36, 0.3); border-radius: 6px; padding: 10px 12px; color: #f8fafc; font-size: 13px; outline: none;" />
+                                   style="width: 100%; box-sizing: border-box; background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: 6px; padding: 10px 12px; color: var(--text-primary); font-size: 13px; outline: none;" />
                         </div>
                     </div>
 
@@ -2980,7 +2980,7 @@
             <div class="panel-header" style="flex-shrink:0;display:flex;justify-content:space-between;align-items:center;background:var(--bg-surface);border-bottom:1px solid var(--border-default);padding:10px 16px;">
                 <div style="display:flex;align-items:center;gap:10px;">
                     <span style="font-weight:700;font-size:14px;color:#0f172a;letter-spacing:0.4px;">📐 多策略量化集成表决与候选冲击池</span>
-                    <span id="ensembleRegimeTag" style="background:rgba(255, 24, 36,0.12);color:var(--brand-blue);border:1px solid rgba(255, 24, 36,0.35);padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600;">震荡自适应</span>
+                    <span id="ensembleRegimeTag" style="background:var(--brand-blue-bg);color:var(--brand-blue);border:1px solid var(--brand-blue-border);padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600;">震荡自适应</span>
                 </div>
                 <div style="display:flex;align-items:center;gap:6px;">
                     <span style="font-size:11px;color:#64748b;background:#f1f5f9;border:1px solid #e2e8f0;padding:3px 8px;border-radius:12px;font-weight:600;">⚡ 5s 自动表决同步</span>
@@ -3086,7 +3086,7 @@
                     <!-- 全局合并资产透视卡片 (支持展开/折叠) -->
                     <div id="consolidatedSummaryBox" style="display:none;margin-top:10px;padding:10px 12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;">
                         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;border-bottom:1px solid rgba(255,255,255,0.06);padding-bottom:6px;">
-                            <span style="font-size:11px;font-weight:700;color:#ff1824;">🌐 3 账户汇总合并总资产</span>
+                            <span style="font-size:11px;font-weight:700;color:var(--brand-blue);">🌐 3 账户汇总合并总资产</span>
                             <span id="consSyncTime" style="font-size:10px;color:#94a3b8;">实时计算</span>
                         </div>
                         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:6px;">
@@ -3178,7 +3178,7 @@
                     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
                         <div style="display:flex;align-items:center;gap:6px;">
                             <span style="font-size:12px;font-weight:700;color:#0f172a;">⚡ 全自动执行日志流水</span>
-                            <span id="execLogFoldBtn" onclick="toggleExecutionLogFold()" style="cursor:pointer;color:var(--brand-blue);font-size:11px;font-weight:600;background:rgba(255, 24, 36,0.1);padding:1px 6px;border-radius:4px;border:1px solid rgba(255, 24, 36,0.25);">展开</span>
+                            <span id="execLogFoldBtn" onclick="toggleExecutionLogFold()" style="cursor:pointer;color:var(--brand-blue);font-size:11px;font-weight:600;background:var(--brand-blue-bg);padding:1px 6px;border-radius:4px;border:1px solid var(--brand-blue-border);">展开</span>
                         </div>
                         <span style="font-size:10px;color:#8b949e;" id="sideExecCount">0 笔动作</span>
                     </div>
@@ -3191,7 +3191,7 @@
 
                 <!-- 底部快捷工具 (手机端隐藏调试/演练/体检，只留账户管理) -->
                 <div style="display:flex;gap:6px;" class="bottom-tools-wrapper">
-                    <button onclick="openConnectModal()" style="width:100%;background:rgba(255, 24, 36,0.1);border:1px solid rgba(255, 24, 36,0.35);color:#ff1824;padding:9px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:700;background:#161b22;border:1px solid rgba(255, 24, 36,0.35);color:#ff1824;padding:8px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:600;">⚙️ 账户与登录管理</button>
+                    <button onclick="openConnectModal()" style="width:100%;background:var(--brand-blue-bg);border:1px solid var(--brand-blue-border);color:var(--brand-blue);padding:9px 12px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:700;transition:all 0.2s;box-shadow:0 1px 2px rgba(0,0,0,0.04);">⚙️ 账户与登录管理</button>
                 </div>
 
         </div>
@@ -3676,17 +3676,17 @@
             fb.style.display = 'block';
             fb.innerHTML = msg;
             if (type === 'success') {
-                fb.style.background = 'rgba(46, 160, 67, 0.2)';
-                fb.style.color = '#3fb950';
-                fb.style.border = '1px solid #238636';
+                fb.style.background = '#f0fdf4';
+                fb.style.color = '#15803d';
+                fb.style.border = '1px solid #bbf7d0';
             } else if (type === 'error') {
-                fb.style.background = 'rgba(248, 81, 73, 0.2)';
-                fb.style.color = '#f85149';
-                fb.style.border = '1px solid #da3633';
+                fb.style.background = '#fef2f2';
+                fb.style.color = '#b91c1c';
+                fb.style.border = '1px solid #fecaca';
             } else {
-                fb.style.background = 'rgba(255, 24, 36, 0.15)';
-                fb.style.color = '#ff1824';
-                fb.style.border = '1px solid rgba(255, 24, 36, 0.3)';
+                fb.style.background = '#eff6ff';
+                fb.style.color = '#1d4ed8';
+                fb.style.border = '1px solid #bfdbfe';
             }
         }
 
@@ -3937,7 +3937,7 @@
                         <!-- 单账户选择区 -->
                         <div id="orderAccountSingleSection" style="display:block;margin-bottom:12px;">
                             <label style="display:block;font-size:11px;color:#94a3b8;margin-bottom:4px;font-weight:600;">目标交易子账户</label>
-                            <select id="singleTargetAccountSelect" style="width:100%;box-sizing:border-box;background:#161b22;border:1px solid rgba(255, 24, 36,0.3);border-radius:6px;padding:8px 10px;color:#f8fafc;font-size:12px;outline:none;">
+                            <select id="singleTargetAccountSelect" style="width:100%;box-sizing:border-box;background:var(--bg-surface);border:1px solid var(--border-default);border-radius:6px;padding:8px 10px;color:var(--text-primary);font-size:12px;outline:none;">
                                 ${singleOptions}
                             </select>
                         </div>
@@ -6031,12 +6031,12 @@
                 modal.onclick = function(e) { if (e.target === modal) modal.remove(); };
 
                 modal.innerHTML = `
-                    <div style="background:#120e14;border:1px solid rgba(255,24,36,0.4);border-radius:10px;padding:20px;width:90%;max-width:540px;box-shadow:0 12px 40px rgba(0,0,0,0.6);" onclick="event.stopPropagation()">
-                        <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid rgba(255,255,255,0.08);padding-bottom:10px;margin-bottom:14px;">
+                    <div style="background:var(--bg-surface);border:1px solid var(--border-default);border-radius:10px;padding:20px;width:90%;max-width:540px;box-shadow:0 16px 40px rgba(70,50,30,0.14);" onclick="event.stopPropagation()">
+                        <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border-default);padding-bottom:10px;margin-bottom:14px;">
                             <div style="display:flex;align-items:center;gap:8px;">
-                                <span style="font-size:15px;font-weight:700;color:#ff1824;">⚡ 同花顺 API 网关延迟与链路监控</span>
+                                <span style="font-size:15px;font-weight:700;color:var(--brand-blue);">⚡ 同花顺 API 网关延迟与链路监控</span>
                             </div>
-                            <button onclick="this.closest('#perfModal').remove()" style="background:none;border:none;color:#94a3b8;font-size:20px;cursor:pointer;">&times;</button>
+                            <button onclick="this.closest('#perfModal').remove()" style="background:none;border:none;color:var(--text-muted);font-size:20px;cursor:pointer;">&times;</button>
                         </div>
                         <div id="perfModalContent" style="font-size:12px;color:#cbd5e1;">
                             <div style="text-align:center;padding:20px;color:#94a3b8;">正在读取链路测速与数据库健康指标...</div>
@@ -6061,24 +6061,24 @@
 
                     contentEl.innerHTML = `
                         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;">
-                            <div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);padding:10px;border-radius:6px;">
-                                <div style="color:#94a3b8;font-size:11px;">平均往返延迟 (RTT)</div>
-                                <div style="font-size:18px;font-weight:700;color:#00f59b;font-family:var(--font-mono);margin-top:4px;">${avgMs} ms</div>
+                            <div style="background:var(--bg-inset);border:1px solid var(--border-default);padding:10px;border-radius:6px;">
+                                <div style="color:var(--text-secondary);font-size:11px;">平均往返延迟 (RTT)</div>
+                                <div style="font-size:18px;font-weight:700;color:var(--brand-blue);font-family:var(--font-mono);margin-top:4px;">${avgMs} ms</div>
                             </div>
-                            <div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);padding:10px;border-radius:6px;">
-                                <div style="color:#94a3b8;font-size:11px;">委托调用成功率</div>
-                                <div style="font-size:18px;font-weight:700;color:#ff1824;font-family:var(--font-mono);margin-top:4px;">${successRate}</div>
+                            <div style="background:var(--bg-inset);border:1px solid var(--border-default);padding:10px;border-radius:6px;">
+                                <div style="color:var(--text-secondary);font-size:11px;">委托调用成功率</div>
+                                <div style="font-size:18px;font-weight:700;color:#16a34a;font-family:var(--font-mono);margin-top:4px;">${successRate}</div>
                             </div>
-                            <div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);padding:10px;border-radius:6px;">
-                                <div style="color:#94a3b8;font-size:11px;">最低/最高延迟区间</div>
-                                <div style="font-size:13px;font-weight:700;color:#f8fafc;font-family:var(--font-mono);margin-top:4px;">${minMs} ~ ${maxMs} ms</div>
+                            <div style="background:var(--bg-inset);border:1px solid var(--border-default);padding:10px;border-radius:6px;">
+                                <div style="color:var(--text-secondary);font-size:11px;">最低/最高延迟区间</div>
+                                <div style="font-size:13px;font-weight:700;color:var(--text-primary);font-family:var(--font-mono);margin-top:4px;">${minMs} ~ ${maxMs} ms</div>
                             </div>
-                            <div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);padding:10px;border-radius:6px;">
-                                <div style="color:#94a3b8;font-size:11px;">统计样本总次数</div>
-                                <div style="font-size:13px;font-weight:700;color:#ffe600;font-family:var(--font-mono);margin-top:4px;">${total} 次</div>
+                            <div style="background:var(--bg-inset);border:1px solid var(--border-default);padding:10px;border-radius:6px;">
+                                <div style="color:var(--text-secondary);font-size:11px;">统计样本总次数</div>
+                                <div style="font-size:13px;font-weight:700;color:var(--text-primary);font-family:var(--font-mono);margin-top:4px;">${total} 次</div>
                             </div>
                         </div>
-                        <div style="font-size:11px;color:#94a3b8;line-height:1.5;">
+                        <div style="font-size:11px;color:var(--text-secondary);line-height:1.5;">
                             📌 说明：系统已启用细粒度单账户互斥锁与并发流控，确保毫秒级发包时不产生超买或限频。
                         </div>
                     `;
@@ -8186,7 +8186,7 @@
             modal.onclick = function(e) { if (e.target === modal) closeLedgerModal(); };
 
             modal.innerHTML = `
-            <div style="background:#161b22;border:1px solid #30363d;border-radius:14px;padding:${isMob ? '14px 10px' : '20px 22px'};width:100%;max-width:980px;max-height:${isMob ? '92vh' : '85vh'};display:flex;flex-direction:column;box-shadow:0 16px 48px rgba(0,0,0,0.7);box-sizing:border-box;" onclick="event.stopPropagation()">
+            <div style="background:var(--bg-surface);border:1px solid var(--border-default);border-radius:14px;padding:${isMob ? '14px 10px' : '20px 22px'};width:100%;max-width:980px;max-height:${isMob ? '92vh' : '85vh'};display:flex;flex-direction:column;box-shadow:0 16px 40px rgba(70,50,30,0.14);box-sizing:border-box;" onclick="event.stopPropagation()">
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;border-bottom:1px solid var(--border-default);padding-bottom:10px;flex-shrink:0;">
                     <div style="min-width:0;flex:1;">
                         <span style="font-size:${isMob ? '14px' : '17px'};font-weight:700;color:var(--text-primary);letter-spacing:0.3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;">🕒 每日时序执行审计账本</span>
@@ -8223,10 +8223,10 @@
                 </div>
 
                 <!-- 视图 2: 7 列全量宽表 (带 min-width 850px 保证横向滚动，单元格绝不被压缩) -->
-                <div id="ledgerTableWrap" style="flex:1;overflow-y:auto;overflow-x:auto;-webkit-overflow-scrolling:touch;border:1px solid #21262d;border-radius:8px;background:#0d1117;display:${isMob ? 'none' : 'block'};">
+                <div id="ledgerTableWrap" style="flex:1;overflow-y:auto;overflow-x:auto;-webkit-overflow-scrolling:touch;border:1px solid var(--border-default);border-radius:8px;background:var(--bg-surface);display:${isMob ? 'none' : 'block'};">
                     <table style="width:100%;min-width:850px;border-collapse:collapse;font-size:12px;text-align:left;">
-                        <thead style="position:sticky;top:0;background:#161b22;z-index:2;">
-                            <tr style="border-bottom:1px solid #30363d;color:#8b949e;">
+                        <thead style="position:sticky;top:0;background:var(--bg-inset);z-index:2;">
+                            <tr style="border-bottom:1px solid var(--border-default);color:var(--text-secondary);">
                                 <th style="padding:10px 10px;width:120px;white-space:nowrap;">时序步骤</th>
                                 <th style="padding:10px 8px;width:110px;white-space:nowrap;">计划时段</th>
                                 <th style="padding:10px 8px;width:120px;white-space:nowrap;">状态</th>
@@ -8302,13 +8302,13 @@
                 }
 
                 const statusStyles = {
-                    'SUCCESS': { text: '🟢 执行成功', bg: 'rgba(63, 185, 80, 0.15)', color: '#3fb950', border: '#238636' },
-                    'CATCHUP_SUCCESS': { text: '🟡 补偿执行成功', bg: 'rgba(210, 153, 34, 0.15)', color: '#d29922', border: '#9e6a03' },
-                    'PENDING': { text: '⚪ 待到达窗口', bg: 'rgba(139, 148, 158, 0.15)', color: '#8b949e', border: '#30363d' },
-                    'RUNNING': { text: '⏳ 正在执行', bg: 'rgba(88, 166, 255, 0.15)', color: '#ff1824', border: '#c8101e' },
-                    'SKIPPED_EXPIRED': { text: '🔵 超时安全废弃', bg: 'rgba(56, 139, 253, 0.15)', color: '#79c0ff', border: '#c8101e' },
-                    'SKIPPED_CONDITION': { text: '⚪ 条件不足跳过', bg: 'rgba(139, 148, 158, 0.15)', color: '#8b949e', border: '#30363d' },
-                    'FAILED': { text: '🔴 异常报错', bg: 'rgba(248, 81, 73, 0.15)', color: '#f85149', border: '#da3633' },
+                    'SUCCESS': { text: '🟢 执行成功', bg: '#f0fdf4', color: '#15803d', border: '#bbf7d0' },
+                    'CATCHUP_SUCCESS': { text: '🟡 补偿执行成功', bg: '#fefce8', color: '#854d0e', border: '#fef08a' },
+                    'PENDING': { text: '⚪ 待到达窗口', bg: '#f8fafc', color: '#64748b', border: '#e2e8f0' },
+                    'RUNNING': { text: '⏳ 正在执行', bg: '#eff6ff', color: '#1d4ed8', border: '#bfdbfe' },
+                    'SKIPPED_EXPIRED': { text: '🔵 超时安全废弃', bg: '#eff6ff', color: '#0369a1', border: '#bae6fd' },
+                    'SKIPPED_CONDITION': { text: '⚪ 条件不足跳过', bg: '#f8fafc', color: '#64748b', border: '#e2e8f0' },
+                    'FAILED': { text: '🔴 异常报错', bg: '#fef2f2', color: '#b91c1c', border: '#fecaca' },
                 };
 
                 // 1. 渲染表格视图
@@ -8319,17 +8319,17 @@
                         const detailMsg = e.skip_reason ? `<span style="color:#79c0ff;">${e.skip_reason}</span>` : (e.output_summary || e.error_detail || '-');
 
                         return `
-                            <tr style="border-bottom:1px solid #21262d;">
-                                <td style="padding:10px 10px;font-weight:600;color:#e6edf3;white-space:nowrap;">${e.step_name}</td>
-                                <td style="padding:10px 8px;color:#8b949e;font-family:monospace;white-space:nowrap;">${e.window}</td>
+                            <tr style="border-bottom:1px solid var(--border-default);">
+                                <td style="padding:10px 10px;font-weight:600;color:var(--text-primary);white-space:nowrap;">${e.step_name}</td>
+                                <td style="padding:10px 8px;color:var(--text-secondary);font-family:monospace;white-space:nowrap;">${e.window}</td>
                                 <td style="padding:10px 8px;white-space:nowrap;">
-                                    <span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:500;background:${st.bg};color:${st.color};border:1px solid ${st.border};">${st.text}</span>
+                                    <span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600;background:${st.bg};color:${st.color};border:1px solid ${st.border};">${st.text}</span>
                                 </td>
-                                <td style="padding:10px 8px;color:#8b949e;font-size:11px;white-space:nowrap;">${e.policy}</td>
-                                <td style="padding:10px 8px;color:#8b949e;font-family:monospace;white-space:nowrap;">${durationStr}</td>
-                                <td style="padding:10px 10px;color:#c9d1d9;min-width:260px;line-height:1.5;word-break:break-word;">${detailMsg}</td>
+                                <td style="padding:10px 8px;color:var(--text-secondary);font-size:11px;white-space:nowrap;">${e.policy}</td>
+                                <td style="padding:10px 8px;color:var(--text-secondary);font-family:monospace;white-space:nowrap;">${durationStr}</td>
+                                <td style="padding:10px 10px;color:var(--text-primary);min-width:260px;line-height:1.5;word-break:break-word;">${detailMsg}</td>
                                 <td style="padding:10px 8px;text-align:right;white-space:nowrap;">
-                                    <button onclick="triggerStepRun('${e.step_id}', true)" style="background:#21262d;border:1px solid #30363d;color:#ff1824;padding:3px 8px;border-radius:4px;font-size:11px;cursor:pointer;">单步演练</button>
+                                    <button onclick="triggerStepRun('${e.step_id}', true)" style="background:var(--brand-blue-bg);border:1px solid var(--brand-blue-border);color:var(--brand-blue);padding:3px 8px;border-radius:4px;font-size:11px;font-weight:600;cursor:pointer;">单步演练</button>
                                 </td>
                             </tr>
                         `;
@@ -8344,18 +8344,18 @@
                         const detailMsg = e.skip_reason ? `<span style="color:#79c0ff;">${e.skip_reason}</span>` : (e.output_summary || e.error_detail || '-');
 
                         return `
-                            <div style="background:#0d1117;border:1px solid #21262d;border-left:4px solid ${st.border};border-radius:8px;padding:10px 12px;display:flex;flex-direction:column;gap:6px;">
+                            <div style="background:var(--bg-surface);border:1px solid var(--border-default);border-left:4px solid ${st.border};border-radius:8px;padding:10px 12px;display:flex;flex-direction:column;gap:6px;">
                                 <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
-                                    <div style="font-size:13px;font-weight:700;color:#e6edf3;line-height:1.4;">${e.step_name}</div>
+                                    <div style="font-size:13px;font-weight:700;color:var(--text-primary);line-height:1.4;">${e.step_name}</div>
                                     <span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:10.5px;font-weight:600;background:${st.bg};color:${st.color};border:1px solid ${st.border};white-space:nowrap;flex-shrink:0;">${st.text}</span>
                                 </div>
-                                <div style="display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:11px;color:#8b949e;">
-                                    <span style="font-family:monospace;background:#161b22;border:1px solid #30363d;padding:1px 6px;border-radius:4px;color:#79c0ff;">🕒 ${e.window}</span>
-                                    <span style="background:#161b22;border:1px solid #30363d;padding:1px 6px;border-radius:4px;color:#8b949e;">策略: ${e.policy}</span>
-                                    ${durationStr !== '-' ? `<span style="font-family:monospace;background:#161b22;border:1px solid #30363d;padding:1px 6px;border-radius:4px;color:#a5d6ff;">耗时: ${durationStr}</span>` : ''}
+                                <div style="display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:11px;color:var(--text-secondary);">
+                                    <span style="font-family:monospace;background:var(--bg-inset);border:1px solid var(--border-default);padding:1px 6px;border-radius:4px;color:var(--brand-blue);">🕒 ${e.window}</span>
+                                    <span style="background:var(--bg-inset);border:1px solid var(--border-default);padding:1px 6px;border-radius:4px;color:var(--text-secondary);">策略: ${e.policy}</span>
+                                    ${durationStr !== '-' ? `<span style="font-family:monospace;background:var(--bg-inset);border:1px solid var(--border-default);padding:1px 6px;border-radius:4px;color:var(--brand-blue);">耗时: ${durationStr}</span>` : ''}
                                 </div>
-                                <div style="background:#161b22;border:1px solid #30363d;border-radius:6px;padding:8px 10px;font-size:11.5px;color:#c9d1d9;line-height:1.5;word-break:break-all;">
-                                    <span style="color:#8b949e;font-size:10.5px;font-weight:600;display:block;margin-bottom:2px;">执行摘要 / 安全检查原因：</span>
+                                <div style="background:var(--bg-inset);border:1px solid var(--border-default);border-radius:6px;padding:8px 10px;font-size:11.5px;color:var(--text-primary);line-height:1.5;word-break:break-all;">
+                                    <span style="color:var(--text-secondary);font-size:10.5px;font-weight:600;display:block;margin-bottom:2px;">执行摘要 / 安全检查原因：</span>
                                     ${detailMsg}
                                 </div>
                             </div>
