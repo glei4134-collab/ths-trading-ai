@@ -613,6 +613,37 @@ def ai_decision_stream():
         recent_log_strings = []
         trade_events = []
 
+        # 构建底层数据库自增主键 (id: 8, 9, 10) 到前台用户可视账户编号的映射
+        # 对应比赛3账户: id=8(name='1') -> [账户#1], id=9(name='2') -> [账户#2], id=10(name='3') -> [账户#3]
+        acc_display_map = {}
+        try:
+            db_accounts = db_store.get_accounts()
+            for idx, a in enumerate(db_accounts):
+                a_id = a.get("id")
+                a_name = str(a.get("name") or (idx + 1)).strip()
+                if a_name.isdigit():
+                    lbl = f"账户#{a_name}"
+                elif a_name.startswith("账户#") or a_name.startswith("账户"):
+                    lbl = a_name
+                else:
+                    lbl = f"账户#{a_name}"
+                acc_display_map[a_id] = lbl
+                acc_display_map[str(a_id)] = lbl
+        except Exception:
+            pass
+
+        fallback_map = {
+            8: "账户#1", "8": "账户#1", 1: "账户#1", "1": "账户#1",
+            9: "账户#2", "9": "账户#2", 2: "账户#2", "2": "账户#2",
+            10: "账户#3", "10": "账户#3", 3: "账户#3", "3": "账户#3",
+        }
+        for k, v in fallback_map.items():
+            if k not in acc_display_map:
+                acc_display_map[k] = v
+
+        def get_acc_label(raw_id):
+            return acc_display_map.get(raw_id) or acc_display_map.get(str(raw_id)) or f"账户#{raw_id}"
+
         # 1. 优先提取数据库中最近真实的股票买卖成交记录 (trades)
         try:
             raw_trades = db_store.get_trades(limit=30)
@@ -650,7 +681,8 @@ def ai_decision_stream():
                     act_tag = f"【{action_raw.upper()}】"
                     level = "INFO"
 
-                log_str = f"[{clock_str}] [账户#{acc_id}] {act_tag} {symbol} {name} {amount}股 @ {price:.2f}元 (成交额: {total:,.1f}元)"
+                acc_label = get_acc_label(acc_id)
+                log_str = f"[{clock_str}] [{acc_label}] {act_tag} {symbol} {name} {amount}股 @ {price:.2f}元 (成交额: {total:,.1f}元)"
                 trade_events.append({
                     "time_sort": t_time or clock_str,
                     "log_str": log_str,
@@ -659,12 +691,13 @@ def ai_decision_stream():
                         "date": date_str,
                         "level": level,
                         "action": act_tag.replace("【", "").replace("】", ""),
+                        "account": acc_label,
                         "symbol": symbol,
                         "name": name,
                         "amount": amount,
                         "price": price,
                         "total": total,
-                        "message": f"账户#{acc_id} {act_tag} {name}({symbol}) {amount}股 @ {price:.2f}元"
+                        "message": f"{acc_label} {act_tag} {name}({symbol}) {amount}股 @ {price:.2f}元"
                     }
                 })
         except Exception as _e_trade:
@@ -684,7 +717,8 @@ def ai_decision_stream():
                     if p.get("ordered_time"):
                         from datetime import datetime
                         t_str = datetime.fromtimestamp(p["ordered_time"]).strftime("%H:%M:%S")
-                    log_str = f"[{t_str}] [账户#{acc_id}] 【超时调仓/撤单】 {symbol} {name} - {act_desc}"
+                    acc_label = get_acc_label(acc_id)
+                    log_str = f"[{t_str}] [{acc_label}] 【超时调仓/撤单】 {symbol} {name} - {act_desc}"
                     trade_events.append({
                         "time_sort": t_str,
                         "log_str": log_str,
