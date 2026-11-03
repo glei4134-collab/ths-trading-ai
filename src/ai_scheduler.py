@@ -858,6 +858,15 @@ class AIScheduler:
             self._init_dip_buyer_watchlist(pool[:10])
             team_strat = registry.get("team_ensemble")
 
+            # 🔥 数据预热：并发预加载 40 候选股 K 线入内存缓存，消除遍历决策时的网络 I/O 阻塞
+            try:
+                from fast_data import prewarm_candidate_pool_cache
+                pool_symbols = [s.get("code") or s.get("symbol") for s in pool[:40] if s.get("code") or s.get("symbol")]
+                if pool_symbols:
+                    prewarm_candidate_pool_cache(pool_symbols, days=25, max_workers=8)
+            except Exception as e_pw:
+                logger.debug(f"开盘前预热缓存略过: {e_pw}")
+
             qualified_targets = []
             executed_orders = []
 
@@ -1385,6 +1394,15 @@ class AIScheduler:
 
             # 4. 策略团队参数自适应适配
             team_strat = registry.get("team_ensemble")
+
+            # 🔥 数据预热：并发预加载 40 候选股 K 线入内存缓存，消除遍历决策时的网络 I/O 阻塞
+            try:
+                from fast_data import prewarm_candidate_pool_cache
+                pool_symbols = [s.get("code") or s.get("symbol") for s in pool[:40] if s.get("code") or s.get("symbol")]
+                if pool_symbols:
+                    prewarm_candidate_pool_cache(pool_symbols, days=25, max_workers=8)
+            except Exception as e_pw:
+                logger.debug(f"开盘前预热缓存略过: {e_pw}")
             if team_strat and hasattr(team_strat, "adapt_to_market_regime"):
                 team_strat.adapt_to_market_regime(regime)
 

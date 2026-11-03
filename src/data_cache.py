@@ -204,6 +204,12 @@ def get_kline(symbol: str, period: str = "daily", days: int = 60,
     return []
 
 
+def prewarm_candidate_pool_cache(symbols=None, days=60, max_workers=8):
+    """预热候选池 K 线与指标内存缓存"""
+    from fast_data import prewarm_candidate_pool_cache as _pw
+    return _pw(symbols=symbols, days=days, max_workers=max_workers)
+
+
 def get_index_kline(symbol: str, period: str = "daily", days: int = 60) -> list:
     """
     获取指数K线数据（通过 fast_data 4级韧性弹性引擎）
