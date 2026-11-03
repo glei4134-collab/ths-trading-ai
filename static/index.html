@@ -6,7 +6,9 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
-        <title>同花顺模拟比赛AI交易系统</title>
+        <link rel="icon" type="image/x-icon" href="/favicon.ico">
+    <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico">
+    <title>同花顺模拟比赛AI交易系统</title>
     <script src="/static/echarts.min.js"></script>
     <script src="/static/marked.min.js"></script>
     <script>
@@ -6208,10 +6210,7 @@
                 console.warn('[Interactive] toggleExecutionLogFold error:', e);
             }
         }
-        window.toggleExecutionLogFold = toggleExecutionLogFold;
-
-
-        // ==================== 3 账户异构策略元数据与矩阵渲染 ====================
+        window.toggleExecutionLogFold = toggleExecutionLogFold;        // ==================== 3 账户异构策略元数据与矩阵渲染 (统一机构浅色调) ====================
         const HETERO_ACCOUNTS_META = {
             1: {
                 id: 1,
@@ -6220,12 +6219,12 @@
                 label: "先锋进攻",
                 style: "高弹性连板 / 冲击龙头",
                 badge: "⚡ 先锋进攻",
-                tagBg: "rgba(255, 24, 36, 0.2)",
-                tagBorder: "#ff1824",
-                tagColor: "#ff1824",
+                tagBg: "#fee2e2",
+                tagBorder: "#fca5a5",
+                tagColor: "#dc2626",
                 targetPos: "60%~80%",
                 maxSingle: "30%",
-                themeColor: "#ff1824"
+                themeColor: "#dc2626"
             },
             2: {
                 id: 2,
@@ -6234,26 +6233,26 @@
                 label: "趋势中军",
                 style: "主升浪持股 / 突破回踩",
                 badge: "📈 趋势中军",
-                tagBg: "rgba(56, 139, 253, 0.2)",
-                tagBorder: "#388bfd",
-                tagColor: "#388bfd",
+                tagBg: "#eff6ff",
+                tagBorder: "#bfdbfe",
+                tagColor: "#2563eb",
                 targetPos: "40%~60%",
                 maxSingle: "25%",
-                themeColor: "#388bfd"
+                themeColor: "#2563eb"
             },
             3: {
                 id: 3,
                 code: "ACC-03",
                 name: "账户3",
                 label: "防守套利",
-                style: "量缩背驰 / 极限低吸反转",
+                style: "量缩背离 / 极限低吸反转",
                 badge: "🛡️ 防守套利",
-                tagBg: "rgba(210, 153, 34, 0.2)",
-                tagBorder: "#d29922",
-                tagColor: "#d29922",
+                tagBg: "#fef3c7",
+                tagBorder: "#fde68a",
+                tagColor: "#b45309",
                 targetPos: "20%~40%",
                 maxSingle: "20%",
-                themeColor: "#d29922"
+                themeColor: "#b45309"
             }
         };
 
@@ -6274,16 +6273,22 @@
             const grid = document.getElementById('accountCardsGrid');
             if (!grid) return;
 
+            if (typeof syncAndRenderMultiAccounts === 'function') {
+                syncAndRenderMultiAccounts();
+                return;
+            }
+
             if (!allAccounts || !allAccounts.length) {
-                grid.innerHTML = '<div style="text-align:center;color:#8b949e;padding:12px;font-size:11px;grid-column:1/-1;">暂无绑定账户</div>';
+                grid.innerHTML = '<div style="text-align:center;color:var(--text-muted);padding:12px;font-size:11px;grid-column:1/-1;">暂无绑定账户</div>';
                 return;
             }
 
             const displayAccounts = allAccounts.slice(0, 3);
+            const currentActiveId = window.activeAccountId || (allAccounts[0] && allAccounts[0].id);
 
             grid.innerHTML = displayAccounts.map((acc, idx) => {
                 const meta = getAccountMeta(acc.id, idx);
-                const isActive = (activeAccountId === acc.id) || (allAccounts.length === 1);
+                const isActive = (currentActiveId === acc.id) || (allAccounts.length === 1);
 
                 const initialBal = Number(acc.initial_balance) || 200000;
                 const totalAssets = Number(acc.total_assets || acc.balance) || initialBal;
@@ -6298,47 +6303,49 @@
                     ? Number(acc.total_profit_rate)
                     : ((profit / initialBal) * 100);
 
-                const profitColor = profit >= 0 ? '#ff2442' : '#00f59b';
-                const profitSign = profit > 0 ? '+' : (profit < 0 ? '-' : '');
-                const rateSign = profitRate > 0 ? '+' : (profitRate < 0 ? '-' : '');
+                const profitColor = profit >= 0 ? 'var(--up-red)' : 'var(--down-green)';
+                const rateSign = profitRate > 0 ? '+' : '';
 
                 const activeBorder = isActive
-                    ? `border: 1px solid ${meta.themeColor}; background: linear-gradient(180deg, rgba(30,20,28,0.95) 0%, rgba(18,14,20,0.95) 100%); box-shadow: 0 0 16px ${meta.themeColor}44;`
-                    : `border: 1px solid rgba(255,255,255,0.08); background: rgba(18, 14, 20, 0.7);`;
+                    ? `border: 1.5px solid ${meta.themeColor}; border-top: 3px solid ${meta.themeColor}; background: var(--bg-surface); box-shadow: 0 2px 8px rgba(0,0,0,0.06);`
+                    : `border: 1px solid var(--border-default); border-top: 2px solid ${meta.tagBorder}; background: var(--bg-inset);`;
+
+                const rawName = acc.name ? String(acc.name) : String(acc.id);
+                const dispName = (rawName.startsWith('账户') || rawName.startsWith('#')) ? rawName : `账户${rawName}`;
+                const dispAsset = (Math.abs(totalAssets) >= 10000) ? (totalAssets / 10000).toFixed(2) + '万' : totalAssets.toFixed(2);
+                const dispAvail = (Math.abs(available) >= 10000) ? (available / 10000).toFixed(2) + '万' : available.toFixed(2);
 
                 return `
-                    <div onclick="switchAccount(${acc.id})" style="${activeBorder} border-radius: 8px; padding: 8px 10px; cursor: pointer; transition: all 0.2s; display: flex; flex-direction: column; justify-content: space-between; min-width: 0;" onmouseover="this.style.transform='translateY(-2px)'" onmouseout="this.style.transform='none'">
-                        <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 6px;">
-                            <div>
-                                <div style="font-size: 11px; font-weight: 700; color: #f8fafc; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
-                                    ${acc.name || `账户${acc.id}`}
-                                </div>
-                                <div style="font-size: 9px; color: ${meta.tagColor}; font-weight: 700; margin-top: 1px;">
-                                    ${meta.badge}
-                                </div>
+                    <div onclick="switchAccount(${acc.id})" style="${activeBorder} border-radius: 6px; padding: 7px 8px; cursor: pointer; transition: all 0.2s; display: flex; flex-direction: column; justify-content: space-between; min-width: 0;" onmouseover="this.style.transform='translateY(-1px)'" onmouseout="this.style.transform='none'">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                            <div style="display: flex; align-items: center; gap: 4px; min-width: 0;">
+                                ${isActive ? '<span style="color: #16a34a; font-size: 9px; font-weight: 900; line-height: 1;">●</span>' : ''}
+                                <span style="font-size: 11px; font-weight: 800; color: var(--text-primary); white-space: nowrap;">
+                                    ${dispName}
+                                </span>
                             </div>
-                            ${isActive ? `<span style="background:${meta.themeColor}; color:#fff; font-size:9px; font-weight:800; padding:1px 4px; border-radius:3px; transform:skewX(-4deg);">活跃</span>` : ''}
+                            <span style="font-size: 9px; color: ${meta.tagColor}; font-weight: 700; background: ${meta.tagBg}; padding: 1px 4px; border-radius: 3px; white-space: nowrap;">
+                                ${meta.badge}
+                            </span>
                         </div>
 
-                        <div style="margin: 4px 0;">
-                            <div style="font-size: 9px; color: #94a3b8;">总资产</div>
-                            <div style="font-size: 13px; font-weight: 800; color: #ffffff; font-family: var(--font-mono); white-space: nowrap;">
-                                ¥${(totalAssets / 10000).toFixed(1)}万
+                        <div style="display: flex; justify-content: space-between; align-items: baseline; margin: 2px 0;">
+                            <div style="font-size: 13px; font-weight: 800; color: var(--text-primary); font-family: var(--font-mono); white-space: nowrap;">
+                                ¥${dispAsset}
                             </div>
-                        </div>
-
-                        <div style="display: flex; justify-content: space-between; align-items: baseline; font-size: 10px; font-family: var(--font-mono); margin-bottom: 5px;">
-                            <span style="color:${profitColor}; font-weight:700;">${rateSign}${Math.abs(profitRate).toFixed(1)}%</span>
-                            <span style="font-size: 9px; color: #64748b;">目标${meta.targetPos}</span>
+                            <div style="font-size: 10px; font-weight: 700; font-family: var(--font-mono); color: ${profitColor}; white-space: nowrap;">
+                                ${rateSign}${profitRate.toFixed(1)}%
+                            </div>
                         </div>
 
                         <!-- 仓位进度条 -->
-                        <div style="width: 100%; background: rgba(255,255,255,0.06); border-radius: 3px; height: 5px; overflow: hidden; position: relative;" title="当前实际仓位配比: ${posRatio.toFixed(1)}%">
-                            <div style="width: ${posRatio.toFixed(1)}%; background: ${meta.themeColor}; height: 100%; border-radius: 3px; transition: width 0.3s;"></div>
+                        <div style="width: 100%; background: rgba(0,0,0,0.06); border-radius: 2px; height: 4px; overflow: hidden; margin: 2px 0;" title="实际仓位: ${posRatio.toFixed(1)}%">
+                            <div style="width: ${posRatio.toFixed(1)}%; background: ${meta.themeColor}; height: 100%; border-radius: 2px; transition: width 0.3s;"></div>
                         </div>
-                        <div style="display:flex; justify-content:space-between; align-items:center; margin-top:3px; font-size:9px; color:#94a3b8;">
-                            <span>仓位</span>
-                            <span style="font-weight:700; color:#f8fafc; font-family:var(--font-mono);">${posRatio.toFixed(1)}%</span>
+
+                        <div style="display: flex; justify-content: space-between; align-items: center; font-size: 9px; color: var(--text-muted); font-family: var(--font-mono);">
+                            <span>仓位 ${posRatio.toFixed(1)}%</span>
+                            <span>目标${meta.targetPos}</span>
                         </div>
                     </div>
                 `;
@@ -6351,13 +6358,24 @@
             const box = document.getElementById('consolidatedSummaryBox');
             const btn = document.getElementById('btnConsolidatedView');
             if (!box) return;
-            if (box.style.display === 'none' || !box.style.display) {
+            const isOpen = (box.style.display !== 'none' && box.style.display !== '');
+            if (!isOpen) {
                 box.style.display = 'block';
-                if (btn) btn.style.background = 'rgba(255, 24, 36, 0.35)';
+                if (btn) {
+                    btn.style.background = '#dbeafe';
+                    btn.style.borderColor = '#93c5fd';
+                    btn.style.color = '#1d4ed8';
+                    btn.textContent = '收起合并总览';
+                }
                 updateConsolidatedData();
             } else {
                 box.style.display = 'none';
-                if (btn) btn.style.background = 'rgba(255, 24, 36, 0.12)';
+                if (btn) {
+                    btn.style.background = '#eff6ff';
+                    btn.style.borderColor = '#bfdbfe';
+                    btn.style.color = '#2563eb';
+                    btn.textContent = '📊 全局合并总览';
+                }
             }
         }
 
@@ -9398,21 +9416,34 @@
                 const rawName = acc.name ? String(acc.name) : String(acc.id);
                 const dispName = (rawName.startsWith('账户') || rawName.startsWith('#')) ? rawName : `账户${rawName}`;
 
+                const marketVal = assets - available;
+                const posRatio = assets > 0 ? Math.min(100, Math.max(0, (marketVal / assets) * 100)) : 0;
+                const targetRange = ['60%~80%', '40%~60%', '20%~40%'][idx % 3] || '30%~50%';
+
                 return `
-                    <div onclick="switchAccount(${acc.id})" style="${activeStyle} border-radius: 6px; padding: 7px 8px; cursor: pointer; transition: all 0.2s; min-width: 0;" onmouseover="this.style.transform='translateY(-1px)'" onmouseout="this.style.transform='none'">
+                    <div onclick="switchAccount(${acc.id})" style="${activeStyle} border-radius: 6px; padding: 7px 8px; cursor: pointer; transition: all 0.2s; display: flex; flex-direction: column; justify-content: space-between; min-width: 0;" onmouseover="this.style.transform='translateY(-1px)'" onmouseout="this.style.transform='none'">
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 3px;">
-                            <div style="display: flex; align-items: center; gap: 3px; min-width: 0;">
+                            <div style="display: flex; align-items: center; gap: 4px; min-width: 0;">
+                                ${isActive ? '<span style="color: #16a34a; font-size: 9px; font-weight: 900; line-height: 1;">●</span>' : ''}
                                 <span style="font-size: 11px; font-weight: 800; color: var(--text-primary); white-space: nowrap;">${dispName}</span>
-                                ${isActive ? '<span style="font-size: 8px; color: #16a34a; font-weight: 900;">●</span>' : ''}
                             </div>
                             <span style="font-size: 9px; font-weight: 700; color: ${cfg.themeColor}; background: ${cfg.bgGrad}; padding: 1px 4px; border-radius: 3px; white-space: nowrap;">${cfg.label}</span>
                         </div>
-                        <div style="font-size: 13px; font-weight: 800; color: var(--text-primary); font-family: var(--font-mono); margin-bottom: 2px; white-space: nowrap;">
-                            ¥${fmtMoney(assets)}
+                        <div style="display: flex; justify-content: space-between; align-items: baseline; margin: 2px 0;">
+                            <div style="font-size: 13px; font-weight: 800; color: var(--text-primary); font-family: var(--font-mono); white-space: nowrap;">
+                                ¥${fmtMoney(assets)}
+                            </div>
+                            <div style="font-size: 10px; font-weight: 700; font-family: var(--font-mono); color: ${profit >= 0 ? 'var(--up-red)' : 'var(--down-green)'}; white-space: nowrap;">
+                                ${sign}${profitRate.toFixed(1)}%
+                            </div>
                         </div>
-                        <div style="display: flex; justify-content: space-between; align-items: center; font-size: 10px; white-space: nowrap;">
-                            <span style="color: var(--text-muted);">余 ¥${fmtMoney(available)}</span>
-                            <span style="color: ${profit >= 0 ? 'var(--up-red)' : 'var(--down-green)'}; font-weight: 700; font-family: var(--font-mono);">${sign}${profitRate.toFixed(1)}%</span>
+                        <!-- 仓位进度条 -->
+                        <div style="width: 100%; background: rgba(0,0,0,0.06); border-radius: 2px; height: 4px; overflow: hidden; margin: 2px 0;" title="实际仓位: ${posRatio.toFixed(1)}%">
+                            <div style="width: ${posRatio.toFixed(1)}%; background: ${cfg.themeColor}; height: 100%; border-radius: 2px; transition: width 0.3s;"></div>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; align-items: center; font-size: 9px; color: var(--text-muted); font-family: var(--font-mono);">
+                            <span>仓位 ${posRatio.toFixed(1)}%</span>
+                            <span>目标${targetRange}</span>
                         </div>
                     </div>
                 `;
@@ -9569,7 +9600,9 @@
         const btn = document.getElementById('btnConsolidatedView');
         if (box) box.style.display = _isConsolidatedViewOpen ? 'block' : 'none';
         if (btn) {
-            btn.style.background = _isConsolidatedViewOpen ? 'rgba(255,24,36,0.28)' : 'rgba(255,24,36,0.12)';
+            btn.style.background = _isConsolidatedViewOpen ? '#dbeafe' : '#eff6ff';
+            btn.style.borderColor = _isConsolidatedViewOpen ? '#93c5fd' : '#bfdbfe';
+            btn.style.color = _isConsolidatedViewOpen ? '#1d4ed8' : '#2563eb';
             btn.textContent = _isConsolidatedViewOpen ? '收起合并总览' : '📊 全局合并总览';
         }
     }
