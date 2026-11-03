@@ -45,36 +45,36 @@
     <style>
 
         :root {
-            --bg-base: #07070a;
-            --bg-surface: rgba(18, 16, 22, 0.88);
-            --bg-card: rgba(22, 18, 26, 0.82);
-            --bg-card-hover: rgba(38, 20, 28, 0.95);
-            --bg-glass: rgba(18, 14, 20, 0.90);
-            --bg-inset: #050508;
-            --border-subtle: rgba(255, 255, 255, 0.08);
-            --border-default: rgba(255, 24, 36, 0.30);
-            --border-glow: 0 0 16px rgba(255, 24, 36, 0.45);
-            --border-focus: #ff1824;
-            --text-primary: #ffffff;
-            --text-secondary: #e2e8f0;
-            --text-muted: #94a3b8;
-            --up-red: #ff2442;          /* P5 高燃绯红 */
-            --up-red-bg: rgba(255, 36, 66, 0.18);
-            --up-red-border: rgba(255, 36, 66, 0.5);
-            --down-green: #00f59b;      /* 暗夜极光薄荷绿 */
-            --down-green-bg: rgba(0, 245, 155, 0.14);
-            --down-green-border: rgba(0, 245, 155, 0.4);
-            --brand-blue: #ff1824;      /* 全局核心主色换装：P5 绯红 */
-            --brand-blue-bg: rgba(255, 24, 36, 0.16);
-            --brand-red: #ff1824;
-            --brand-yellow: #ffe600;    /* P5 惊叹黄 */
-            --warning-amber: #ffe600;
-            --warning-amber-bg: rgba(255, 230, 0, 0.16);
-            --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", sans-serif;
+            --bg-base: #f1f5f9;
+            --bg-surface: #ffffff;
+            --bg-card: #ffffff;
+            --bg-card-hover: #f8fafc;
+            --bg-glass: rgba(255, 255, 255, 0.96);
+            --bg-inset: #f8fafc;
+            --border-subtle: #e2e8f0;
+            --border-default: #e2e8f0;
+            --border-glow: 0 1px 3px 0 rgba(0, 0, 0, 0.08);
+            --border-focus: #2563eb;
+            --text-primary: #0f172a;
+            --text-secondary: #475569;
+            --text-muted: #64748b;
+            --up-red: #dc2626;          /* A股红涨 (明亮红) */
+            --up-red-bg: #fef2f2;
+            --up-red-border: #fecaca;
+            --down-green: #16a34a;      /* A股绿跌 (标准翠绿) */
+            --down-green-bg: #f0fdf4;
+            --down-green-border: #bbf7d0;
+            --brand-blue: #2563eb;      /* 核心主色：金融深蓝 */
+            --brand-blue-bg: #eff6ff;
+            --brand-red: #dc2626;
+            --brand-yellow: #d97706;    /* 警示橙黄 */
+            --warning-amber: #d97706;
+            --warning-amber-bg: #fffbeb;
+            --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
             --font-mono: 'JetBrains Mono', Consolas, "SF Mono", monospace;
             --radius-sm: 6px;
-            --radius-md: 10px;
-            --radius-lg: 14px;
+            --radius-md: 8px;
+            --radius-lg: 12px;
         }
 
         /* P5 动态能量脉冲与激光流 */
@@ -213,18 +213,16 @@
 
         /* P5 怪盗座舱面板全面升级 */
         .panel {
-            background: var(--bg-card) !important;
-            backdrop-filter: blur(18px) !important;
-            -webkit-backdrop-filter: blur(18px) !important;
-            border: 1px solid var(--border-default) !important;
+            background: #ffffff !important;
+            border: 1px solid #e2e8f0 !important;
             border-radius: var(--radius-md) !important;
-            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 12px 36px rgba(0, 0, 0, 0.75), 0 0 2px rgba(255, 24, 36, 0.2) !important;
-            transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1) !important;
+            box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.05), 0 1px 2px -1px rgba(0, 0, 0, 0.05) !important;
+            transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1) !important;
         }
 
         .panel:hover {
-            border-color: rgba(255, 24, 36, 0.55) !important;
-            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.15), 0 16px 48px rgba(0, 0, 0, 0.85), 0 0 24px rgba(255, 24, 36, 0.3) !important;
+            border-color: #cbd5e1 !important;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.07), 0 2px 4px -2px rgba(0, 0, 0, 0.05) !important;
         }
 
         /* 标题 P5 微倾斜与张力 */
@@ -255,19 +253,13 @@
 
         ::-webkit-scrollbar { width: 6px; height: 6px; }
         ::-webkit-scrollbar-track { background: var(--bg-base); }
-        ::-webkit-scrollbar-thumb { background: #26161b; border-radius: 3px; }
-        ::-webkit-scrollbar-thumb:hover { background: #ff1824; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
 
         body {
             font-family: var(--font-sans);
-            background-color: #07070a;
-            background-image:
-                radial-gradient(circle, rgba(255, 24, 36, 0.12) 1.2px, transparent 1.2px),
-                radial-gradient(circle, rgba(255, 255, 255, 0.04) 1px, transparent 1px),
-                linear-gradient(135deg, rgba(255, 24, 36, 0.07) 0%, rgba(10, 10, 14, 0.96) 45%, #050508 100%);
-            background-size: 22px 22px, 22px 22px, 100% 100%;
-            background-position: 0 0, 11px 11px, 0 0;
-            color: #ffffff;
+            background-color: #f1f5f9;
+            color: #0f172a;
             font-size: 13px;
             line-height: 1.5;
             -webkit-font-smoothing: antialiased;
@@ -278,20 +270,18 @@
         .header {
             position: relative;
             z-index: 99999;
-            background: linear-gradient(135deg, #180507 0%, #0d0d12 40%, #150608 100%) !important;
+            background: #ffffff !important;
             backdrop-filter: blur(16px);
             padding: 10px 20px;
             display: flex;
             justify-content: space-between;
             align-items: center;
-            border-bottom: 2px solid #ff1824 !important;
-            box-shadow: 0 4px 20px rgba(255, 24, 36, 0.25), 0 8px 32px rgba(0, 0, 0, 0.7) !important;
+            border-bottom: 1px solid #e2e8f0 !important;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05) !important;
         }
 
         /* 关闭前端停止按钮 (避免误触停止后台自律量化调度) */
-        #aiSchedToggle {
-            display: none !important;
-        }
+        /* aiSchedToggle master switch */
 
         .logo {
             font-size: 16px;
@@ -903,14 +893,9 @@
             background: #0d1117;
         }
 
-        ::-webkit-scrollbar-thumb {
-            background: #30363d;
-            border-radius: 3px;
-        }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
 
-        ::-webkit-scrollbar-thumb:hover {
-            background: #484f58;
-        }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
 
         /* Loading */
         .loading {
@@ -2001,7 +1986,7 @@
             bottom: 0;
             left: 0;
             right: 0;
-            background: rgba(13, 17, 23, 0.94);
+            background: rgba(255, 255, 255, 0.95);
             backdrop-filter: blur(20px);
             -webkit-backdrop-filter: blur(20px);
             border-top: 1px solid rgba(255, 24, 36, 0.2);
@@ -2077,11 +2062,11 @@
 
         /* 移动端专属金融股票卡片流样式 */
         .mobile-stock-card {
-            background: linear-gradient(180deg, #131b2e 0%, #0d1424 100%);
-            border: 1px solid rgba(255, 24, 36, 0.16);
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
             border-radius: 10px;
             padding: 12px 14px;
-            box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
             display: flex;
             flex-direction: column;
             gap: 8px;
@@ -2104,7 +2089,7 @@
         .m-stock-name {
             font-size: 15px;
             font-weight: 800;
-            color: #f8fafc;
+            color: #0f172a;
             letter-spacing: 0.3px;
         }
         .m-stock-sub {
@@ -2136,7 +2121,7 @@
             font-family: var(--font-mono);
             font-size: 16px;
             font-weight: 800;
-            color: #f8fafc;
+            color: #0f172a;
         }
         .m-stock-badge {
             font-family: var(--font-mono);
@@ -2149,10 +2134,10 @@
             display: flex;
             align-items: center;
             justify-content: space-between;
-            background: rgba(0, 0, 0, 0.25);
+            background: #f8fafc;
             padding: 6px 10px;
             border-radius: 6px;
-            border: 1px solid rgba(255, 255, 255, 0.04);
+            border: 1px solid #e2e8f0;
         }
         .m-card-tag {
             font-size: 11px;
@@ -2350,10 +2335,7 @@
             #ensembleCardsGrid::-webkit-scrollbar {
                 height: 3px;
             }
-            #ensembleCardsGrid::-webkit-scrollbar-thumb {
-                background: rgba(255, 24, 36, 0.3);
-                border-radius: 3px;
-            }
+            #ensembleCardsGrid::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
             #ensembleCardsGrid > div {
                 flex: 0 0 165px !important;
                 min-width: 165px !important;
@@ -2537,10 +2519,10 @@
                 right: 0 !important;
                 height: calc(56px + env(safe-area-inset-bottom, 0px)) !important;
                 padding: 4px 6px calc(4px + env(safe-area-inset-bottom, 0px)) 6px !important;
-                background: rgba(8, 14, 26, 0.95) !important;
+                background: rgba(255, 255, 255, 0.95) !important;
                 backdrop-filter: blur(24px) !important;
                 -webkit-backdrop-filter: blur(24px) !important;
-                border-top: 1.5px solid rgba(255, 24, 36, 0.45) !important;
+                border-top: 1px solid #e2e8f0 !important;
                 box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.75), 0 -1px 12px rgba(255, 24, 36, 0.3) !important;
                 z-index: 999999 !important;
                 box-sizing: border-box !important;
@@ -2700,13 +2682,8 @@
             width: 6px;
             height: 6px;
         }
-        #candidateTableScrollWrapper::-webkit-scrollbar-thumb {
-            background: #25334a;
-            border-radius: 3px;
-        }
-        #candidateTableScrollWrapper::-webkit-scrollbar-thumb:hover {
-            background: #ffe600;
-        }
+        #candidateTableScrollWrapper::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+        #candidateTableScrollWrapper::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
 
         /* 复制交互代码块反馈态 */
         .copy-cmd-active {
@@ -2870,11 +2847,7 @@
                 <div id="loginFeedbackBox" style="display: none; margin-top: 14px; padding: 10px 12px; border-radius: 6px; font-size: 12px; text-align: center;"></div>
             </div>
 
-            <div class="modal-footer" style="padding: 10px 18px; border-top: 1px solid rgba(255, 255, 255, 0.08); background: rgba(0, 0, 0, 0.2); display: flex; justify-content: flex-end;">
-                <button onclick="closeConnectModal()" style="width: 100%; background: #21262d; border: 1px solid #30363d; color: #cbd5e1; padding: 8px; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 600;">
-                    关闭
-                </button>
-            </div>
+            
         </div>
     </div>
 
@@ -2882,7 +2855,7 @@
         <div style="display:flex;align-items:center;gap:12px;">
             <div class="logo" style="font-size:15px;font-weight:900;display:flex;align-items:center;gap:6px;cursor:default;">
                 <span class="p5-tag" style="font-size:12px;padding:2px 8px;transform:skewX(-8deg);box-shadow:2px 2px 0 #ffe600;background:#ff1824;color:#fff;font-weight:900;">P5</span>
-                <span style="color:#ffffff;font-weight:900;letter-spacing:0.8px;transform:skewX(-4deg);">THS QUANT</span>
+                <span style="color:#0f172a;font-weight:900;letter-spacing:0.8px;transform:skewX(-4deg);">THS QUANT</span>
                 <span class="p5-tag-yellow" style="font-size:10px;padding:1px 6px;transform:skewX(-8deg);background:#ffe600;color:#000;font-weight:900;">★ ROYAL</span>
             </div>
             <!-- 量化全自动座舱主控标识 -->
@@ -2909,7 +2882,7 @@
             <div style="position:relative;z-index:100000;">
                 <div class="account-selector" onclick="toggleAccountPanel(event)" title="点击管理与切换账号" style="display:flex;align-items:center;gap:6px;cursor:pointer;padding:4px 10px;background:rgba(22, 27, 34, 0.95);border:1px solid rgba(255, 24, 36, 0.25);border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,0.3);transition:all 0.2s;">
                     <div class="account-avatar" id="accountAvatar" style="width:22px;height:22px;font-size:10px;">👤</div>
-                    <span id="accountDetailName" style="font-size:11px;color:#f8fafc;font-weight:600;">多账号管理</span>
+                    <span id="accountDetailName" style="font-size:11px;color:#0f172a;font-weight:600;">多账号管理</span>
                     <span style="font-size:10px;color:#ff1824;">▼</span>
                 </div>
 
@@ -2922,17 +2895,17 @@
                     <div class="account-selector-list" id="accountSelectorList" style="max-height:280px;overflow-y:auto;">
                         <!-- 账号卡片动态渲染 -->
                     </div>
-                    <div class="account-selector-footer" style="padding:10px 14px;border-top:1px solid #30363d;display:flex;gap:8px;background:#0d1117;">
+                    <div class="account-selector-footer" style="padding:10px 14px;border-top:1px solid #e2e8f0;display:flex;gap:8px;background:#f8fafc;">
                         <button onclick="openConnectModal(); toggleAccountPanel();" style="flex:1;background:linear-gradient(135deg,#238636,#2ea043);color:white;border:none;padding:8px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">+ 绑定/录入新账号</button>
                     </div>
                 </div>
             </div>
-            <button onclick="toggleAIScheduler()" id="aiSchedToggle" style="background:#238636;border:none;color:white;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">开启</button>
+            <button onclick="toggleAIScheduler()" id="aiSchedToggle" style="background:#16a34a;border:none;color:white;border-radius:6px;padding:4px 12px;font-size:11px;font-weight:700;cursor:pointer;box-shadow:0 1px 2px rgba(0,0,0,0.1);">🟢 实盘自动交易中</button>
         </div>
     </div>
 
     <!-- 全局态势 HUD 顶栏 (Bloomberg / Pro Financial HUD) -->
-    <div id="globalStatusHud" style="background:#090d15;border-bottom:1px solid var(--border-default);padding:8px 18px;display:flex;align-items:center;justify-content:space-between;font-size:12px;color:var(--text-primary);gap:14px;overflow-x:auto;">
+    <div id="globalStatusHud" style="background:#ffffff;border-bottom:1px solid #e2e8f0;padding:8px 18px;display:flex;align-items:center;justify-content:space-between;font-size:12px;color:var(--text-primary);gap:14px;overflow-x:auto;">
         <!-- Left: 时钟与窗口时序带 -->
         <div style="display:flex;align-items:center;gap:12px;white-space:nowrap;">
             <div style="display:flex;align-items:center;gap:8px;background:var(--bg-card);padding:4px 12px;border-radius:var(--radius-sm);border:1px solid var(--border-default);">
@@ -2954,7 +2927,7 @@
         <div style="display:flex;align-items:center;gap:12px;white-space:nowrap;">
             <div style="display:flex;align-items:center;gap:6px;background:var(--bg-card);padding:4px 12px;border-radius:var(--radius-sm);border:1px solid var(--border-default);">
                 <span style="color:var(--text-secondary);font-size:12px;">单票最高仓位:</span>
-                <span id="hudMaxPosition" style="font-weight:700;font-size:13px;color:#3fb950;font-family:var(--font-mono);">0.0%</span>
+                <span id="hudMaxPosition" style="font-weight:700;font-size:13px;color:#16a34a;font-family:var(--font-mono);">0.0%</span>
                 <span style="color:var(--text-muted);font-size:11px;">(硬限 &le;35%)</span>
             </div>
             <div style="display:flex;align-items:center;gap:6px;background:var(--bg-card);padding:4px 12px;border-radius:var(--radius-sm);border:1px solid var(--border-default);">
@@ -2964,7 +2937,7 @@
             </div>
             <div style="display:flex;align-items:center;gap:6px;background:var(--bg-card);padding:4px 12px;border-radius:var(--radius-sm);border:1px solid var(--border-default);">
                 <span style="color:var(--text-secondary);font-size:12px;">团队最大回撤:</span>
-                <span id="hudMaxDrawdown" style="font-weight:700;font-size:13px;color:#3fb950;font-family:var(--font-mono);">0.0%</span>
+                <span id="hudMaxDrawdown" style="font-weight:700;font-size:13px;color:#16a34a;font-family:var(--font-mono);">0.0%</span>
                 <span style="color:var(--text-muted);font-size:11px;">(警戒 12%)</span>
             </div>
             <div id="hudMacroCompass" style="display:flex;align-items:center;gap:6px;background:var(--bg-card);padding:4px 12px;border-radius:var(--radius-sm);border:1px solid rgba(99,102,241,0.4);box-shadow:0 0 10px rgba(99,102,241,0.15);" title="四象限宏观态势与隐马尔可夫时态罗盘">
@@ -2979,12 +2952,12 @@
         <div style="display:flex;align-items:center;gap:12px;white-space:nowrap;">
             <div style="display:flex;align-items:center;gap:6px;background:var(--bg-card);padding:4px 10px;border-radius:var(--radius-sm);border:1px solid rgba(255, 24, 36,0.35);" id="hudSsePill" title="驾驶舱毫秒级 SSE 流式总线">
                 <span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:#00e676;box-shadow:0 0 8px #00e676;animation:pulseDot 2s infinite;" id="hudSseDot"></span>
-                <span style="color:#f8fafc;font-size:11px;font-weight:700;" id="hudSseText">⚡ SSE 实时推流</span>
+                <span style="color:#0f172a;font-size:11px;font-weight:700;" id="hudSseText">⚡ SSE 实时推流</span>
             </div>
                         <div onclick="openPerformanceModal()" style="cursor:pointer;display:flex;align-items:center;gap:6px;background:var(--bg-card);padding:4px 12px;border-radius:var(--radius-sm);border:1px solid rgba(255, 24, 36,0.4);transition:all 0.2s;" title="点击打开同花顺API网络延迟与链路健康监控">
                 <span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:#00e676;box-shadow:0 0 8px #00e676;" id="hudRttDot"></span>
                 <span style="color:var(--text-secondary);font-size:11px;">网关 RTT:</span>
-                <span style="color:#00e676;font-weight:700;font-size:12px;font-family:var(--font-mono);" id="hudRttText">-- ms</span>
+                <span style="color:#16a34a;font-weight:700;font-size:12px;font-family:var(--font-mono);" id="hudRttText">-- ms</span>
             </div>
 </div>
     </div>
@@ -2995,12 +2968,12 @@
         <!-- Panel 1 (Left 320px): 8 大时序自动化流水线 -->
         <div class="panel" id="pipelinePanel" style="display:flex;flex-direction:column;">
             <div class="panel-header" style="display:flex;justify-content:space-between;align-items:center;">
-                <span style="font-weight:600;color:#ff1824;">🕒 10大时序自动化流水线</span>
-                <button class="debug-btn" onclick="openLedgerModal()" style="background:#21262d;border:1px solid #388bfd;color:#ff1824;padding:3px 8px;border-radius:4px;font-size:11px;cursor:pointer;">审计账本</button>
+                <span style="font-weight:700;color:#0f172a;">🕒 10大时序自动化流水线</span>
+                <button class="debug-btn" onclick="openLedgerModal()" style="background:#f1f5f9;border:1px solid #cbd5e1;color:#2563eb;padding:3px 8px;border-radius:4px;font-size:11px;font-weight:600;cursor:pointer;">审计账本</button>
             </div>
             <div class="panel-body" style="flex:1;overflow-y:auto;padding:12px;">
                 <!-- Pipeline summary badge -->
-                <div style="background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:10px 12px;margin-bottom:12px;display:flex;flex-direction:column;gap:6px;font-size:11px;">
+                <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 12px;margin-bottom:12px;display:flex;flex-direction:column;gap:6px;font-size:11px;">
                     <div style="display:flex;justify-content:space-between;align-items:center;">
                         <span style="color:#8b949e;">今日时序推进状态</span>
                         <span id="pipelineSummaryText" style="color:#3fb950;font-weight:600;">8个时序节点已就绪</span>
@@ -3020,15 +2993,13 @@
 
         <!-- Panel 2 (Center 1fr): 多策略量化集成表决与候选冲击池 (无外层溢出滚动条) -->
         <div class="panel" id="aiCenterPanel" style="display:flex;flex-direction:column;height:100%;overflow:hidden;border:1px solid var(--border-default);box-shadow:0 8px 32px rgba(0,0,0,0.3);">
-            <div class="panel-header" style="flex-shrink:0;display:flex;justify-content:space-between;align-items:center;background:linear-gradient(180deg, #161f33 0%, #101726 100%);border-bottom:1px solid var(--border-default);padding:10px 16px;">
+            <div class="panel-header" style="flex-shrink:0;display:flex;justify-content:space-between;align-items:center;background:#ffffff;border-bottom:1px solid #e2e8f0;padding:10px 16px;">
                 <div style="display:flex;align-items:center;gap:10px;">
-                    <span style="font-weight:700;font-size:14px;color:#f8fafc;letter-spacing:0.4px;">📐 多策略量化集成表决与候选冲击池</span>
+                    <span style="font-weight:700;font-size:14px;color:#0f172a;letter-spacing:0.4px;">📐 多策略量化集成表决与候选冲击池</span>
                     <span id="ensembleRegimeTag" style="background:rgba(255, 24, 36,0.12);color:var(--brand-blue);border:1px solid rgba(255, 24, 36,0.35);padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600;">震荡自适应</span>
                 </div>
-                <div style="display:flex;gap:6px;">
-                    <button onclick="runEnsembleDecide()" style="background:rgba(255, 24, 36,0.1);border:1px solid rgba(255, 24, 36,0.35);color:var(--brand-blue);padding:5px 12px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;display:flex;align-items:center;gap:4px;transition:all 0.2s;">
-                        ⚡ 刷新量化表决
-                    </button>
+                <div style="display:flex;align-items:center;gap:6px;">
+                    <span style="font-size:11px;color:#64748b;background:#f1f5f9;border:1px solid #e2e8f0;padding:3px 8px;border-radius:12px;font-weight:600;">⚡ 5s 自动表决同步</span>
                 </div>
             </div>
 
@@ -3075,7 +3046,7 @@
                     <!-- 图二自立的滑动区域 (独立滚动条 + 表头吸顶置顶) -->
                     <div id="candidateTableScrollWrapper" style="flex:1;min-height:0;overflow-y:auto;overflow-x:auto;border:1px solid var(--border-subtle);border-radius:8px;background:var(--bg-inset);">
                         <table style="width:100%;border-collapse:collapse;font-size:12px;text-align:left;">
-                            <thead style="position:sticky;top:0;z-index:10;background:#0d1424;box-shadow:0 1px 0 var(--border-default);">
+                            <thead style="position:sticky;top:0;z-index:10;background:#f8fafc;box-shadow:0 1px 0 #e2e8f0;border-bottom:1px solid #e2e8f0;">
                                 <tr style="color:var(--text-secondary);font-size:12px;font-weight:700;letter-spacing:0.4px;white-space:nowrap;">
                                     <th style="padding:10px 14px;text-align:left;white-space:nowrap;min-width:130px;">代码 / 名称</th>
                                     <th style="padding:10px 14px;text-align:left;white-space:nowrap;min-width:100px;">行业板块</th>
@@ -3105,20 +3076,20 @@
         <!-- Panel 3 (Right 340px): 资产合规与自动化流水 -->
         <div class="panel mobile-active" id="executionPanel" style="display:flex;flex-direction:column;">
             <div class="panel-header" style="display:flex;justify-content:space-between;align-items:center;">
-                <span style="font-weight:600;color:#c9d1d9;">📊 资产合规与自动化流水</span>
-                <button onclick="toggleAIScheduler()" id="aiSchedSideToggle" class="desktop-only-toggle" style="background:#238636;border:none;color:white;padding:3px 10px;border-radius:4px;font-size:11px;cursor:pointer;">自动交易: 开</button>
+                <span style="font-weight:700;color:#0f172a;">📊 资产合规与自动化流水</span>
+                <span id="aiSchedSideToggle" class="desktop-only-toggle" style="display:inline-block;background:#f0fdf4;border:1px solid #bbf7d0;color:#16a34a;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700;">🟢 自动化运行中</span>
                 <span id="aiSchedMobileSafeBadge" class="mobile-only-safe-badge" style="display:none;background:rgba(0,245,155,0.12);border:1px solid #00f59b;color:#00f59b;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;">🟢 实盘自动化运行中</span>
             </div>
             <div class="panel-body" style="flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:12px;">
 
                                 <!-- 3 独立账户并排快速切换矩阵与全局资产看板 -->
-                <div id="multiAccountMatrix" style="background:#0d1117;border:1px solid #30363d;border-radius:10px;padding:12px;margin-bottom:12px;">
+                <div id="multiAccountMatrix" style="background:#ffffff;border:1px solid #e2e8f0;border-radius:10px;padding:12px;margin-bottom:12px;box-shadow:0 1px 3px rgba(0,0,0,0.04);">
                     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
                         <div style="display:flex;align-items:center;gap:6px;">
-                            <span style="font-size:12px;font-weight:700;color:#f8fafc;">👥 3账户并排管理</span>
+                            <span style="font-size:12px;font-weight:700;color:#0f172a;">👥 3账户并排管理</span>
                             <span id="accMatrixActiveBadge" style="font-size:10px;background:rgba(255, 24, 36,0.15);color:#ff1824;padding:1px 6px;border-radius:4px;font-weight:600;">当前主视口</span>
                         </div>
-                        <button onclick="toggleConsolidatedView()" id="btnConsolidatedView" style="background:rgba(255, 24, 36,0.12);border:1px solid rgba(255, 24, 36,0.35);color:#ff1824;padding:3px 10px;border-radius:5px;font-size:11px;font-weight:700;cursor:pointer;transition:all 0.2s;">
+                        <button onclick="toggleConsolidatedView()" id="btnConsolidatedView" style="background:#eff6ff;border:1px solid #bfdbfe;color:#2563eb;padding:3px 10px;border-radius:5px;font-size:11px;font-weight:700;cursor:pointer;transition:all 0.2s;">
                             📊 全局合并总览
                         </button>
                     </div>
@@ -3129,7 +3100,7 @@
                     </div>
 
                     <!-- 全局合并资产透视卡片 (支持展开/折叠) -->
-                    <div id="consolidatedSummaryBox" style="display:none;margin-top:10px;padding:10px 12px;background:linear-gradient(135deg, rgba(16,24,39,0.9) 0%, rgba(15,23,42,0.9) 100%);border:1px solid rgba(255, 24, 36,0.3);border-radius:8px;">
+                    <div id="consolidatedSummaryBox" style="display:none;margin-top:10px;padding:10px 12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;">
                         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;border-bottom:1px solid rgba(255,255,255,0.06);padding-bottom:6px;">
                             <span style="font-size:11px;font-weight:700;color:#ff1824;">🌐 3 账户汇总合并总资产</span>
                             <span id="consSyncTime" style="font-size:10px;color:#94a3b8;">实时计算</span>
@@ -3137,7 +3108,7 @@
                         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:6px;">
                             <div>
                                 <div style="font-size:10px;color:#94a3b8;">合并总资产(元)</div>
-                                <div style="font-size:16px;font-weight:800;color:#f8fafc;font-family:var(--font-mono);" id="consTotalAssets">¥0.00</div>
+                                <div style="font-size:16px;font-weight:800;color:#0f172a;font-family:var(--font-mono);" id="consTotalAssets">¥0.00</div>
                             </div>
                             <div>
                                 <div style="font-size:10px;color:#94a3b8;">合并可用现金(元)</div>
@@ -3156,7 +3127,7 @@
                 </div>
 
 <!-- 1. 资产与收益率看板 -->
-                <div style="background:#0d1117;border:1px solid #30363d;border-radius:10px;padding:12px;">
+                <div style="background:#ffffff;border:1px solid #e2e8f0;border-radius:10px;padding:12px;box-shadow:0 1px 3px rgba(0,0,0,0.04);">
                     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
                         <span style="font-size:11px;color:#8b949e;">账户资产总览</span>
                         <span id="sideConnStatus" style="font-size:10px;color:#3fb950;">● THS已就绪</span>
@@ -3191,9 +3162,9 @@
                 </div>
 
                 <!-- 2. 当前自动持仓与 35% 违规红线监控条 -->
-                <div style="background:#0d1117;border:1px solid #30363d;border-radius:10px;padding:12px;">
+                <div style="background:#ffffff;border:1px solid #e2e8f0;border-radius:10px;padding:12px;box-shadow:0 1px 3px rgba(0,0,0,0.04);">
                     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-                        <span style="font-size:12px;font-weight:600;color:#c9d1d9;">持仓与仓位红线监控</span>
+                        <span style="font-size:12px;font-weight:700;color:#0f172a;">持仓与仓位红线监控</span>
                         <span style="font-size:10px;color:#8b949e;">单票上限 35% | 要求&ge;3只</span>
                     </div>
                     <div id="sidePositionList" style="display:flex;flex-direction:column;gap:8px;max-height:160px;overflow-y:auto;">
@@ -3202,14 +3173,14 @@
                 </div>
 
                 <!-- 2.5 实时挂单与未成交委托 (含多账户过滤与撤单) -->
-                <div style="background:#0d1117;border:1px solid #30363d;border-radius:10px;padding:12px;">
+                <div style="background:#ffffff;border:1px solid #e2e8f0;border-radius:10px;padding:12px;box-shadow:0 1px 3px rgba(0,0,0,0.04);">
                     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:6px;">
                         <div style="display:flex;align-items:center;gap:6px;">
-                            <span style="font-size:12px;font-weight:600;color:#c9d1d9;">📋 实时挂单委托</span>
+                            <span style="font-size:12px;font-weight:700;color:#0f172a;">📋 实时挂单委托</span>
                             <span id="pendingOrdersFilterBadge" style="font-size:10px;background:rgba(56,189,248,0.15);color:#38bdf8;padding:1px 6px;border-radius:4px;font-weight:700;">全部账户</span>
                         </div>
                         <div style="display:flex;gap:4px;align-items:center;">
-                            <button onclick="togglePendingOrdersFilter()" id="btnPendingFilter" style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);color:#cbd5e1;padding:2px 8px;border-radius:4px;font-size:11px;cursor:pointer;">仅当前账户</button>
+                            <button onclick="togglePendingOrdersFilter()" id="btnPendingFilter" style="background:#f1f5f9;border:1px solid #cbd5e1;color:#475569;padding:2px 8px;border-radius:4px;font-size:11px;cursor:pointer;font-weight:600;">仅当前账户</button>
                             <button onclick="cancelAllOrders()" style="background:rgba(218,54,51,0.15);border:1px solid rgba(218,54,51,0.35);color:#ff7b72;padding:2px 8px;border-radius:4px;font-size:11px;cursor:pointer;font-weight:600;">全部撤单</button>
                         </div>
                     </div>
@@ -3219,27 +3190,20 @@
                 </div>
 
                 <!-- 3. 全自动实时交易执行流水流 -->
-                <div style="background:#0d1117;border:1px solid #30363d;border-radius:10px;padding:12px;flex:1;display:flex;flex-direction:column;">
+                <div style="background:#ffffff;border:1px solid #e2e8f0;border-radius:10px;padding:12px;flex:1;display:flex;flex-direction:column;box-shadow:0 1px 3px rgba(0,0,0,0.04);">
                     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
                         <div style="display:flex;align-items:center;gap:6px;">
-                            <span style="font-size:12px;font-weight:600;color:#c9d1d9;">⚡ 全自动执行日志流水</span>
+                            <span style="font-size:12px;font-weight:700;color:#0f172a;">⚡ 全自动执行日志流水</span>
                             <span id="execLogFoldBtn" onclick="toggleExecutionLogFold()" style="cursor:pointer;color:var(--brand-blue);font-size:11px;font-weight:600;background:rgba(255, 24, 36,0.1);padding:1px 6px;border-radius:4px;border:1px solid rgba(255, 24, 36,0.25);">展开</span>
                         </div>
                         <span style="font-size:10px;color:#8b949e;" id="sideExecCount">0 笔动作</span>
                     </div>
-                    <div id="sideExecutionLog" style="flex:1;background:#010409;border:1px solid #21262d;border-radius:6px;padding:8px;font-family:Consolas,monospace;font-size:11px;color:#8b949e;overflow-y:auto;max-height:220px;">
+                    <div id="sideExecutionLog" style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:8px;font-family:Consolas,monospace;font-size:11px;color:#334155;overflow-y:auto;max-height:220px;">
                         [执行引擎] 自动化调度流水监听就绪，等待时序窗口触发...
                     </div>
                 </div>
 
-                <!-- 移动端快捷量化联动引导 (消除分 Tab 割裂感，实现同花顺 App 级流畅联动) -->
-                <div class="mobile-section-nav" style="display:none;background:#0d1117;border:1px solid #30363d;border-radius:10px;padding:12px;margin-bottom:12px;">
-                    <div style="font-size:11px;color:#8b949e;margin-bottom:8px;font-weight:600;">⚡ 快捷量化联动</div>
-                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-                        <button onclick="switchMobileTab('quant')" style="background:rgba(255, 24, 36,0.12);border:1px solid rgba(255, 24, 36,0.35);color:#ff1824;padding:8px 6px;border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;">⚡ 查看5大策略冲击池 &gt;</button>
-                        <button onclick="switchMobileTab('pipeline')" style="background:rgba(99, 102, 241,0.12);border:1px solid rgba(99, 102, 241,0.35);color:#818cf8;padding:8px 6px;border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;">🕒 查看10大时序状态 &gt;</button>
-                    </div>
-                </div>
+                
 
                 <!-- 底部快捷工具 (手机端隐藏调试/演练/体检，只留账户管理) -->
                 <div style="display:flex;gap:6px;" class="bottom-tools-wrapper">
@@ -3876,13 +3840,10 @@
                         <div style="color:#8b949e;font-size:12px;">支持一键唤起 Edge 手机扫码，免 F12，Cookie 自动更新并恢复交易！</div>
                     </div>
                     <div style="display:flex;gap:8px;">
-                        <button onclick="dismissCookieAlert(); openConnectModal(); startAutoLoginTHS();" style="flex:1;background:linear-gradient(135deg, #238636 0%, #2ea043 100%);color:white;border:none;padding:10px;border-radius:6px;font-size:14px;font-weight:600;cursor:pointer;">
-                            📱 一键扫码重连
+                        <button onclick="dismissCookieAlert(); openConnectModal(); startAutoLoginTHS();" style="flex:1;background:#16a34a;color:white;border:none;padding:10px;border-radius:6px;font-size:14px;font-weight:700;cursor:pointer;box-shadow:0 2px 8px rgba(22,163,74,0.25);">
+                            📱 立即扫码连接
                         </button>
-                        <button onclick="dismissCookieAlert(); openConnectModal();" style="background:#21262d;color:#ff1824;border:1px solid #388bfd;padding:10px 14px;border-radius:6px;font-size:13px;cursor:pointer;">
-                            手动配置
-                        </button>
-                        <button onclick="dismissCookieAlert()" style="background:#21262d;color:#8b949e;border:1px solid #30363d;padding:10px 12px;border-radius:6px;font-size:13px;cursor:pointer;">
+                        <button onclick="dismissCookieAlert()" style="background:#f1f5f9;color:#64748b;border:1px solid #e2e8f0;padding:10px 16px;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;">
                             稍后
                         </button>
                     </div>
@@ -6886,10 +6847,10 @@
             }
 
             const option = {
-                backgroundColor: '#161b22', animation: false,
+                backgroundColor: '#ffffff', animation: false,
                 tooltip: {
-                    trigger: 'axis', backgroundColor: '#21262d', borderColor: '#30363d',
-                    textStyle: { color: '#e6edf3', fontSize: 11 },
+                    trigger: 'axis', backgroundColor: '#ffffff', borderColor: '#e2e8f0',
+                    textStyle: { color: '#0f172a', fontSize: 11 },
                     axisPointer: { type: 'cross', crossStyle: { color: '#484f58' } },
                     formatter: function(params) {
                         if (!params || !params.length) return '';
@@ -7013,10 +6974,10 @@
             const is5day = period === '5day';
 
             const option = {
-                backgroundColor: '#161b22', animation: false,
+                backgroundColor: '#ffffff', animation: false,
                 tooltip: {
-                    trigger: 'axis', backgroundColor: '#21262d', borderColor: '#30363d',
-                    textStyle: { color: '#e6edf3', fontSize: 11 },
+                    trigger: 'axis', backgroundColor: '#ffffff', borderColor: '#e2e8f0',
+                    textStyle: { color: '#0f172a', fontSize: 11 },
                     axisPointer: { type: 'cross', crossStyle: { color: '#484f58' } },
                     formatter: function(params) {
                         if (!params || !params.length) return '';
@@ -7210,12 +7171,14 @@
                     if (dot) dot.style.background = s.enabled ? '#3fb950' : '#666';
                     if (label) label.textContent = s.enabled ? '运行中' : '已停止';
                     if (btn) {
-                        btn.textContent = s.enabled ? '停止' : '开启';
-                        btn.style.background = s.enabled ? '#da3633' : '#238636';
+                        btn.textContent = s.enabled ? '🟢 实盘自动交易中' : '⏸️ 自动交易已暂停';
+                        btn.style.background = s.enabled ? '#16a34a' : '#d97706';
                     }
                     if (sideBtn) {
-                        sideBtn.textContent = s.enabled ? '自动交易: 开' : '自动交易: 关';
-                        sideBtn.style.background = s.enabled ? '#238636' : '#da3633';
+                        sideBtn.textContent = s.enabled ? '🟢 自动化运行中' : '⏸️ 自动化暂停';
+                        sideBtn.style.background = s.enabled ? '#f0fdf4' : '#fffbeb';
+                        sideBtn.style.color = s.enabled ? '#16a34a' : '#d97706';
+                        sideBtn.style.borderColor = s.enabled ? '#bbf7d0' : '#fde68a';
                     }
                 }
             } catch (e) {}
@@ -7653,7 +7616,7 @@
                 };
 
                 let html = '<table style="width:100%;font-size:11px;border-collapse:collapse;white-space:nowrap;">';
-                html += '<tr style="color:#8b949e;border-bottom:1px solid #21262d;font-size:10.5px;"><th style="padding:4px 6px;text-align:left;">账户</th><th style="padding:4px 6px;text-align:left;">标的</th><th style="padding:4px 6px;text-align:center;">方向</th><th style="padding:4px 6px;text-align:right;">价格</th><th style="padding:4px 6px;text-align:right;">数量</th><th style="padding:4px 6px;text-align:center;">状态</th><th style="padding:4px 6px;text-align:center;">操作</th></tr>';
+                html += '<tr style="color:#64748b;border-bottom:1px solid #e2e8f0;font-size:10.5px;"><th style="padding:4px 6px;text-align:left;">账户</th><th style="padding:4px 6px;text-align:left;">标的</th><th style="padding:4px 6px;text-align:center;">方向</th><th style="padding:4px 6px;text-align:right;">价格</th><th style="padding:4px 6px;text-align:right;">数量</th><th style="padding:4px 6px;text-align:center;">状态</th><th style="padding:4px 6px;text-align:center;">操作</th></tr>';
 
                 for (const o of data.data) {
                     const accId = o.account_id !== undefined ? o.account_id : 0;
@@ -7666,19 +7629,19 @@
                     const price = Number(o.price || 0).toFixed(2);
                     const amount = Number(o.amount || 0);
 
-                    html += `<tr style="border-bottom:1px solid rgba(255,255,255,0.05);transition:background 0.15s;" onmouseover="this.style.background='rgba(255,255,255,0.03)'" onmouseout="this.style.background='transparent'">
+                    html += `<tr style="border-bottom:1px solid #f1f5f9;transition:background 0.15s;" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background='transparent'">
                         <td style="padding:6px 4px;">
                             <span style="font-size:9.5px;padding:1px 5px;border-radius:3px;background:rgba(255,255,255,0.06);border:1px solid ${accColor}40;color:${accColor};font-weight:700;">${escapeHtml(accName)}</span>
                         </td>
                         <td style="padding:6px 4px;">
-                            <div style="font-weight:700;color:#f8fafc;font-size:11.5px;">${escapeHtml(o.name || '')}</div>
-                            <div style="font-size:9.5px;color:#8b949e;font-family:var(--font-mono);">${escapeHtml(o.symbol || o.code || '')}</div>
+                            <div style="font-weight:700;color:#0f172a;font-size:11.5px;">${escapeHtml(o.name || '')}</div>
+                            <div style="font-size:9.5px;color:#64748b;font-family:var(--font-mono);">${escapeHtml(o.symbol || o.code || '')}</div>
                         </td>
                         <td style="padding:6px 4px;text-align:center;">${dir}</td>
-                        <td style="padding:6px 4px;text-align:right;font-family:var(--font-mono);color:#f8fafc;">¥${price}</td>
-                        <td style="padding:6px 4px;text-align:right;font-family:var(--font-mono);color:#f8fafc;">${amount}</td>
+                        <td style="padding:6px 4px;text-align:right;font-family:var(--font-mono);color:#0f172a;">¥${price}</td>
+                        <td style="padding:6px 4px;text-align:right;font-family:var(--font-mono);color:#0f172a;">${amount}</td>
                         <td style="padding:6px 4px;text-align:center;">
-                            <span style="font-size:9.5px;color:${statusColor};background:rgba(255,255,255,0.04);padding:1px 5px;border-radius:3px;">${escapeHtml(o.status || '已报')}</span>
+                            <span style="font-size:9.5px;color:${statusColor};background:#f1f5f9;padding:1px 5px;border-radius:3px;">${escapeHtml(o.status || '已报')}</span>
                         </td>
                         <td style="padding:6px 4px;text-align:center;">
                             ${canCancel ? `<button onclick="cancelOrder('${o.order_id || ''}','${o.date || ''}', ${accId})" style="background:rgba(218,54,51,0.15);border:1px solid rgba(218,54,51,0.4);color:#ff7b72;padding:2px 6px;border-radius:4px;cursor:pointer;font-size:10px;font-weight:600;">撤单</button>` : '<span style="color:#64748b;font-size:10px;">-</span>'}
@@ -8756,14 +8719,14 @@
         }
 
         const statusBadgeMap = {
-            'DONE': { text: '已执行', bg: 'rgba(0, 245, 155, 0.15)', color: '#00f59b', border: '#00f59b' },
-            'SUCCESS': { text: '成功', bg: 'rgba(0, 245, 155, 0.15)', color: '#00f59b', border: '#00f59b' },
-            'CATCHUP_SUCCESS': { text: '补偿完成', bg: 'rgba(0, 245, 155, 0.15)', color: '#00f59b', border: '#00f59b' },
-            'RUNNING': { text: '执行中', bg: 'rgba(255, 24, 36, 0.25)', color: '#ff1824', border: '#ff1824' },
-            'ACTIVE': { text: '活跃', bg: 'rgba(255, 24, 36, 0.25)', color: '#ff1824', border: '#ff1824' },
-            'PENDING': { text: '待触发', bg: 'rgba(255, 255, 255, 0.05)', color: '#94a3b8', border: 'rgba(255,255,255,0.15)' },
-            'WAITING': { text: '待命', bg: 'rgba(255, 255, 255, 0.05)', color: '#94a3b8', border: 'rgba(255,255,255,0.15)' },
-            'SKIPPED': { text: '已跳过', bg: 'rgba(255, 230, 0, 0.15)', color: '#ffe600', border: '#ffe600' }
+            'DONE': { text: '已执行', bg: '#f0fdf4', color: '#16a34a', border: '#bbf7d0' },
+            'SUCCESS': { text: '成功', bg: '#f0fdf4', color: '#16a34a', border: '#bbf7d0' },
+            'CATCHUP_SUCCESS': { text: '补偿完成', bg: '#f0fdf4', color: '#16a34a', border: '#bbf7d0' },
+            'RUNNING': { text: '执行中', bg: '#fef2f2', color: '#dc2626', border: '#fecaca' },
+            'ACTIVE': { text: '活跃', bg: '#fef2f2', color: '#dc2626', border: '#fecaca' },
+            'PENDING': { text: '待触发', bg: '#f8fafc', color: '#64748b', border: '#e2e8f0' },
+            'WAITING': { text: '待命', bg: '#f8fafc', color: '#64748b', border: '#e2e8f0' },
+            'SKIPPED': { text: '已跳过', bg: '#fffbeb', color: '#d97706', border: '#fde68a' }
         };
 
         if (summaryText) {
@@ -8777,22 +8740,22 @@
             const summary = e.skip_reason || e.output_summary || e.error_detail || '等待时序触发窗口...';
             const dur = e.duration_ms ? `${e.duration_ms}ms` : '';
             return `
-                <div class="pipeline-step-card" style="background: rgba(18, 14, 20, 0.85); border: 1px solid rgba(255, 255, 255, 0.08); border-left: 3px solid ${st.color}; border-radius: 6px; padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; transition: all 0.2s;" onmouseover="this.style.background='rgba(30,20,28,0.95)'" onmouseout="this.style.background='rgba(18, 14, 20, 0.85)'">
+                <div class="pipeline-step-card" style="background: #ffffff; border: 1px solid #e2e8f0; border-left: 3px solid ${st.color}; border-radius: 6px; padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; transition: all 0.2s; box-shadow: 0 1px 2px rgba(0,0,0,0.03);" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background='#ffffff'">
                     <div style="display: flex; justify-content: space-between; align-items: center;">
                         <div style="display: flex; align-items: center; gap: 8px;">
-                            <span style="font-family: var(--font-mono); font-size: 11px; font-weight: 800; color: #ffe600; background: rgba(255,230,0,0.12); padding: 1px 6px; border-radius: 4px;">${e.window || `W${idx}`}</span>
-                            <span style="font-size: 12px; font-weight: 700; color: #f8fafc;">${e.step_name || e.step_id}</span>
+                            <span style="font-family: var(--font-mono); font-size: 11px; font-weight: 800; color: #d97706; background: #fffbeb; border: 1px solid #fde68a; padding: 1px 6px; border-radius: 4px;">${e.window || `W${idx}`}</span>
+                            <span style="font-size: 12px; font-weight: 700; color: #0f172a;">${e.step_name || e.step_id}</span>
                         </div>
                         <div style="display: flex; align-items: center; gap: 6px;">
-                            ${dur ? `<span style="font-size: 10px; color: #94a3b8; font-family: var(--font-mono);">${dur}</span>` : ''}
+                            ${dur ? `<span style="font-size: 10px; color: #64748b; font-family: var(--font-mono);">${dur}</span>` : ''}
                             <span style="font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 10px; background: ${st.bg}; color: ${st.color}; border: 1px solid ${st.border};">${st.text}</span>
                         </div>
                     </div>
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 2px;">
-                        <div style="font-size: 11px; color: #94a3b8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 78%;">
+                        <div style="font-size: 11px; color: #64748b; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 78%;">
                             ${summary}
                         </div>
-                        <button onclick="triggerStepRun('${e.step_id}', true)" style="background: rgba(255,24,36,0.12); border: 1px solid rgba(255,24,36,0.3); color: #ff1824; font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 4px; cursor: pointer; white-space: nowrap;">
+                        <button onclick="triggerStepRun('${e.step_id}', true)" style="background: #eff6ff; border: 1px solid #bfdbfe; color: #2563eb; font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 4px; cursor: pointer; white-space: nowrap;">
                             单步演练
                         </button>
                     </div>
@@ -8816,17 +8779,18 @@
 
         grid.innerHTML = strategies.map(s => {
             const isBuy = s.vote === 'BUY';
-            const voteBg = isBuy ? 'rgba(0, 245, 155, 0.15)' : 'rgba(255, 230, 0, 0.15)';
-            const voteColor = isBuy ? '#00f59b' : '#ffe600';
+            const voteBg = isBuy ? '#f0fdf4' : '#fffbeb';
+            const voteColor = isBuy ? '#16a34a' : '#d97706';
+            const voteBorder = isBuy ? '#bbf7d0' : '#fde68a';
             return `
-                <div style="background: rgba(18, 14, 20, 0.9); border: 1px solid rgba(255, 255, 255, 0.08); border-top: 2px solid ${s.color}; border-radius: 6px; padding: 8px 10px; display: flex; flex-direction: column; justify-content: space-between; gap: 4px;">
+                <div style="background: #ffffff; border: 1px solid #e2e8f0; border-top: 3px solid ${s.color}; border-radius: 6px; padding: 8px 10px; display: flex; flex-direction: column; justify-content: space-between; gap: 4px; box-shadow: 0 1px 2px rgba(0,0,0,0.03);">
                     <div style="display: flex; justify-content: space-between; align-items: center;">
-                        <span style="font-size: 11px; font-weight: 700; color: #f8fafc;">${s.name.split(' ')[0]}</span>
-                        <span style="font-size: 10px; color: #94a3b8; font-family: var(--font-mono);">权重 ${s.weight}</span>
+                        <span style="font-size: 11px; font-weight: 700; color: #0f172a;">${s.name.split(' ')[0]}</span>
+                        <span style="font-size: 10px; color: #64748b; font-family: var(--font-mono);">权重 ${s.weight}</span>
                     </div>
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 4px;">
-                        <span style="font-size: 10px; background: rgba(255,255,255,0.06); padding: 1px 6px; border-radius: 3px; color: #cbd5e1;">${s.tag}</span>
-                        <span style="font-size: 11px; font-weight: 800; font-family: var(--font-mono); padding: 1px 6px; border-radius: 4px; background: ${voteBg}; color: ${voteColor};">
+                        <span style="font-size: 10px; background: #f1f5f9; border: 1px solid #e2e8f0; padding: 1px 6px; border-radius: 3px; color: #475569;">${s.tag}</span>
+                        <span style="font-size: 11px; font-weight: 800; font-family: var(--font-mono); padding: 1px 6px; border-radius: 4px; background: ${voteBg}; color: ${voteColor}; border: 1px solid ${voteBorder};">
                             ${s.vote} ${s.conf}
                         </span>
                     </div>
@@ -8921,8 +8885,8 @@
                     const lotsDisplay = lots > 0 ? `约${lots}手` : '1手底仓';
                     const estMoney = item.suggested_amount ? `(约¥${(item.suggested_amount / 10000).toFixed(1)}万)` : '';
                     positionCellHtml = `
-                        <div style="font-weight: 800; color: #f8fafc; font-size: 13px; font-family: var(--font-mono);">
-                            ${weight}% <span style="font-size: 11px; color: #38bdf8; font-weight: 700;">(${lotsDisplay})</span>
+                        <div style="font-weight: 800; color: #0f172a; font-size: 13px; font-family: var(--font-mono);">
+                            ${weight}% <span style="font-size: 11px; color: #2563eb; font-weight: 700;">(${lotsDisplay})</span>
                         </div>
                         <div style="font-size: 10px; color: #94a3b8; font-family: var(--font-mono); margin-top: 2px;">
                             ${estMoney} · 针对: ${accName}
@@ -8939,13 +8903,13 @@
             }
 
             return `
-                <tr style="border-bottom: 1px solid rgba(255,255,255,0.06); cursor: pointer; transition: background 0.15s;" onmouseover="this.style.background='rgba(255,24,36,0.06)'" onmouseout="this.style.background='transparent'" onclick="if(typeof selectStock==='function') selectStock('${item.code}')">
+                <tr style="border-bottom: 1px solid #f1f5f9; cursor: pointer; transition: background 0.15s;" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background='transparent'" onclick="if(typeof selectStock==='function') selectStock('${item.code}')">
                     <td style="padding: 10px 14px; white-space: nowrap;">
-                        <div style="font-weight: 700; color: #f8fafc; font-size: 13px;">${item.name}</div>
+                        <div style="font-weight: 700; color: #0f172a; font-size: 13px;">${item.name}</div>
                         <div style="display: flex; align-items: center; gap: 6px; margin-top: 2px;">
-                            <span style="font-size: 11px; color: #94a3b8; font-family: var(--font-mono);">${item.code}</span>
-                            <span style="font-size: 10px; color: ${Number(item.pullback_pct || 0) > 0 ? '#fbbf24' : '#64748b'}; font-family: var(--font-mono);" title="日内高点起伏回踩">起伏:${Number(item.pullback_pct || 0).toFixed(1)}%</span>
-                            <span style="font-size: 10px; color: ${(Number(item.obi || 0) >= 0) ? '#ff7875' : '#5cdbd3'}; font-family: var(--font-mono);" title="盘口委比 (Order Book Imbalance)">OBI:${item.obi_pct || ((Number(item.obi || 0) >= 0 ? '+' : '') + (Number(item.obi || 0) * 100).toFixed(1) + '%')}</span>
+                            <span style="font-size: 11px; color: #64748b; font-family: var(--font-mono);">${item.code}</span>
+                            <span style="font-size: 10px; color: ${Number(item.pullback_pct || 0) > 0 ? '#d97706' : '#64748b'}; font-family: var(--font-mono);" title="日内高点起伏回踩">起伏:${Number(item.pullback_pct || 0).toFixed(1)}%</span>
+                            <span style="font-size: 10px; color: ${(Number(item.obi || 0) >= 0) ? '#dc2626' : '#0891b2'}; font-family: var(--font-mono);" title="盘口委比 (Order Book Imbalance)">OBI:${item.obi_pct || ((Number(item.obi || 0) >= 0 ? '+' : '') + (Number(item.obi || 0) * 100).toFixed(1) + '%')}</span>
                         </div>
                     </td>
                     <td style="padding: 10px 14px; white-space: nowrap;">
@@ -9341,8 +9305,8 @@
                 const isActive = (acc.id === currentActiveId);
 
                 const activeStyle = isActive
-                    ? `border: 1px solid ${cfg.themeColor}; border-top: 3px solid ${cfg.themeColor}; background: linear-gradient(180deg, rgba(35,20,30,0.98) 0%, rgba(18,14,20,0.95) 100%); box-shadow: 0 0 16px ${cfg.themeColor}55;`
-                    : `border: 1px solid rgba(255,255,255,0.08); border-top: 2px solid ${cfg.themeColor}; background: rgba(18, 14, 20, 0.85);`;
+                    ? `border: 1.5px solid ${cfg.themeColor}; border-top: 3px solid ${cfg.themeColor}; background: #ffffff; box-shadow: 0 4px 12px rgba(0,0,0,0.08);`
+                    : `border: 1px solid #e2e8f0; border-top: 2px solid ${cfg.themeColor}; background: #f8fafc;`;
 
                 const dispName = (acc.name && String(acc.name).length <= 4) ? `账户${acc.name}` : (acc.name || `账户${acc.id}`);
 
@@ -9350,16 +9314,16 @@
                     <div onclick="switchAccount(${acc.id})" style="${activeStyle} border-radius: 6px; padding: 8px 8px; cursor: pointer; transition: all 0.2s; min-width: 0; overflow: hidden;" onmouseover="this.style.transform='translateY(-2px)'" onmouseout="this.style.transform='none'">
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; gap: 2px;">
                             <div style="display: flex; align-items: center; gap: 3px; min-width: 0; overflow: hidden;">
-                                <span style="font-size: 11px; font-weight: 800; color: #f8fafc; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${dispName}</span>
-                                ${isActive ? '<span style="font-size: 9px; color: #00f59b; font-weight: 800; flex-shrink: 0;">●</span>' : ''}
+                                <span style="font-size: 11px; font-weight: 800; color: #0f172a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${dispName}</span>
+                                ${isActive ? '<span style="font-size: 9px; color: #16a34a; font-weight: 800; flex-shrink: 0;">●</span>' : ''}
                             </div>
                             <span style="font-size: 8px; font-weight: 800; font-family: var(--font-mono); padding: 1px 4px; border-radius: 3px; color: ${cfg.themeColor}; background: ${cfg.bgGrad}; flex-shrink: 0;">${cfg.label}</span>
                         </div>
-                        <div style="font-size: 13px; font-weight: 800; color: #f8fafc; font-family: var(--font-mono); margin-bottom: 2px; white-space: nowrap;">
+                        <div style="font-size: 13px; font-weight: 800; color: #0f172a; font-family: var(--font-mono); margin-bottom: 2px; white-space: nowrap;">
                             ¥${fmtMoney(assets)}
                         </div>
                         <div style="display: flex; justify-content: space-between; align-items: center; font-size: 10px; white-space: nowrap;">
-                            <span style="color: #94a3b8;">余 ¥${fmtMoney(available)}</span>
+                            <span style="color: #64748b;">余 ¥${fmtMoney(available)}</span>
                             <span style="color: ${profitColor}; font-weight: 700; font-family: var(--font-mono);">${sign}${profitRate.toFixed(1)}%</span>
                         </div>
                     </div>
@@ -9457,14 +9421,14 @@
                 const sign = pnl > 0 ? '+' : '';
 
                 return `
-                    <div style="background: rgba(18, 14, 20, 0.7); border: 1px solid rgba(255,255,255,0.06); border-radius: 6px; padding: 6px 10px; display: flex; justify-content: space-between; align-items: center; font-size: 11px;">
+                    <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 6px 10px; display: flex; justify-content: space-between; align-items: center; font-size: 11px;">
                         <div>
-                            <span style="font-weight: 700; color: #f8fafc;">${p.name || p.symbol}</span>
-                            <span style="color: #94a3b8; font-family: var(--font-mono); margin-left: 4px;">${p.symbol}</span>
+                            <span style="font-weight: 700; color: #0f172a;">${p.name || p.symbol}</span>
+                            <span style="color: #64748b; font-family: var(--font-mono); margin-left: 4px;">${p.symbol}</span>
                         </div>
                         <div style="text-align: right; font-family: var(--font-mono);">
                             <span style="color: ${color}; font-weight: 700;">${sign}${pnlPct.toFixed(2)}%</span>
-                            <span style="color: #94a3b8; margin-left: 6px;">¥${fmtMoney(mv)}</span>
+                            <span style="color: #64748b; margin-left: 6px;">¥${fmtMoney(mv)}</span>
                         </div>
                     </div>
                 `;
@@ -9491,11 +9455,11 @@
             const d = resData.data;
             if (Array.isArray(d.recent_logs) && d.recent_logs.length > 0) {
                 execLogEl.innerHTML = d.recent_logs.map(log => {
-                    let col = '#8b949e';
-                    if (log.includes('成功') || log.includes('买入') || log.includes('成交')) col = '#00f59b';
-                    else if (log.includes('警告') || log.includes('观望')) col = '#ffe600';
-                    else if (log.includes('失败') || log.includes('止损') || log.includes('违规')) col = '#ff1824';
-                    return `<div style="color:${col};margin-bottom:4px;word-break:break-all;">${log}</div>`;
+                    let col = '#475569';
+                    if (log.includes('成功') || log.includes('买入') || log.includes('成交')) col = '#16a34a';
+                    else if (log.includes('警告') || log.includes('观望')) col = '#d97706';
+                    else if (log.includes('失败') || log.includes('止损') || log.includes('违规')) col = '#dc2626';
+                    return `<div style="color:${col};margin-bottom:4px;word-break:break-all;font-weight:500;">${log}</div>`;
                 }).join('');
                 execLogEl.scrollTop = execLogEl.scrollHeight;
                 if (execCountEl) execCountEl.textContent = `${d.recent_logs.length} 笔动作`;
