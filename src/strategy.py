@@ -351,7 +351,7 @@ class TradingEngine:
 
     def analyze_stock(self, symbol: str, strategies: List[str] = None) -> Dict:
         """
-        综合分析股票
+        综合分析股票 (优先调用多维正交分析器 stock_analyzer，异常时优雅降级)
 
         Args:
             symbol: 股票代码
@@ -360,6 +360,12 @@ class TradingEngine:
         Returns:
             综合分析结果
         """
+        try:
+            from stock_analyzer import stock_analyzer
+            analysis_result = stock_analyzer.analyze(symbol)
+            return analysis_result.to_dict()
+        except Exception as e:
+            logger.warning(f"stock_analyzer 分析异常，降级回退至传统策略扫描: {e}")
         if strategies is None:
             strategies = ["technical", "momentum"]
 

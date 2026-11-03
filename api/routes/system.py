@@ -966,6 +966,14 @@ def ai_analyze_stock(symbol):
         # 增强策略分析
         signal = enhanced_strategy.generate_signal(symbol, stock, indicators, ai_result.get('data', {}).get('content', ''))
 
+        # 多维正交量化分析 (stock_analyzer)
+        quant_analysis = None
+        try:
+            from stock_analyzer import stock_analyzer
+            quant_analysis = stock_analyzer.analyze(symbol, quote=stock).to_dict()
+        except Exception as _qe:
+            logger.debug(f"AI分析注入多维量化异常: {_qe}")
+
         # 活动日志
         try:
             from activity_log import activity_log as _alog
@@ -983,7 +991,8 @@ def ai_analyze_stock(symbol):
                 "indicators": indicators,
                 "ai_analysis": ai_result.get('data', {}).get('content', ''),
                 "signal": signal.to_dict(),
-                "report": enhanced_strategy.format_signal_report(signal, stock)
+                "report": enhanced_strategy.format_signal_report(signal, stock),
+                "quant_analysis": quant_analysis
             }
         })
     except Exception as e:
