@@ -317,6 +317,8 @@ def validate_pre_trade(
     sector: Optional[str] = None,
     existing_sector_value: float = 0.0,
     max_sector_pct: float = SECTOR_MAX_HARD_CAP,
+    positions: Optional[Dict] = None,
+    **kwargs,
 ) -> GuardResult:
     """
     下单前硬校验：
@@ -377,6 +379,17 @@ def validate_pre_trade(
     hard_cap = min(float(max_single_pct or TEAM_MAX_SINGLE_PCT), TEAM_MAX_SINGLE_PCT)
     sector_cap = min(float(max_sector_pct or SECTOR_MAX_HARD_CAP), SECTOR_MAX_HARD_CAP)
     warn_suffix = ""
+
+    if positions and sector and existing_sector_value <= 0.0:
+        for p_sym, p_data in positions.items():
+            if not isinstance(p_data, dict):
+                continue
+            p_sec = str(p_data.get("industry") or p_data.get("sector") or "")
+            if p_sec and p_sec == sector:
+                p_val = float(p_data.get("market_val") or p_data.get("market_value") or 0.0)
+                if p_val <= 0.0:
+                    p_val = float(p_data.get("amount") or 0.0) * float(p_data.get("price") or 0.0)
+                existing_sector_value += p_val
 
     if action == "buy":
         cost = price * amount

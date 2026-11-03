@@ -948,6 +948,7 @@ class AccountManager:
             existing_shares=existing_shares,
             quote=q_now,
             sector=sector_name,
+            available_shares=int(pos.get("available") or existing_shares),
             positions=pos_dict,
         )
         if not guard.allowed:

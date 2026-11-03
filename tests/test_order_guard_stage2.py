@@ -113,6 +113,62 @@ class TestOrderGuardStage2(unittest.TestCase):
         self.assertTrue(res["tail_contagion_alert"])
         self.assertLess(res["leverage_scale_factor"], 1.0)
 
+    def test_validate_pre_trade_with_positions_kwargs(self):
+        # 验证传入 positions 字典与未知 kwargs 不会崩溃，并能自动汇总行业敞口
+        pos_dict = {
+            "600584": {"industry": "半导体", "amount": 1000, "price": 65.0, "market_val": 65000.0},
+            "600519": {"industry": "食品饮料", "amount": 100, "price": 1800.0, "market_val": 180000.0},
+        }
+        res = validate_pre_trade(
+            symbol="688001",
+            action="buy",
+            price=20.0,
+            amount=1000,
+            total_assets=200000.0,
+            available_cash=50000.0,
+            sector="半导体",
+            positions=pos_dict,
+            unknown_future_kwarg=123,
+            skip_session_check=True
+        )
+        # 65000 + 20000 = 85000 > 80000 (40% hard cap)，但剩余 15000 空间足够买 700 股，自动下修到 700 股并附带预警
+        self.assertTrue(res.allowed)
+        self.assertEqual(res.amount, 700)
+        self.assertIn("SECTOR_WARN", res.message)
+
+        # 当已占 79,000 (已无 1 手 2000 元空间) 时，应直接拒绝 SECTOR_CAP
+        pos_dict_full = {
+            "600584": {"industry": "半导体", "amount": 1000, "price": 79.0, "market_val": 79000.0},
+        }
+        res_reject = validate_pre_trade(
+            symbol="688001",
+            action="buy",
+            price=20.0,
+            amount=1000,
+            total_assets=200000.0,
+            available_cash=50000.0,
+            sector="半导体",
+            positions=pos_dict_full,
+            skip_session_check=True
+        )
+        self.assertFalse(res_reject.allowed)
+        self.assertEqual(res_reject.code, "SECTOR_CAP")
+
+        # 验证卖出时传入 positions 和 available_shares 正常放行
+        res_sell = validate_pre_trade(
+            symbol="600584",
+            action="sell",
+            price=65.0,
+            amount=500,
+            existing_shares=1000,
+            available_shares=1000,
+            positions=pos_dict,
+            skip_session_check=True
+        )
+        self.assertTrue(res_sell.allowed)
+        self.assertEqual(res_sell.amount, 500)
+
+
 
 if __name__ == "__main__":
     unittest.main()

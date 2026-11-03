@@ -624,6 +624,29 @@ def ai_decision_stream():
             })
 
         if not recent_log_strings:
+            try:
+                from scheduler_ledger import scheduler_ledger
+                today_str = ai_scheduler.now().date().isoformat()
+                ledger_entries = scheduler_ledger.get_daily_ledger(today_str) or []
+                for entry in ledger_entries:
+                    if entry.get("status") in ("SUCCESS", "SKIPPED", "EXECUTED", "COMPLETED"):
+                        t_exec = entry.get("executed_at") or entry.get("window", "").split("-")[0].strip() or curr_time
+                        if " " in t_exec:
+                            t_exec = t_exec.split(" ")[-1]
+                        summary = entry.get("summary") or entry.get("skip_reason") or "执行完成"
+                        step_n = entry.get("step_name") or entry.get("step_id")
+                        recent_log_strings.append(f"[{t_exec}] [{step_n}] {summary}")
+                        stream_items.append({
+                            "time": t_exec,
+                            "level": "SUCCESS" if entry.get("status") == "SUCCESS" else "INFO",
+                            "action": str(step_n),
+                            "symbol": "",
+                            "amount": 0,
+                            "message": str(summary)
+                        })
+            except Exception:
+                pass
+        if not recent_log_strings:
             recent_log_strings = [f"[{curr_time}] [量化引擎] 8大时序自动化监听中，待触发窗口将执行多策略表决..."]
 
         return jsonify({
