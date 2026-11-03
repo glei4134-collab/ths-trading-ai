@@ -3102,7 +3102,7 @@
                     </div>
 
                     <!-- 5 Strategies Grid (Responsive minmax) -->
-                    <div id="ensembleCardsGrid" style="display:grid;grid-template-columns:repeat(auto-fit, minmax(180px, 1fr));gap:10px;margin-bottom:10px;">
+                    <div id="ensembleCardsGrid" style="display:grid;grid-template-columns:repeat(5, 1fr);gap:8px;margin-bottom:8px;">
                         <!-- 5 cards populated dynamically -->
                     </div>
 
@@ -3110,7 +3110,7 @@
                     <div id="ensembleConsensusBar" style="background:var(--bg-inset);border:1px solid var(--border-default);border-radius:8px;padding:8px 14px;display:flex;justify-content:space-between;align-items:center;font-size:12px;">
                         <div style="display:flex;align-items:center;gap:10px;">
                             <span style="color:var(--text-secondary);font-weight:500;">表决结果:</span>
-                            <span id="consensusSignalBadge" style="background:rgba(34,197,94,0.18);border:1px solid rgba(74,222,128,0.5);color:#4ade80;padding:3px 10px;border-radius:4px;font-weight:700;font-size:12px;box-shadow:0 0 10px rgba(34,197,94,0.2);">BUY 赞成买入</span>
+                            <span id="consensusSignalBadge" style="background:#dcfce7;border:1px solid #86efac;color:#15803d;padding:2px 8px;border-radius:4px;font-weight:700;font-size:12px;">BUY 赞成买入</span>
                             <span id="consensusDetailText" style="color:var(--text-primary);font-weight:600;">赞成票 4/5 | 综合加权置信度 79.2%</span>
                         </div>
                         <div style="color:var(--brand-blue);font-weight:700;font-size:12px;font-family:var(--font-mono);" id="consensusTargetPosition">
@@ -3133,18 +3133,18 @@
 
                     <!-- 图二自立的滑动区域 (独立滚动条 + 表头吸顶置顶) -->
                     <div id="candidateTableScrollWrapper" style="flex:1;min-height:0;overflow-y:auto;overflow-x:auto;border:1px solid var(--border-subtle);border-radius:8px;background:var(--bg-inset);">
-                        <table style="width:100%;border-collapse:collapse;font-size:12px;text-align:left;">
+                        <table style="width:100%;table-layout:fixed;border-collapse:collapse;font-size:12px;text-align:left;">
                             <thead style="position:sticky;top:0;z-index:10;background:#f8fafc;box-shadow:0 1px 0 #e2e8f0;border-bottom:1px solid #e2e8f0;">
-                                <tr style="color:var(--text-secondary);font-size:12px;font-weight:700;letter-spacing:0.3px;white-space:nowrap;">
-                                    <th style="padding:8px 10px;text-align:left;white-space:nowrap;min-width:110px;">代码 / 名称</th>
-                                    <th style="padding:8px 10px;text-align:left;white-space:nowrap;min-width:80px;">行业板块</th>
-                                    <th style="padding:8px 10px;text-align:right;white-space:nowrap;min-width:70px;">最新价</th>
-                                    <th style="padding:8px 10px;text-align:right;white-space:nowrap;min-width:70px;">涨跌幅</th>
-                                    <th style="padding:8px 10px;text-align:right;white-space:nowrap;min-width:75px;">多因子评分</th>
-                                    <th style="padding:8px 10px;text-align:center;white-space:nowrap;min-width:80px;">策略表决</th>
-                                    <th style="padding:8px 10px;text-align:center;white-space:nowrap;min-width:80px;">推荐决策</th>
-                                    <th style="padding:8px 10px;text-align:right;white-space:nowrap;min-width:90px;">建议仓位</th>
-                                    <th style="padding:8px 10px;text-align:right;white-space:nowrap;min-width:105px;">合规止损线</th>
+                                <tr style="color:var(--text-secondary);font-size:11.5px;font-weight:700;letter-spacing:0.2px;white-space:nowrap;">
+                                    <th style="padding:7px 6px;text-align:left;width:18%;">代码 / 名称</th>
+                                    <th style="padding:7px 6px;text-align:left;width:11%;">行业板块</th>
+                                    <th style="padding:7px 6px;text-align:right;width:9%;">最新价</th>
+                                    <th style="padding:7px 6px;text-align:right;width:9%;">涨跌幅</th>
+                                    <th style="padding:7px 6px;text-align:right;width:9%;">因子评分</th>
+                                    <th style="padding:7px 6px;text-align:center;width:11%;">策略表决</th>
+                                    <th style="padding:7px 6px;text-align:center;width:8%;">决策</th>
+                                    <th style="padding:7px 6px;text-align:right;width:13%;">建议仓位</th>
+                                    <th style="padding:7px 6px;text-align:right;width:12%;">合规止损</th>
                                 </tr>
                             </thead>
                             <tbody id="candidateTableBody">
@@ -6942,7 +6942,7 @@
                     axisPointer: { type: 'cross', crossStyle: { color: '#484f58' } },
                     formatter: function(params) {
                         if (!params || !params.length) return '';
-                        const p = params.find(x => x.seriesName === '价格') || params[0];
+                            return String(params[0].axisValue) + '<br/>净值: <b>¥' + Number(params[0].value).toLocaleString() + '</b>';
                         if (p.value == null) return `<b>${p.axisValue}</b><br/><span style="color:#8b949e">停牌/午休</span>`;
                         const avgP = params.find(x => x.seriesName === '均价');
                         const pct = basePrice ? ((p.value - basePrice) / basePrice * 100).toFixed(2) : '0.00';
@@ -8959,15 +8959,11 @@
                     const isLimit = item.reason && item.reason.includes('仓位超限');
                     const badgeText = isLimit ? '⚠️ 仓位达限' : '⚠️ 资金不足';
                     positionCellHtml = `
-                        <div style="font-weight: 700; color: var(--text-primary); font-size: 13px; font-family: var(--font-mono);">
-                            ${weight}%
+                        <div style="display:flex;align-items:center;justify-content:flex-end;gap:4px;">
+                            <span style="font-weight:700;color:var(--text-primary);font-size:12px;font-family:var(--font-mono);">${weight}%</span>
+                            <span style="font-size:9px;background:#fee2e2;border:1px solid #fca5a5;color:#dc2626;padding:1px 4px;border-radius:3px;font-weight:700;">${badgeText}</span>
                         </div>
-                        <div style="margin-top: 2px;">
-                            <span style="font-size: 10px; background: #fee2e2; border: 1px solid #fca5a5; color: #dc2626; padding: 1px 5px; border-radius: 3px; font-weight: 700; display: inline-block;" title="${item.reason || ''}">
-                                ${badgeText}
-                            </span>
-                        </div>
-                        <div style="font-size: 9.5px; color: var(--text-muted); margin-top: 1px; max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${item.reason || ''}">
+                        <div style="font-size:9.5px;color:var(--text-muted);margin-top:1px;max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-left:auto;" title="${item.reason || ''}">
                             ${item.reason || '资金不足买入1手'}
                         </div>
                     `;
@@ -8994,45 +8990,46 @@
 
             return `
                 <tr style="border-bottom: 1px solid var(--border-subtle); cursor: pointer; transition: background 0.15s;" onmouseover="this.style.background='var(--bg-card-hover)'" onmouseout="this.style.background='transparent'" onclick="if(typeof selectStock==='function') selectStock('${item.code}')">
-                    <td style="padding: 8px 10px; white-space: nowrap;">
-                        <div style="font-weight: 700; color: var(--text-primary); font-size: 13px;">${item.name}</div>
-                        <div style="display: flex; align-items: center; gap: 5px; margin-top: 2px;">
-                            <span style="font-size: 11px; color: var(--text-muted); font-family: var(--font-mono);">${item.code}</span>
-                            <span style="font-size: 10px; color: ${Number(item.pullback_pct || 0) > 0 ? '#b45309' : 'var(--text-muted)'}; font-family: var(--font-mono);" title="日内高点起伏回踩">起伏:${Number(item.pullback_pct || 0).toFixed(1)}%</span>
-                            <span style="font-size: 10px; color: ${(Number(item.obi || 0) >= 0) ? '#dc2626' : '#2563eb'}; font-family: var(--font-mono);" title="盘口委比 (Order Book Imbalance)">OBI:${item.obi_pct || ((Number(item.obi || 0) >= 0 ? '+' : '') + (Number(item.obi || 0) * 100).toFixed(1) + '%')}</span>
+                    <td style="padding: 6px 6px; white-space: nowrap;">
+                        <div style="font-weight: 700; color: var(--text-primary); font-size: 12.5px;">${item.name}</div>
+                        <div style="display: flex; align-items: center; gap: 4px; margin-top: 1px;">
+                            <span style="font-size: 10.5px; color: var(--text-muted); font-family: var(--font-mono);">${item.code}</span>
+                            <span style="font-size: 9px; color: ${Number(item.pullback_pct || 0) > 0 ? '#b45309' : 'var(--text-muted)'}; font-family: var(--font-mono);">起伏:${Number(item.pullback_pct || 0).toFixed(1)}%</span>
+                            <span style="font-size: 9px; color: ${(Number(item.obi || 0) >= 0) ? '#dc2626' : '#2563eb'}; font-family: var(--font-mono);">OBI:${item.obi_pct || ((Number(item.obi || 0) >= 0 ? '+' : '') + (Number(item.obi || 0) * 100).toFixed(1) + '%')}</span>
                         </div>
                     </td>
-                    <td style="padding: 8px 10px; white-space: nowrap;">
-                        <span style="font-size: 11px; background: var(--bg-inset); border: 1px solid var(--border-default); color: var(--text-secondary); padding: 2px 6px; border-radius: 4px;">
+                    <td style="padding: 6px 6px; white-space: nowrap;">
+                        <span style="font-size: 10px; background: var(--bg-inset); border: 1px solid var(--border-default); color: var(--text-secondary); padding: 1px 5px; border-radius: 3px;">
                             ${item.industry || item.sector || '主线热门'}
                         </span>
                     </td>
-                    <td style="padding: 8px 10px; text-align: right; font-family: var(--font-mono); font-weight: 700; color: var(--text-primary); font-size: 13px;">
+                    <td style="padding: 6px 6px; text-align: right; font-family: var(--font-mono); font-weight: 700; color: var(--text-primary); font-size: 12.5px;">
                         ¥${price.toFixed(2)}
                     </td>
-                    <td style="padding: 8px 10px; text-align: right; font-family: var(--font-mono); font-weight: 800; color: ${chg >= 0 ? 'var(--up-red)' : 'var(--down-green)'}; font-size: 13px;">
+                    <td style="padding: 6px 6px; text-align: right; font-family: var(--font-mono); font-weight: 800; color: ${chg >= 0 ? 'var(--up-red)' : 'var(--down-green)'}; font-size: 12.5px;">
                         ${chgSign}${chg.toFixed(2)}%
                     </td>
-                    <td style="padding: 8px 10px; text-align: right;">
-                        <span style="font-family: var(--font-mono); font-weight: 800; font-size: 12px; color: #b45309; background: #fef3c7; border: 1px solid #fde68a; padding: 2px 6px; border-radius: 4px;">
+                    <td style="padding: 6px 6px; text-align: right;">
+                        <span style="font-family: var(--font-mono); font-weight: 800; font-size: 11px; color: #b45309; background: #fef3c7; border: 1px solid #fde68a; padding: 1px 5px; border-radius: 3px;">
                             ${score}
                         </span>
                     </td>
-                    <td style="padding: 8px 10px; text-align: center;">
-                        <span style="font-size: 11px; font-weight: 700; color: #15803d; background: #dcfce7; padding: 2px 7px; border-radius: 4px; border: 1px solid #86efac;">
+                    <td style="padding: 6px 6px; text-align: center;">
+                        <span style="font-size: 10.5px; font-weight: 700; color: #15803d; background: #dcfce7; padding: 2px 5px; border-radius: 3px; border: 1px solid #86efac; white-space: nowrap;">
                             ${item.ensemble_votes || '3/5 赞成'}
                         </span>
                     </td>
-                    <td style="padding: 8px 10px; text-align: center;">
-                        <span style="font-size: 11px; font-weight: 700; color: ${isBuy ? '#dc2626' : '#b45309'}; background: ${isBuy ? '#fee2e2' : '#fef3c7'}; padding: 2px 7px; border-radius: 4px; border: 1px solid ${isBuy ? '#fca5a5' : '#fde68a'};">
+                    <td style="padding: 6px 6px; text-align: center;">
+                        <span style="font-size: 10.5px; font-weight: 700; color: ${isBuy ? '#dc2626' : '#b45309'}; background: ${isBuy ? '#fee2e2' : '#fef3c7'}; padding: 2px 5px; border-radius: 3px; border: 1px solid ${isBuy ? '#fca5a5' : '#fde68a'}; white-space: nowrap;">
                             ${isBuy ? '买入' : '观望'}
                         </span>
                     </td>
-                    <td style="padding: 8px 10px; text-align: right;">
+                    <td style="padding: 6px 6px; text-align: right;">
                         ${positionCellHtml}
                     </td>
-                    <td style="padding: 8px 10px; text-align: right; font-family: var(--font-mono); font-weight: 700; color: var(--text-primary);">
-                        ¥${stopLoss.toFixed(2)} <span style="font-size: 10px; color: var(--up-red); font-weight: 600;">(${stopLossPctText})</span>
+                    <td style="padding: 6px 6px; text-align: right;">
+                        <div style="font-family: var(--font-mono); font-weight: 700; color: var(--text-primary); font-size: 12px;">¥${stopLoss.toFixed(2)}</div>
+                        <div style="font-size: 9.5px; color: var(--up-red); font-weight: 600;">${stopLossPctText}</div>
                     </td>
                 </tr>
             `;
@@ -9222,7 +9219,7 @@
                         textStyle: { color: '#0f172a', fontSize: 11 },
                         formatter: function(params) {
                             const p = params[0];
-                            return ${p.axisValue}<br/>净值: <b>¥</b>;
+                            return String(p.axisValue) + '<br/>净值: <b>¥' + Number(p.value).toLocaleString() + '</b>';
                         }
                     },
                     grid: {
