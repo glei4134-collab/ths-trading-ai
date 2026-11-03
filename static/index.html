@@ -1984,75 +1984,9 @@
             border-top: 1px solid #30363d;
         }
 
-        /* ==================== Mobile Bottom Nav ==================== */
+        /* ==================== Mobile Bottom Nav (桌面端默认彻底隐藏) ==================== */
         .mobile-nav {
-                display: flex !important;
-                position: fixed !important;
-                bottom: 0 !important;
-                left: 0 !important;
-                right: 0 !important;
-                height: calc(56px + env(safe-area-inset-bottom, 20px)) !important;
-                padding-bottom: env(safe-area-inset-bottom, 20px) !important;
-                background: var(--bg-surface) !important;
-                border-top: 1px solid var(--border-default) !important;
-                box-shadow: 0 -4px 16px rgba(70, 50, 30, 0.08) !important;
-                z-index: 99999 !important;
-                backdrop-filter: blur(12px) !important;
-                -webkit-backdrop-filter: blur(12px) !important;
-            }
-            .mobile-nav-item {
-                flex: 1;
-                display: flex;
-                flex-direction: column;
-                align-items: center;
-                justify-content: center;
-                gap: 2px;
-                color: var(--text-muted) !important;
-                cursor: pointer;
-                transition: all 0.2s;
-                padding: 4px 0;
-            }
-            .mobile-nav-item svg {
-                width: 20px;
-                height: 20px;
-                stroke: currentColor;
-                transition: transform 0.2s;
-            }
-            .mobile-nav-item.active {
-                color: var(--brand-blue) !important;
-                background: var(--brand-blue-bg) !important;
-                border-radius: 8px !important;
-                box-shadow: none !important;
-                border: 1px solid var(--brand-blue-border) !important;
-                stroke: var(--brand-blue) !important;
-                filter: none !important;
-            }
-        .mobile-nav-item svg {
-            width: 20px;
-            height: 20px;
-            transition: all 0.2s ease;
-        }
-        .mobile-nav-item.active svg {
-            stroke: var(--brand-blue) !important;
-            filter: none !important;
-            transform: translateY(-1px);
-        }
-        .mobile-nav-item.active::after {
             display: none !important;
-        }
-        .mobile-nav-item .nav-badge {
-            position: absolute;
-            top: 2px;
-            right: 12px;
-            background: #f85149;
-            color: white;
-            font-size: 9px;
-            min-width: 14px;
-            height: 14px;
-            border-radius: 7px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
         }
 
         /* 移动端专属金融股票卡片流样式 */
@@ -2184,13 +2118,36 @@
                 gap: 3px !important;
             }
             .logo {
-                font-size: 14px !important;
+                font-size: 13px !important;
                 font-weight: 800 !important;
                 letter-spacing: 0.5px;
-                background: linear-gradient(135deg, #ff1824 0%, #818cf8 100%);
-                -webkit-background-clip: text;
-                -webkit-text-fill-color: transparent;
-                white-space: nowrap;
+                background: none !important;
+                -webkit-background-clip: unset !important;
+                -webkit-text-fill-color: initial !important;
+                white-space: nowrap !important;
+                display: flex !important;
+                align-items: center !important;
+                gap: 5px !important;
+            }
+            .logo > span:first-child {
+                background: linear-gradient(135deg, #1e40af 0%, #2563eb 100%) !important;
+                color: #ffffff !important;
+                -webkit-text-fill-color: #ffffff !important;
+                font-size: 10px !important;
+                font-weight: 900 !important;
+                padding: 1px 5px !important;
+                border-radius: 4px !important;
+                letter-spacing: 0.5px !important;
+                display: inline-block !important;
+            }
+            .logo > span:nth-child(2) {
+                color: var(--text-primary) !important;
+                -webkit-text-fill-color: var(--text-primary) !important;
+                font-size: 13px !important;
+                font-weight: 800 !important;
+            }
+            .logo > span:nth-child(3) {
+                display: none !important; /* 手机端紧凑排版，隐藏次级 PRO 标签消除空方框 */
             }
             #viewSwitcherContainer {
                 display: none !important;
@@ -2202,12 +2159,29 @@
             }
             #connStatusHeader {
                 font-size: 10px !important;
-                padding: 2px 7px !important;
-                background: var(--bg-inset) !important;
+                padding: 2px 8px !important;
+                background: #f0fdf4 !important;
                 border-radius: 12px !important;
-                border: 1px solid var(--border-default) !important;
-                color: var(--text-secondary) !important;
+                border: 1px solid #bbf7d0 !important;
+                color: #15803d !important;
                 white-space: nowrap !important;
+                display: flex !important;
+                align-items: center !important;
+                gap: 4px !important;
+            }
+            #connStatusHeader #connDotHeader {
+                width: 6px !important;
+                height: 6px !important;
+                border-radius: 50% !important;
+                background: #16a34a !important;
+                box-shadow: none !important;
+                flex-shrink: 0 !important;
+            }
+            #connStatusHeader #connTextHeader {
+                font-size: 10px !important;
+                color: #15803d !important;
+                font-weight: 600 !important;
+                -webkit-text-fill-color: #15803d !important;
             }
             #autoTradeHeader {
                 display: none !important;
@@ -2443,9 +2417,9 @@
                 overflow: hidden !important;
             }
 
-            /* 7. Bottom nav 开启显示 */
+            /* 7. Bottom nav (仅在 <= 768px 手机屏幕显示) */
             .mobile-nav {
-                display: block !important;
+                display: none !important;
             }
 
             /* 弹窗与抽屉全宽适配 */
@@ -2530,13 +2504,13 @@
                 bottom: 0 !important;
                 left: 0 !important;
                 right: 0 !important;
-                height: calc(56px + env(safe-area-inset-bottom, 0px)) !important;
-                padding: 4px 6px calc(4px + env(safe-area-inset-bottom, 0px)) 6px !important;
-                background: rgba(255, 255, 255, 0.95) !important;
-                backdrop-filter: blur(24px) !important;
-                -webkit-backdrop-filter: blur(24px) !important;
-                border-top: 1px solid #e2e8f0 !important;
-                box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.75), 0 -1px 12px rgba(255, 24, 36, 0.3) !important;
+                height: calc(54px + env(safe-area-inset-bottom, 0px)) !important;
+                padding: 4px 10px calc(4px + env(safe-area-inset-bottom, 0px)) 10px !important;
+                background: var(--bg-surface) !important;
+                backdrop-filter: blur(20px) !important;
+                -webkit-backdrop-filter: blur(20px) !important;
+                border-top: 1px solid var(--border-default) !important;
+                box-shadow: 0 -4px 16px rgba(70, 50, 30, 0.08) !important;
                 z-index: 999999 !important;
                 box-sizing: border-box !important;
             }
@@ -5299,13 +5273,13 @@
                 if (isConnected) {
                     const accCount = hasAccounts ? accRes.data.accounts.length : 1;
                     if (connDot) {
-                        connDot.style.background = '#00f59b';
-                        connDot.style.boxShadow = '0 0 10px #00f59b';
+                        connDot.style.background = '#16a34a';
+                        connDot.style.boxShadow = 'none';
                     }
                     if (connText) {
-                        connText.textContent = hasAccounts ? `🟢 已连接 (${accCount}账户在线)` : '🟢 已连接';
-                        connText.style.color = '#00f59b';
-                        connText.style.fontWeight = '700';
+                        connText.textContent = hasAccounts ? `已连接 (${accCount}账户在线)` : '已连接';
+                        connText.style.color = '#15803d';
+                        connText.style.fontWeight = '600';
                     }
                     if (avatar) avatar.textContent = '✓';
                     if (nameEl && hasAccounts) {
@@ -5331,13 +5305,13 @@
                 const isSchedulerRunning = schedRes.success && (schedData.enabled === true || schedData.status === 'running' || schedData.scheduler_running === true);
                 if (isSchedulerRunning) {
                     if (autoDot) {
-                        autoDot.style.background = '#00f59b';
-                        autoDot.style.boxShadow = '0 0 10px #00f59b';
+                        autoDot.style.background = '#2563eb';
+                        autoDot.style.boxShadow = 'none';
                     }
                     if (autoText) {
-                        autoText.textContent = '🟢 自律调度中';
-                        autoText.style.color = '#00f59b';
-                        autoText.style.fontWeight = '700';
+                        autoText.textContent = '自律调度中';
+                        autoText.style.color = '#1d4ed8';
+                        autoText.style.fontWeight = '600';
                     }
                 } else {
                     if (autoDot) {
