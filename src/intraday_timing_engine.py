@@ -819,7 +819,10 @@ class UnsoldPositionController:
 
 
 from pathlib import Path as _Path
-from reliability.crash_recovery import LockFreeRingBuffer, AtomicSnapshotRecovery
+try:
+    from src.reliability.crash_recovery import LockFreeRingBuffer, AtomicSnapshotRecovery
+except ModuleNotFoundError:
+    from reliability.crash_recovery import LockFreeRingBuffer, AtomicSnapshotRecovery
 
 _INTRADAY_SNAPSHOT_PATH = _Path(__file__).resolve().parent.parent / "data" / "intraday_timing_snapshot.json"
 _intraday_ring_buffer = LockFreeRingBuffer(capacity=512)
