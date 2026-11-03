@@ -604,50 +604,164 @@ def ai_timing_overview():
 
 @system_bp.route('/api/ai/decision_stream', methods=['GET'])
 def ai_decision_stream():
-    """获取最新量化自动化执行事件流与调度流水"""
+    """获取最新股票实际交易操作流水（买卖、成交、撤单、风控拦截），严格与时序状态解耦"""
     try:
+        from db_store import db_store
         from ai_scheduler import ai_scheduler
-        logs = getattr(ai_scheduler, "_trade_log", [])
         curr_time = ai_scheduler.now().strftime("%H:%M:%S")
         stream_items = []
         recent_log_strings = []
-        for l in logs[-15:]:
-            msg = f"[{l.get('time', curr_time)}] [{l.get('action', 'EXEC')}] {l.get('symbol', '')} - {l.get('result', '')}"
-            recent_log_strings.append(msg)
-            stream_items.append({
-                "time": l.get("time", curr_time),
-                "level": "SUCCESS" if l.get("success") else "INFO",
-                "action": l.get("action", "EXEC"),
-                "symbol": l.get("symbol", ""),
-                "amount": l.get("amount", 0),
-                "message": l.get("result", "")
-            })
+        trade_events = []
 
-        if not recent_log_strings:
-            try:
-                from scheduler_ledger import scheduler_ledger
-                today_str = ai_scheduler.now().date().isoformat()
-                ledger_entries = scheduler_ledger.get_daily_ledger(today_str) or []
-                for entry in ledger_entries:
-                    if entry.get("status") in ("SUCCESS", "SKIPPED", "EXECUTED", "COMPLETED"):
-                        t_exec = entry.get("executed_at") or entry.get("window", "").split("-")[0].strip() or curr_time
-                        if " " in t_exec:
-                            t_exec = t_exec.split(" ")[-1]
-                        summary = entry.get("summary") or entry.get("skip_reason") or "执行完成"
-                        step_n = entry.get("step_name") or entry.get("step_id")
-                        recent_log_strings.append(f"[{t_exec}] [{step_n}] {summary}")
-                        stream_items.append({
-                            "time": t_exec,
-                            "level": "SUCCESS" if entry.get("status") == "SUCCESS" else "INFO",
-                            "action": str(step_n),
-                            "symbol": "",
+        # 1. 优先提取数据库中最近真实的股票买卖成交记录 (trades)
+        try:
+            raw_trades = db_store.get_trades(limit=30)
+            for t in raw_trades:
+                t_time = str(t.get("time") or t.get("saved_at") or "")
+                clock_str = t_time.split(" ")[-1] if " " in t_time else (t_time or curr_time)
+                date_str = t_time.split(" ")[0] if " " in t_time else ""
+                acc_id = t.get("account_id", 1)
+                action_raw = str(t.get("action", "")).lower()
+                symbol = t.get("symbol", "")
+                name = t.get("name", symbol)
+                if not name or name == symbol or name.isdigit():
+                    try:
+                        from data_cache import get_realtime_quote
+                        q = get_realtime_quote(symbol)
+                        if q and q.get("name"):
+                            name = q["name"]
+                    except Exception:
+                        pass
+
+                amount = int(t.get("amount") or 0)
+                price = float(t.get("price") or 0.0)
+                total = float(t.get("total") or (amount * price))
+
+                if action_raw == "buy":
+                    act_tag = "【买入成交】"
+                    level = "SUCCESS"
+                elif action_raw == "sell":
+                    act_tag = "【卖出成交】"
+                    level = "WARNING"
+                elif "cancel" in action_raw:
+                    act_tag = "【撤单完成】"
+                    level = "INFO"
+                else:
+                    act_tag = f"【{action_raw.upper()}】"
+                    level = "INFO"
+
+                log_str = f"[{clock_str}] [账户#{acc_id}] {act_tag} {symbol} {name} {amount}股 @ {price:.2f}元 (成交额: {total:,.1f}元)"
+                trade_events.append({
+                    "time_sort": t_time or clock_str,
+                    "log_str": log_str,
+                    "dict": {
+                        "time": clock_str,
+                        "date": date_str,
+                        "level": level,
+                        "action": act_tag.replace("【", "").replace("】", ""),
+                        "symbol": symbol,
+                        "name": name,
+                        "amount": amount,
+                        "price": price,
+                        "total": total,
+                        "message": f"账户#{acc_id} {act_tag} {name}({symbol}) {amount}股 @ {price:.2f}元"
+                    }
+                })
+        except Exception as _e_trade:
+            logger.debug(f"提取成交流水异常: {_e_trade}")
+
+        # 2. 提取盘中超时调仓、撤单与重挂挂单记录 (pending_sells & tuning actions)
+        try:
+            from intraday_timing_engine import intraday_timing_engine
+            pending_sells = getattr(intraday_timing_engine.get("dip_buyer"), "pending_sells", {})
+            for key, p in pending_sells.items():
+                if p.get("tuning_action") in ("MARKET_SELL_NOW", "CANCEL_AND_REORDER", "REPRICING_ORDERED"):
+                    acc_id = p.get("account_id", 1)
+                    symbol = p.get("symbol", "")
+                    name = p.get("name", symbol)
+                    act_desc = p.get("tuning_reason") or "超过预定窗口，执行纪律性调仓撤单"
+                    t_str = "14:35:00"
+                    if p.get("ordered_time"):
+                        from datetime import datetime
+                        t_str = datetime.fromtimestamp(p["ordered_time"]).strftime("%H:%M:%S")
+                    log_str = f"[{t_str}] [账户#{acc_id}] 【超时调仓/撤单】 {symbol} {name} - {act_desc}"
+                    trade_events.append({
+                        "time_sort": t_str,
+                        "log_str": log_str,
+                        "dict": {
+                            "time": t_str,
+                            "level": "WARNING",
+                            "action": "超时调仓/撤单",
+                            "symbol": symbol,
+                            "name": name,
                             "amount": 0,
-                            "message": str(summary)
-                        })
-            except Exception:
-                pass
+                            "message": act_desc
+                        }
+                    })
+        except Exception as _e_pend:
+            logger.debug(f"提取调仓撤单记录异常: {_e_pend}")
+
+        # 3. 提取调度器内存中的买卖委托、风控拦截与冷却跳过记录 (_trade_log)
+        try:
+            scheduler_logs = getattr(ai_scheduler, "_trade_log", [])
+            for l in scheduler_logs[-15:]:
+                act = str(l.get("action", "EXEC")).lower()
+                sym = l.get("symbol", "")
+                res_msg = l.get("result", "")
+                t_str = l.get("time", curr_time)
+                amt = l.get("amount", 0)
+                success = l.get("success", True)
+
+                if not success:
+                    act_tag = "【风控/委托拦截】"
+                    level = "ERROR"
+                elif act == "buy":
+                    act_tag = "【委托下单-买入】"
+                    level = "SUCCESS"
+                elif act == "sell":
+                    act_tag = "【委托下单-卖出】"
+                    level = "WARNING"
+                elif "cancel" in act:
+                    act_tag = "【撤单操作】"
+                    level = "INFO"
+                else:
+                    act_tag = f"【{act.upper()}】"
+                    level = "INFO"
+
+                log_str = f"[{t_str}] {act_tag} {sym} {amt}股 - {res_msg}"
+                trade_events.append({
+                    "time_sort": t_str,
+                    "log_str": log_str,
+                    "dict": {
+                        "time": t_str,
+                        "level": level,
+                        "action": act_tag.replace("【", "").replace("】", ""),
+                        "symbol": sym,
+                        "amount": amt,
+                        "message": res_msg
+                    }
+                })
+        except Exception as _e_sched:
+            logger.debug(f"提取调度委托记录异常: {_e_sched}")
+
+        # 4. 按时间倒序排序 (最新交易操作排在前面) 并去重提取
+        trade_events.sort(key=lambda x: str(x.get("time_sort", "")), reverse=True)
+
+        seen_logs = set()
+        for item in trade_events:
+            s = item["log_str"]
+            if s not in seen_logs:
+                seen_logs.add(s)
+                recent_log_strings.append(s)
+                stream_items.append(item["dict"])
+            if len(recent_log_strings) >= 20:
+                break
+
+        # 5. 如果当前确实暂无任何买卖或撤单流水，显示明确的就绪提示（绝对不再回退倾倒8大时序步骤）
         if not recent_log_strings:
-            recent_log_strings = [f"[{curr_time}] [量化引擎] 8大时序自动化监听中，待触发窗口将执行多策略表决..."]
+            recent_log_strings = [
+                f"[{curr_time}] [交易就绪] 3个账户待命，今日暂无未成交委托与买卖动作，待触发时序窗口执行交易..."
+            ]
 
         return jsonify({
             "success": True,
