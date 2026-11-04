@@ -49,7 +49,7 @@ class RiskManager:
     """
 
     def __init__(self):
-        self.max_drawdown = 0.20      # 最大回撤限制 20%
+        self.max_drawdown = 0.12      # 团队赛最大回撤硬熔断线 12% (警戒线 9.6%)
         self.max_single_loss = 0.05   # 单笔最大亏损 5%
         self.max_daily_loss = 0.10    # 每日最大亏损 10%
         self.max_position_count = 10  # 最大持仓数量
