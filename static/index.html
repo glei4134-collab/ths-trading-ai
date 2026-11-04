@@ -4079,14 +4079,14 @@
                     <div class="modal-header" style="background:var(--bg-surface);border-bottom:1px solid var(--border-default);padding:14px 18px;display:flex;justify-content:space-between;align-items:center;">
                         <div style="display:flex;align-items:center;gap:8px;">
                             <span style="font-size:16px;">⚡</span>
-                            <span style="font-weight:800;font-size:14px;color:#f8fafc;">多账户委托回报与响应耗时看板</span>
+                            <span style="font-weight:800;font-size:14px;color:var(--text-primary);">多账户委托回报与响应耗时看板</span>
                         </div>
                         <button class="modal-close" onclick="this.closest('.modal-overlay').remove()" style="background:none;border:none;color:#8b949e;font-size:22px;cursor:pointer;">&times;</button>
                     </div>
                     <div class="modal-body" style="padding:16px;">
-                        <div style="display:flex;justify-content:space-between;align-items:center;background:#161b22;padding:10px 14px;border-radius:8px;border:1px solid #30363d;margin-bottom:12px;font-size:12px;">
+                        <div style="display:flex;justify-content:space-between;align-items:center;background:var(--bg-inset);padding:10px 14px;border-radius:8px;border:1px solid var(--border-default);margin-bottom:12px;font-size:12px;">
                             <div>
-                                <span style="color:#8b949e;">标的: </span><strong style="color:#f8fafc;">${batchData.symbol}</strong>
+                                <span style="color:var(--text-secondary);">标的: </span><strong style="color:var(--text-primary);">${batchData.symbol}</strong>
                                 <span style="color:#8b949e;margin-left:8px;">动作: </span><span style="color:${isBuy ? '#f85149' : '#3fb950'};font-weight:700;">${isBuy ? '买入' : '卖出'}</span>
                             </div>
                             <div>
@@ -6421,8 +6421,8 @@
 
                 cockpitEventSource.onopen = function() {
                     if (sseDot) {
-                        sseDot.style.background = '#00e676';
-                        sseDot.style.boxShadow = '0 0 8px #00e676';
+                        sseDot.style.background = '#16a34a';
+                        sseDot.style.boxShadow = 'none';
                     }
                     if (sseText) sseText.textContent = '⚡ SSE: 实时推流在线';
                     console.log('⚡ [SSE] 驾驶舱实时流式通道已就绪');
@@ -6466,14 +6466,14 @@
 
                 cockpitEventSource.addEventListener('ping', function() {
                     if (sseDot) {
-                        sseDot.style.background = '#00e676';
+                        sseDot.style.background = '#16a34a';
                     }
                 });
 
                 cockpitEventSource.onerror = function() {
                     if (sseDot) {
-                        sseDot.style.background = '#ffe600';
-                        sseDot.style.boxShadow = '0 0 6px #ffe600';
+                        sseDot.style.background = '#d97706';
+                        sseDot.style.boxShadow = 'none';
                     }
                     if (sseText) sseText.textContent = '⚡ SSE: 断线重连中...';
                     try { cockpitEventSource.close(); } catch(e) {}
@@ -8645,10 +8645,10 @@
                 const conf = d.confidence_pct || '75%';
                 regimeEl.textContent = title.split(' ')[0];
                 if (confEl) confEl.textContent = conf;
-                if (d.quadrant_regime === 'bull_low_vol') regimeEl.style.color = '#00f59b';
-                else if (d.quadrant_regime === 'bull_high_vol') regimeEl.style.color = '#38bdf8';
-                else if (d.quadrant_regime === 'bear_low_vol') regimeEl.style.color = '#ffe600';
-                else regimeEl.style.color = '#ff1824';
+                if (d.quadrant_regime === 'bull_low_vol') regimeEl.style.color = '#16a34a';
+                else if (d.quadrant_regime === 'bull_high_vol') regimeEl.style.color = '#0284c7';
+                else if (d.quadrant_regime === 'bear_low_vol') regimeEl.style.color = '#d97706';
+                else regimeEl.style.color = '#dc2626';
             }
         } catch (e) {
             console.warn('[Cockpit] 宏观四象限罗盘遥测获取失败:', e);
@@ -8666,21 +8666,21 @@
             if (rttEl) {
                 rttEl.textContent = `${rtt} ms`;
                 if (rtt < 80) {
-                    rttEl.style.color = '#00f59b';
-                    if (rttDot) rttDot.style.background = '#00f59b';
+                    rttEl.style.color = '#16a34a';
+                    if (rttDot) rttDot.style.background = '#16a34a';
                 } else if (rtt < 200) {
-                    rttEl.style.color = '#ffe600';
-                    if (rttDot) rttDot.style.background = '#ffe600';
+                    rttEl.style.color = '#d97706';
+                    if (rttDot) rttDot.style.background = '#d97706';
                 } else {
-                    rttEl.style.color = '#ff1824';
-                    if (rttDot) rttDot.style.background = '#ff1824';
+                    rttEl.style.color = '#dc2626';
+                    if (rttDot) rttDot.style.background = '#dc2626';
                 }
             }
         } catch(e) {
             const rttEl = document.getElementById('hudRttText');
             if (rttEl) {
                 rttEl.textContent = '超时';
-                rttEl.style.color = '#ff1824';
+                rttEl.style.color = '#dc2626';
             }
         }
     }
@@ -8729,7 +8729,7 @@
 
         if (summaryText) {
             summaryText.textContent = `${entries.length} 个时序节点已全要素接入`;
-            summaryText.style.color = '#00f59b';
+            summaryText.style.color = '#16a34a';
         }
 
         container.innerHTML = entries.map((e, idx) => {
@@ -8770,8 +8770,8 @@
         if (!grid) return;
 
         const strategies = [
-            { name: '先锋进攻 (Pioneer Momentum)', weight: '25%', vote: 'BUY', conf: '85%', tag: '动量突破', color: '#ff1824' },
-            { name: '趋势中军 (Trend Master)', weight: '25%', vote: 'BUY', conf: '78%', tag: '均线共振', color: '#00f59b' },
+            { name: '先锋进攻 (Pioneer Momentum)', weight: '25%', vote: 'BUY', conf: '85%', tag: '动量突破', color: '#dc2626' },
+            { name: '趋势中军 (Trend Master)', weight: '25%', vote: 'BUY', conf: '78%', tag: '均线共振', color: '#16a34a' },
             { name: '尾盘低吸 (Tail Harvester)', weight: '20%', vote: 'HOLD', conf: '62%', tag: '防隔夜低吸', color: '#ffe600' },
             { name: '情绪反转 (Sentiment Reversal)', weight: '15%', vote: 'BUY', conf: '80%', tag: '极值背离', color: '#38bdf8' },
             { name: '主力异动 (Whale Flow OBI)', weight: '15%', vote: 'BUY', conf: '88%', tag: '五档深度OBI', color: '#e879f9' }
@@ -8850,7 +8850,7 @@
         // 桌面端表格行
         tbody.innerHTML = list.map(item => {
             const chg = Number(item.change_pct) || 0;
-            const chgColor = chg >= 0 ? '#ff1824' : '#00f59b';
+            const chgColor = chg >= 0 ? 'var(--up-red)' : 'var(--down-green)';
             const chgSign = chg > 0 ? '+' : '';
             const price = Number(item.price) || 0;
             const stopLoss = Number(item.stop_loss_price || item.stop_loss) || (price * 0.955);
@@ -8950,9 +8950,9 @@
             mobList.innerHTML = list.map(c => {
                 const change = Number(c.change_pct) || 0;
                 const isUp = change >= 0;
-                const changeColor = isUp ? '#ff1824' : '#00f59b';
-                const changeBg = isUp ? 'rgba(255,24,36,0.16)' : 'rgba(0,245,155,0.14)';
-                const changeBorder = isUp ? 'rgba(255,24,36,0.4)' : 'rgba(0,245,155,0.35)';
+                const changeColor = isUp ? 'var(--up-red)' : 'var(--down-green)';
+                const changeBg = isUp ? 'var(--up-red-bg)' : 'var(--down-green-bg)';
+                const changeBorder = isUp ? 'var(--up-red-border)' : 'var(--down-green-border)';
                 const changePrefix = change > 0 ? '+' : '';
                 const score = Number(c.ensemble_score !== undefined ? c.ensemble_score : c.ai_score) || 85;
                 const act = (c.decision || c.action || 'HOLD').toUpperCase();
@@ -9297,7 +9297,7 @@
                 totalCombinedInitial += initialBal;
                 totalCombinedProfit += profit;
 
-                const profitColor = profit >= 0 ? '#ff1824' : '#00f59b';
+                const profitColor = profit >= 0 ? 'var(--up-red)' : 'var(--down-green)';
                 const sign = profit > 0 ? '+' : '';
                 const isActive = (acc.id === currentActiveId);
 
@@ -9353,13 +9353,13 @@
         if (consTp) {
             const s = totalCombinedProfit > 0 ? '+' : '';
             consTp.textContent = `${s}${fmtMoney(totalCombinedProfit)}`;
-            consTp.style.color = totalCombinedProfit >= 0 ? '#ff1824' : '#00f59b';
+            consTp.style.color = totalCombinedProfit >= 0 ? 'var(--up-red)' : 'var(--down-green)';
         }
         if (consTr) {
             const rate = totalCombinedInitial > 0 ? (totalCombinedProfit / totalCombinedInitial) * 100 : 0;
             const s = rate > 0 ? '+' : '';
             consTr.textContent = `${s}${rate.toFixed(2)}%`;
-            consTr.style.color = rate >= 0 ? '#ff1824' : '#00f59b';
+            consTr.style.color = rate >= 0 ? 'var(--up-red)' : 'var(--down-green)';
         }
 
         // 单账户面板数据 (呈现当前选中的活动账户)
@@ -9381,12 +9381,12 @@
         if (sTp) {
             const s = pProfit > 0 ? '+' : '';
             sTp.textContent = `${s}${fmtMoney(pProfit)}`;
-            sTp.style.color = pProfit >= 0 ? '#ff1824' : '#00f59b';
+            sTp.style.color = pProfit >= 0 ? 'var(--up-red)' : 'var(--down-green)';
         }
         if (sTr) {
             const s = pProfitRate > 0 ? '+' : '';
             sTr.textContent = `${s}${pProfitRate.toFixed(2)}%`;
-            sTr.style.color = pProfitRate >= 0 ? '#ff1824' : '#00f59b';
+            sTr.style.color = pProfitRate >= 0 ? 'var(--up-red)' : 'var(--down-green)';
         }
 
         // 7. 渲染组合净值走势曲线与持仓风控指标
@@ -9428,11 +9428,11 @@
                 if (mv > maxMv) maxMv = mv;
                 const pnl = Number(p.profit || 0);
                 const pnlPct = Number(p.profit_rate || 0);
-                const color = pnl >= 0 ? '#ff1824' : '#00f59b';
+                const color = pnl >= 0 ? 'var(--up-red)' : 'var(--down-green)';
                 const sign = pnl > 0 ? '+' : '';
 
                 return `
-                    <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 6px 10px; display: flex; justify-content: space-between; align-items: center; font-size: 11px;">
+                    <div style="background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: 6px; padding: 6px 10px; display: flex; justify-content: space-between; align-items: center; font-size: 11px;">
                         <div>
                             <span style="font-weight: 700; color: #0f172a;">${p.name || p.symbol}</span>
                             <span style="color: #64748b; font-family: var(--font-mono); margin-left: 4px;">${p.symbol}</span>
@@ -9450,7 +9450,7 @@
         const maxPct = (maxMv / effAssets) * 100;
         if (hudMaxPos) {
             hudMaxPos.textContent = `${maxPct.toFixed(1)}%`;
-            hudMaxPos.style.color = maxPct > 35 ? '#ff1824' : (maxPct > 28 ? '#ffe600' : '#00f59b');
+            hudMaxPos.style.color = maxPct > 35 ? 'var(--up-red)' : (maxPct > 28 ? 'var(--warning-amber)' : 'var(--down-green)');
         }
     }
 
